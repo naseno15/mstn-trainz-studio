@@ -1,0 +1,12 @@
+Material Icons font (MaterialIcons-Regular.ttf)
+Copyright Google LLC
+Licensed under the Apache License, Version 2.0
+https://github.com/google/material-design-icons
+
+Noto Sans Thai Looped (NotoSansThaiLooped.ttf) — UI for English + Thai
+Noto Sans CJK JP (NotoSansJP-*.ttf / OTF) — UI for Japanese
+Noto Sans (NotoSans-*.ttf) — UI for Indonesian
+Copyright Google LLC
+Licensed under the SIL Open Font License, Version 1.1
+https://github.com/google/fonts
+https://github.com/googlefonts/noto-cjk
