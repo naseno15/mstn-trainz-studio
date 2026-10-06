@@ -1,0 +1,142 @@
+"""Ultra-thin entry — QApplication before heavy MainWindow import."""
+from __future__ import annotations
+
+import os
+import sys
+import traceback
+from pathlib import Path
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv if argv is None else argv)
+
+    # Before any OpenGL import (MeshView) — per-call glGetError kills orbit FPS.
+    os.environ.setdefault("PYOPENGL_ERROR_CHECKING", "0")
+    os.environ.setdefault("PYOPENGL_ERROR_LOGGING", "0")
+
+    # Fast path: Explorer / Quick Preview — never import MainWindow.
+    if any(a in ("--preview", "-p", "--explorer-preview") for a in argv[1:]):
+        from .mesh_preview import run_preview
+
+        return int(run_preview(argv))
+
+    try:
+        from ..util.hw import apply_all
+
+        apply_all()
+    except Exception:
+        pass
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from .i18n import apply_language_font, ensure_ui_fonts, i18n
+    from .icons import ensure_material_icons
+    from .motion import install_button_hover_chrome
+    from .theme import apply_theme, warm_theme_cache
+
+    app = QApplication(argv)
+    app.setApplicationName("MSTN Trainz Studio")
+    app.setStyle("Fusion")
+    ensure_material_icons()
+    ensure_ui_fonts()
+    i18n()  # load persisted language before first paint
+    # Pre-build dark+light QSS for the persisted language (font-family in * {}).
+    warm_theme_cache()
+    apply_theme(app, "dark")
+    apply_language_font()  # app font + QSS stack + rebase any early widgets
+    # Every QPushButton / QToolButton: soft hover bubble + emboss (+ glass tip when set)
+    install_button_hover_chrome(app)
+
+    try:
+        # Heavy MainWindow AFTER QApplication exists (Qt already warm).
+        from .app import (
+            MainWindow,
+            _install_crash_log,
+            offer_pending_crash_report,
+            warm_logo_cache,
+        )
+
+        crash_log = _install_crash_log()
+        warm_logo_cache()  # dark+light logo pixmaps ready before first Theme click
+        win = MainWindow()
+    except Exception as exc:
+        text = traceback.format_exc()
+        crash_log = Path.home() / ".cache" / "trainz_studio" / "crash_last.txt"
+        notify = crash_log.parent / "last_error.notify"
+        try:
+            crash_log.parent.mkdir(parents=True, exist_ok=True)
+            crash_log.write_text(text, encoding="utf-8")
+            # Also flag the standard last_error path used by offer_pending_crash_report.
+            last = crash_log.parent / "last_error.txt"
+            last.write_text(text, encoding="utf-8")
+            notify.write_text("1", encoding="utf-8")
+        except OSError:
+            pass
+        QMessageBox.critical(
+            None,
+            "Trainz Studio failed to start",
+            f"{exc}\n\nDetails written to:\n{crash_log}",
+        )
+        return 1
+
+    initials = [Path(a) for a in argv[1:] if a and not str(a).startswith("-")]
+
+    # One continuous boot: cover → warm under frost → reveal HOME (no QTimer gap).
+    win.go_home()
+    win.showMaximized()
+    win.raise_()
+    win.activateWindow()
+    win._layout_viewer_pane()
+    # Cover first paint immediately (dark) so HOME never flashes bare.
+    win._overlay.set_brand("Trainz Studio")
+    win._overlay.set_stage("Starting…", 12)
+    win._overlay.set_frost(None)
+    win._overlay.setGeometry(win.rect())
+    win._overlay.show()
+    win._overlay.raise_()
+    app.processEvents()
+
+    # Blur real HOME under the card (centralWidget grab skips overlay sibling).
+    win._overlay.set_frost(win._capture_overlay_frost())
+    win._overlay.set_stage("Warming Mesh Studio…", 45)
+    win._overlay.update()
+    app.processEvents()
+
+    def _boot_stage(text: str, pct: int) -> None:
+        win._overlay.set_stage(text, pct)
+        win._overlay.update()
+        app.processEvents()
+
+    # Precache all hub studios under frost — HOME clicks then only swap + reveal.
+    win.warmup_hub_studios(on_stage=_boot_stage)
+    win._layout_viewer_pane()
+    # Theme toggle assets: both QSS/QPalette + logos already warm; re-touch after
+    # hub trees exist so the first Theme click only swaps cached blobs.
+    _boot_stage("Preloading themes…", 96)
+    warm_theme_cache()
+    warm_logo_cache()
+    # Refresh frost once chrome exists (still HOME under cover).
+    win._overlay.set_frost(win._capture_overlay_frost())
+    win._overlay.set_stage("Ready", 100)
+    app.processEvents()
+    win._hide_overlay()
+
+    if initials:
+        from ..audio.classify import partition_paths
+
+        buckets = partition_paths(initials)
+        if buckets["mesh"]:
+            win.open_paths(buckets["mesh"], mode="replace")
+        elif buckets["audio"] or buckets["video"]:
+            win.enter_sounds_studio(buckets["audio"] + buckets["video"])
+        else:
+            win.open_paths(initials, mode="replace")
+    from ..io.project import has_crash_recovery
+
+    # Pending Python crash from last run (fade/opacity / uncaught exception).
+    offer_pending_crash_report(win)
+
+    if has_crash_recovery():
+        win._offer_crash_restore()
+
+    return app.exec()
