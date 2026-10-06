@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+last_error.txt
+fault.log
+.cache/
+vendor/assimp/conda_extract/
+vendor/assimp/*.conda
+vendor/assimp/*.pdb
+vendor/_extract_assimp.py
+# PyInstaller (built under tools/dist + tools/build)
+../dist/
+../build/
+dist/
+build/
+*.spec.bak
+# Compiled Explorer preview handler (register.ps1)
+pack/shell/bin/
+# Poly Haven HDRIs — re-fetch with: python -m trainz_studio.scripts.fetch_hdris
+assets/hdri/*
+!assets/hdri/.gitkeep
+!assets/hdri/README*
