@@ -1,0 +1,2 @@
+Primary=nope.png
+Tile=st
