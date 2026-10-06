@@ -1,0 +1,5 @@
+Primary=sample_albedo.png
+Alpha=
+NormalMapHint=normalmap
+Tile=st
+UsageHint=normal
