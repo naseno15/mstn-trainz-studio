@@ -10,6 +10,7 @@ import math
 import os
 import time
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,14 +33,23 @@ import numpy as np
 from OpenGL import GL
 from OpenGL.GL import shaders as gl_shaders
 from PySide6.QtCore import Qt, QPoint, QTimer, Signal
-from PySide6.QtGui import QSurfaceFormat, QKeyEvent, QCursor
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QFont,
+    QFontMetrics,
+    QKeyEvent,
+    QPainter,
+    QSurfaceFormat,
+)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QFrame, QWidget
 
 from ..io.scene import Attachment, MeshPart, Scene
 from ..io.texture import stems_match, texture_stem
 from .env import EnvPreset, get_env
 from ..lamps import MAX_LAMPS, pack_for_gpu
+from ..ui.frost import glass_is_dark, paint_glass_chip
 
 # Full Trainz-quality preview. Old 80k step-decimate shredded interiors into streaks.
 # Cabin multi-mesh (int+cab+seats) is ~300k–1M tris — fine on modern GPUs.
@@ -221,6 +231,57 @@ def is_mesh_key_hidden(mesh_key: str, hidden: set[str] | frozenset[str]) -> bool
     return bool(mesh_key) and mesh_key in hidden
 
 
+def _two_sided_name_hit(have: str, want: str) -> bool:
+    """Exact material name, or the same stem before ``.m.``."""
+    a = (have or "").strip().lower()
+    b = (want or "").strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.split(".m.")[0] == b.split(".m.")[0]
+
+
+def apply_named_two_sided(parts, batches, name: str, on: bool) -> int:
+    """Flag parts and draw batches with this material name. No scene reload."""
+    if not (name or "").strip():
+        return 0
+    parts_hit = 0
+    batches_hit = 0
+    for part in parts:
+        if _two_sided_name_hit(getattr(part, "name", "") or "", name):
+            part.two_sided = bool(on)
+            parts_hit += 1
+    for batch in batches:
+        if _two_sided_name_hit(getattr(batch, "name", "") or "", name):
+            batch.two_sided = bool(on)
+            batches_hit += 1
+    return parts_hit or batches_hit
+
+
+def highlight_pick(
+    *,
+    name: str,
+    mesh_key: str,
+    ref_stems: set[str],
+    names: set[str],
+    stems: set[str],
+    mesh_keys: set[str],
+) -> bool:
+    """True when a batch should take the Mat-style glowing outline.
+
+    Part names (Editor Meshes row) win. Otherwise whole files by mesh_key,
+    or texture-stem families (Mat list).
+    """
+    if names:
+        return bool(name) and name in names
+    if mesh_keys and mesh_key not in mesh_keys:
+        return False
+    if not stems:
+        return bool(mesh_keys) and mesh_key in mesh_keys
+    return stems_match(ref_stems, stems)
+
+
 @dataclass
 class DrawBatch:
     verts: np.ndarray  # unique Nx8 float32 (pos3,nrm3,uv2)
@@ -235,7 +296,7 @@ class DrawBatch:
     parameter_ref: str
     material_type: str
     mesh_key: str = ""
-    two_sided: bool = True
+    two_sided: bool = False
     # Disk presence cached at flatten — never Path.is_file() inside paintGL.
     has_albedo: bool = False
     has_normal: bool = False
@@ -666,30 +727,6 @@ void main() {
 }
 """
 
-# Mat pick outline — inflate along normals, cull front → glowing shell around geometry
-OUTLINE_VERT = """
-#version 120
-attribute vec3 in_pos;
-attribute vec3 in_nrm;
-uniform mat4 u_mvp;
-uniform float u_width;
-void main() {
-    vec3 n = in_nrm;
-    float nl = length(n);
-    n = (nl > 1e-6) ? (n / nl) : vec3(0.0, 1.0, 0.0);
-    gl_Position = u_mvp * vec4(in_pos + n * u_width, 1.0);
-}
-"""
-
-OUTLINE_FRAG = """
-#version 120
-uniform vec3 u_color;
-uniform float u_gain;
-void main() {
-    gl_FragColor = vec4(u_color * u_gain, 1.0);
-}
-"""
-
 SKY_VERT = """
 #version 120
 attribute vec3 in_pos;
@@ -831,11 +868,13 @@ def ease_out_cubic(u: float) -> float:
 
 
 def format_fps_hud_text(
-    paints: list[float],
-    walls: list[float],
+    paints: Sequence[float],
+    walls: Sequence[float],
     frame_id: int,
+    *,
+    idle: bool = False,
 ) -> str:
-    """Plain-text F3 HUD body (QLabel — never QPainter into the GL FBO)."""
+    """Plain-text F3 HUD body (glass chip — never QPainter into the GL FBO)."""
     if not paints:
         return ""
     paint_cur = paints[-1]
@@ -849,13 +888,92 @@ def format_fps_hud_text(
         fps_avg = 1000.0 / max(wall_avg, 1e-3)
     else:
         fps_cur = fps_avg = 1000.0 / max(paint_cur, 1e-3)
+    tail = f"#{frame_id}"
+    if idle:
+        tail = f"{tail}  idle"
     return "\n".join(
         (
             f"{fps_cur:5.1f} fps  {paint_cur:5.1f} ms",
             f"avg {fps_avg:5.1f}  {paint_avg:5.1f} ms  ({paint_min:.0f}–{paint_max:.0f})",
-            f"#{frame_id}",
+            tail,
         )
     )
+
+
+def fps_hud_top_right(
+    host_w: int,
+    chip_w: int,
+    *,
+    margin: int = 12,
+    dock_left: int | None = None,
+    left_min: int = 12,
+    top: int = 10,
+) -> tuple[int, int]:
+    """Top-right of the clear viewport, in the chip parent's coordinates.
+
+    ``dock_left`` is the Editor sidebar's left edge, or None when it is shut.
+    ponytail: a clear strip narrower than the chip clamps to ``left_min`` and
+    can tuck under the dock. Upgrade path is a smaller chip, not overlap logic.
+    """
+    right = int(host_w) - int(margin)
+    if dock_left is not None:
+        right = min(right, int(dock_left) - int(margin))
+    x = right - int(chip_w)
+    if x < int(left_min):
+        x = int(left_min)
+    return x, int(top)
+
+
+class FpsHudChip(QFrame):
+    """Glass frame-stats chip. Parent is the center host, never the GL widget."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("fpsHud")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setProperty("glassDark", True)
+        self._text = ""
+        self._font = QFont()
+        self._font.setFamilies(["Cascadia Mono", "Consolas", "Courier New"])
+        self._font.setStyleHint(QFont.StyleHint.Monospace)
+        self._font.setPixelSize(12)
+        self.setFont(self._font)
+        self.hide()
+
+    def hud_text(self) -> str:
+        return self._text
+
+    def set_hud_text(self, text: str) -> None:
+        if text == self._text:
+            return
+        self._text = text
+        fm = QFontMetrics(self._font)
+        lines = text.split("\n") if text else [""]
+        tw = max((fm.horizontalAdvance(line) for line in lines), default=0)
+        th = fm.lineSpacing() * max(1, len(lines))
+        self.setFixedSize(tw + 28, th + 22)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        paint_glass_chip(self, radius=14.0)
+        if not self._text:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setFont(self._font)
+        if glass_is_dark(self):
+            painter.setPen(QColor(120, 255, 168))
+        else:
+            painter.setPen(QColor(18, 92, 52))
+        painter.drawText(
+            self.rect().adjusted(14, 8, -12, -12),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            self._text,
+        )
 
 
 def aabb_wire_lines(
@@ -955,7 +1073,7 @@ def _flatten_part(part: MeshPart, tri_budget: int) -> DrawBatch | None:
         parameter_ref=part.parameter_ref or "",
         material_type=part.material_type or "",
         mesh_key=part.mesh_key or "",
-        two_sided=bool(getattr(part, "two_sided", True)),
+        two_sided=bool(getattr(part, "two_sided", False)),
         has_albedo=_path_is_file(alb),
         has_normal=_path_is_file(nrm_p),
         has_parameter=_path_is_file(prm),
@@ -978,6 +1096,30 @@ def _placeholder_rgba(rgb: tuple[int, int, int] = (170, 175, 185)) -> tuple[int,
 def _is_onetex(material_type: str) -> bool:
     mt = material_type.lower()
     return "onetex" in mt or "stdonetex" in mt
+
+
+def horizontal_walk_dirs(
+    look: np.ndarray, right: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Camera walk on the XY ground. Trainz is Z-up — flatten Z, keep Y.
+
+    Up/Down follow ``look`` on XY (forward / back). Left/Right follow ``right``
+    on XY (strafe). Flattening Y instead sends Up into XZ.
+    """
+    forward = np.array([float(look[0]), float(look[1]), 0.0], dtype=np.float64)
+    fl = float(np.linalg.norm(forward))
+    if fl < 1e-8:
+        # Looking straight up/down: yaw is lost in the look vector.
+        forward = np.array([0.0, -1.0, 0.0], dtype=np.float64)
+    else:
+        forward /= fl
+    right_h = np.array([float(right[0]), float(right[1]), 0.0], dtype=np.float64)
+    rl = float(np.linalg.norm(right_h))
+    if rl > 1e-8:
+        right_h /= rl
+    else:
+        right_h = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    return forward, right_h
 
 
 def screen_delta_to_world(
@@ -1402,6 +1544,7 @@ class MeshView(QOpenGLWidget):
         self._cam_timer.setInterval(16)  # ~60fps damp + keyboard move
         self._cam_timer.timeout.connect(self._tick_camera)
         self._cam_timer.start()
+        # ponytail: never drop below 16ms while visible — 33ms idle made orbit feel steppy
         self._render_active = True
         # True while camera inertia / drag / fly — frost/outline skip only (not lighting).
         self._cam_busy = False
@@ -1413,6 +1556,8 @@ class MeshView(QOpenGLWidget):
         self._moon_body_local: np.ndarray | None = None
         self._mat_edge_cache: np.ndarray | None = None
         self._mat_edge_key: tuple | None = None
+        self._mat_edge_vbo: int | None = None
+        self._mat_edge_count = 0
         # fly-to attachment (ease-out lerp of target + dist)
         self._fly_active = False
         self._fly_t0 = 0.0
@@ -1432,25 +1577,18 @@ class MeshView(QOpenGLWidget):
         self._show_atts = True
         self._show_corner_gizmo = True
         self._show_fps = False
+        self._fps_suppressed = False
+        self._fps_idle_shown = False
         self._frame_id = 0
         self._fps_last_t = 0.0
         self._fps_paint_ms: deque[float] = deque(maxlen=90)
         self._fps_wall_ms: deque[float] = deque(maxlen=90)
-        # Widget overlay — QPainter/QImage into this QOpenGLWidget garbles on Win
-        self._fps_label = QLabel(self)
-        self._fps_label.setObjectName("fpsHud")
-        self._fps_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._fps_label.setStyleSheet(
-            "#fpsHud {"
-            "color:#48ff78;"
-            "background:rgba(0,0,0,150);"
-            "border-radius:4px;"
-            "padding:5px 8px;"
-            "font-family:'Cascadia Mono',Consolas,monospace;"
-            "font-size:11px;"
-            "}"
-        )
-        self._fps_label.hide()
+        # host_w, dock_left, left_min, top, margin — set by the main window
+        self._fps_place: tuple[int, int | None, int, int, int] | None = None
+        self._fps_host_hook = None
+        # Glass chip starts here only so it exists before the center host does.
+        # Main window reparents it off this QOpenGLWidget (child widgets over GL hitch).
+        self._fps_chip = FpsHudChip(self)
         self._batches: list[DrawBatch] = []
         # filter: "all" shows every part with its own maps; "selected" hides non-matches
         self._tex_filter_mode = "all"
@@ -1458,9 +1596,10 @@ class MeshView(QOpenGLWidget):
         self._tex_filter_mesh_keys: set[str] = set()
         # Scene "Meshes in scene" Show column — unchecked file names stay GPU-hidden
         self._hidden_mesh_keys: set[str] = set()
-        # Mat list pick → orange AABB overlay (works in All materials too)
+        # Mat list / Meshes list / Meshes-in-scene → orange outline
         self._highlight_stems: set[str] = set()
         self._highlight_mesh_keys: set[str] = set()
+        self._highlight_names: set[str] = set()
         # optional: force one albedo image onto batches whose stems match (not whole mesh)
         self._albedo_force: str | None = None
         self._albedo_force_stems: set[str] = set()
@@ -1507,7 +1646,6 @@ class MeshView(QOpenGLWidget):
         self._prog = None
         self._line_prog = None
         self._glow_prog = None
-        self._outline_prog = None
         self._sky_prog = None
         self._depth_prog = None
         self._dloc: dict | None = None  # depth-pass uniform/attrib locs
@@ -1553,6 +1691,7 @@ class MeshView(QOpenGLWidget):
         self._hidden_mesh_keys.clear()
         self._highlight_stems.clear()
         self._highlight_mesh_keys.clear()
+        self._highlight_names.clear()
         self._lamp_markers = []
         self._anim_time = 0.0
         self._rebuild_batches()
@@ -1815,8 +1954,7 @@ class MeshView(QOpenGLWidget):
         """Pause camera timer / paints — Packages preview must stop when Mesh Studio runs."""
         self._render_active = bool(on)
         if self._render_active:
-            if not self._cam_timer.isActive():
-                self._cam_timer.start()
+            self._wake_cam_timer()
             self.update()
         else:
             self._cam_timer.stop()
@@ -1827,14 +1965,63 @@ class MeshView(QOpenGLWidget):
             self._pan_vel[:] = 0.0
             self._cam_busy = False
 
+    def _wake_cam_timer(self) -> None:
+        """Snap back to 16ms — hidden path uses 120ms sleep and must not lag first orbit."""
+        if self._cam_timer.interval() != 16:
+            self._cam_timer.setInterval(16)
+        if not self._cam_timer.isActive():
+            self._cam_timer.start()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._render_active:
+            self._wake_cam_timer()
+
     def set_show_lamp_gizmos(self, on: bool) -> None:
         self._show_lamp_gizmos = bool(on)
         self.update()
 
+    @property
+    def fps_chip(self) -> FpsHudChip:
+        return self._fps_chip
+
+    def set_fps_place(
+        self,
+        host_w: int,
+        dock_left: int | None,
+        left_min: int,
+        *,
+        top: int = 10,
+        margin: int = 12,
+    ) -> None:
+        """Remember the clear-viewport box. ``dock_left`` None = right sidebar shut."""
+        self._fps_place = (int(host_w), dock_left, int(left_min), int(top), int(margin))
+        self.apply_fps_place()
+
+    def apply_fps_place(self) -> None:
+        spec = self._fps_place
+        chip = self._fps_chip
+        if spec is None or not chip.isVisible() or chip.width() < 8:
+            return
+        host_w, dock_left, left_min, top, margin = spec
+        x, y = fps_hud_top_right(
+            host_w,
+            chip.width(),
+            margin=margin,
+            dock_left=dock_left,
+            left_min=left_min,
+            top=top,
+        )
+        if chip.pos() != QPoint(x, y):
+            chip.move(x, y)
+
     def set_show_fps(self, on: bool) -> None:
         self._show_fps = bool(on)
+        self._fps_idle_shown = False
         if not self._show_fps:
-            self._fps_label.hide()
+            self._fps_chip.hide()
+            return
+        # One frame to fill the chip. Idle ticks must not keep redrawing.
         self.update()
 
     def set_texture_filter(
@@ -1866,24 +2053,50 @@ class MeshView(QOpenGLWidget):
         *,
         frame: bool = False,
     ) -> int:
-        """Mat pick → glowing geometry outline only (no emissive / cast lights)."""
-        self._highlight_stems = {texture_stem(s) for s in (stems or set()) if s}
-        self._highlight_mesh_keys = {str(k) for k in (mesh_keys or set()) if k}
-        n = sum(
-            1
-            for b in self._batches
-            if self._batch_matches_mat(
-                b, self._highlight_stems, self._highlight_mesh_keys
-            )
+        """Mat pick, or a whole mesh file → glowing geometry outline."""
+        stem_set = {texture_stem(s) for s in (stems or set()) if s}
+        keys = {str(k) for k in (mesh_keys or set()) if k}
+        same = (
+            stem_set == self._highlight_stems
+            and keys == self._highlight_mesh_keys
+            and not self._highlight_names
         )
-        if frame and n:
-            self.frame_mat(self._highlight_stems, self._highlight_mesh_keys)
+        self._highlight_names.clear()
+        self._highlight_stems = stem_set
+        self._highlight_mesh_keys = keys
+        n = sum(1 for b in self._batches if self._batch_is_highlighted(b))
+        if frame and n and not same:
+            self._frame_highlight()
+        self.update()
+        return n
+
+    def set_part_highlight(
+        self, names: set[str] | None, *, frame: bool = False
+    ) -> int:
+        """Editor Meshes row → same glowing outline as a Mat pick, by part name."""
+        nxt = {str(n) for n in (names or set()) if n}
+        same = (
+            nxt == self._highlight_names
+            and not self._highlight_stems
+            and not self._highlight_mesh_keys
+        )
+        self._highlight_stems.clear()
+        self._highlight_mesh_keys.clear()
+        self._highlight_names = nxt
+        n = sum(1 for b in self._batches if self._batch_is_highlighted(b))
+        if frame and n and not same:
+            self._frame_highlight()
         self.update()
         return n
 
     def frame_mat(self, stems: set[str], mesh_keys: set[str] | None = None) -> None:
         """Fly orbit target to matching part AABB (same ease as a.* click)."""
-        bounds = self._mat_bounds(stems, mesh_keys)
+        self._fly_to_bounds(self._mat_bounds(stems, mesh_keys))
+
+    def _frame_highlight(self) -> None:
+        self._fly_to_bounds(self._highlight_bounds())
+
+    def _fly_to_bounds(self, bounds: tuple[np.ndarray, np.ndarray] | None) -> None:
         if bounds is None:
             return
         mins, maxs = bounds
@@ -1893,6 +2106,25 @@ class MeshView(QOpenGLWidget):
         if self._dist > extent * 6.0:
             self._dist = max(extent * 2.2, 0.4)
         self.fly_to(center, duration_s=0.45, approach=False)
+
+    def _highlight_active(self) -> bool:
+        return bool(
+            self._highlight_names or self._highlight_stems or self._highlight_mesh_keys
+        )
+
+    def _batch_is_highlighted(self, batch: DrawBatch) -> bool:
+        if self._highlight_names:
+            return highlight_pick(
+                name=batch.name,
+                mesh_key="",
+                ref_stems=set(),
+                names=self._highlight_names,
+                stems=set(),
+                mesh_keys=set(),
+            )
+        return self._batch_matches_mat(
+            batch, self._highlight_stems, self._highlight_mesh_keys
+        )
 
     def _batch_matches_mat(
         self, batch: DrawBatch, stems: set[str], mesh_keys: set[str] | None
@@ -1923,26 +2155,42 @@ class MeshView(QOpenGLWidget):
             return None
         return np.min(np.vstack(mins_list), axis=0), np.max(np.vstack(maxs_list), axis=0)
 
+    def _highlight_bounds(self) -> tuple[np.ndarray, np.ndarray] | None:
+        mins_list: list[np.ndarray] = []
+        maxs_list: list[np.ndarray] = []
+        for batch in self._batches:
+            if not self._batch_is_highlighted(batch):
+                continue
+            pos = batch.verts[:, 0:3]
+            if pos.size == 0:
+                continue
+            mins_list.append(pos.min(axis=0))
+            maxs_list.append(pos.max(axis=0))
+        if not mins_list:
+            return None
+        return np.min(np.vstack(mins_list), axis=0), np.max(np.vstack(maxs_list), axis=0)
+
     def _mat_outline_edge_lines(self) -> np.ndarray:
         """Triangle edges of highlighted batches — cached (rebuild was ~80k Python loops/paint)."""
-        if not self._highlight_stems and not self._highlight_mesh_keys:
+        if not self._highlight_active():
             return np.zeros((0, 6), dtype=np.float32)
         key = (
             frozenset(self._highlight_stems),
             frozenset(self._highlight_mesh_keys),
+            frozenset(self._highlight_names),
             id(self._batches),
             len(self._batches),
         )
         if key == self._mat_edge_key and self._mat_edge_cache is not None:
+            if self._mat_edge_vbo is None:
+                self._upload_mat_edges(self._mat_edge_cache)
             return self._mat_edge_cache
         rows: list[list[float]] = []
         max_tris = 12_000  # ponytail: enough silhouette; 80k shredded orbit FPS
         tris_total = 0
         col = (1.0, 0.45, 0.10)
         for batch in self._batches:
-            if not self._batch_matches_mat(
-                batch, self._highlight_stems, self._highlight_mesh_keys
-            ):
+            if not self._batch_is_highlighted(batch):
                 continue
             pos = batch.verts[:, 0:3]
             idx = batch.indices
@@ -1974,74 +2222,67 @@ class MeshView(QOpenGLWidget):
         out = np.asarray(rows, dtype=np.float32) if rows else np.zeros((0, 6), dtype=np.float32)
         self._mat_edge_key = key
         self._mat_edge_cache = out
+        self._upload_mat_edges(out)
         return out
 
-    def _draw_mat_outline(self, mvp: np.ndarray) -> None:
-        """Glowing silhouette shell + edge frame around selected texture geometry."""
-        if not self._highlight_stems and not self._highlight_mesh_keys:
-            return
-        # Orbit: skip heavy silhouette (mode-independent CPU killer when mat selected).
-        if self._cam_busy:
-            return
-        matched = [
-            b
-            for b in self._batches
-            if self._batch_matches_mat(
-                b, self._highlight_stems, self._highlight_mesh_keys
-            )
-        ]
-        if not matched:
-            return
-
-        # 1) Inflated backface shell (soft rim around the part)
-        if self._outline_prog is not None:
-            GL.glEnable(GL.GL_CULL_FACE)
-            GL.glCullFace(GL.GL_FRONT)
-            GL.glEnable(GL.GL_BLEND)
-            GL.glBlendFunc(GL.GL_ONE, GL.GL_ONE)
-            GL.glDepthMask(GL.GL_FALSE)
-            GL.glEnable(GL.GL_DEPTH_TEST)
-            GL.glUseProgram(self._outline_prog)
-            loc_mvp = GL.glGetUniformLocation(self._outline_prog, "u_mvp")
-            loc_w = GL.glGetUniformLocation(self._outline_prog, "u_width")
-            loc_col = GL.glGetUniformLocation(self._outline_prog, "u_color")
-            loc_gain = GL.glGetUniformLocation(self._outline_prog, "u_gain")
-            loc_pos = GL.glGetAttribLocation(self._outline_prog, "in_pos")
-            loc_nrm = GL.glGetAttribLocation(self._outline_prog, "in_nrm")
-            GL.glUniformMatrix4fv(loc_mvp, 1, GL.GL_TRUE, mvp)
-            GL.glUniform3f(loc_col, 1.0, 0.55, 0.14)
-            GL.glEnableVertexAttribArray(loc_pos)
-            if loc_nrm >= 0:
-                GL.glEnableVertexAttribArray(loc_nrm)
-            for batch in matched:
-                pos = batch.verts[:, 0:3]
-                if pos.size == 0:
-                    continue
-                extent = float(np.linalg.norm(pos.max(0) - pos.min(0))) or 0.5
-                # two passes: soft outer + brighter inner rim
-                for width_k, gain in ((0.022, 0.28), (0.010, 0.75)):
-                    width = max(extent * width_k, self._dist * 0.0012)
-                    GL.glUniform1f(loc_w, width)
-                    GL.glUniform1f(loc_gain, gain)
-                    self._draw_batch_tris(batch, loc_pos, loc_nrm)
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-            GL.glDisableVertexAttribArray(loc_pos)
-            if loc_nrm >= 0:
-                GL.glDisableVertexAttribArray(loc_nrm)
-            GL.glUseProgram(0)
-            GL.glDepthMask(GL.GL_TRUE)
-            GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-            GL.glDisable(GL.GL_BLEND)
-            GL.glDisable(GL.GL_CULL_FACE)
-
-        # 2) Crisp triangle-edge frame on top (reads as “ตีกรอบ”)
-        edges = self._mat_outline_edge_lines()
-        if edges.size:
-            GL.glDisable(GL.GL_DEPTH_TEST)
+    def _release_mat_edge_vbo(self) -> None:
+        vbo = self._mat_edge_vbo
+        self._mat_edge_vbo = None
+        self._mat_edge_count = 0
+        if vbo and self._gl_ready:
             try:
-                self._draw_lines(edges, mvp, width=1.5)
-            finally:
-                GL.glEnable(GL.GL_DEPTH_TEST)
+                GL.glDeleteBuffers(1, [int(vbo)])
+            except Exception:
+                pass
+
+    def _upload_mat_edges(self, edges: np.ndarray) -> None:
+        """One GPU upload — orbit used to re-stream the line array every frame."""
+        if not self._gl_ready:
+            return
+        if edges.size == 0:
+            self._release_mat_edge_vbo()
+            return
+        data = np.ascontiguousarray(edges, dtype=np.float32)
+        if self._mat_edge_vbo is None:
+            self._mat_edge_vbo = int(GL.glGenBuffers(1))
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, int(self._mat_edge_vbo))
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, data.nbytes, data, GL.GL_STATIC_DRAW)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        self._mat_edge_count = int(data.shape[0])
+
+    def _draw_outline_edges(self, mvp: np.ndarray) -> None:
+        if not self._mat_edge_count or self._mat_edge_vbo is None or self._line_prog is None:
+            return
+        if self._lloc is None:
+            self._cache_line_locs()
+        loc = self._lloc
+        if loc is None:
+            return
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, int(self._mat_edge_vbo))
+        GL.glUseProgram(self._line_prog)
+        GL.glUniformMatrix4fv(loc["mvp"], 1, GL.GL_TRUE, mvp)
+        GL.glLineWidth(1.5)
+        GL.glEnableVertexAttribArray(loc["pos"])
+        GL.glEnableVertexAttribArray(loc["col"])
+        GL.glVertexAttribPointer(loc["pos"], 3, GL.GL_FLOAT, False, 24, ctypes.c_void_p(0))
+        GL.glVertexAttribPointer(loc["col"], 3, GL.GL_FLOAT, False, 24, ctypes.c_void_p(12))
+        GL.glDrawArrays(GL.GL_LINES, 0, int(self._mat_edge_count))
+        GL.glDisableVertexAttribArray(loc["pos"])
+        GL.glDisableVertexAttribArray(loc["col"])
+        GL.glLineWidth(1.0)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        GL.glUseProgram(0)
+
+    def _draw_mat_outline(self, mvp: np.ndarray) -> None:
+        """Triangle-edge frame on the selected geometry. Stays on while the camera moves."""
+        if not self._highlight_active():
+            return
+        self._mat_outline_edge_lines()
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        try:
+            self._draw_outline_edges(mvp)
+        finally:
+            GL.glEnable(GL.GL_DEPTH_TEST)
 
     def set_albedo_force_on_stems(self, path: str | Path | None, stems: set[str]) -> None:
         """Right-click 'Force as albedo on selection' — only matching parts, never whole mesh."""
@@ -2117,6 +2358,19 @@ class MeshView(QOpenGLWidget):
 
     def clear_material_preview(self) -> None:
         self.set_material_preview(None, enabled=False)
+
+    def set_two_sided_for_material(self, name: str, on: bool) -> int:
+        """Live preview: cull off on that material only. Does not reload the scene."""
+        return self.set_two_sided_for_materials([name], on)
+
+    def set_two_sided_for_materials(self, names, on: bool) -> int:
+        """Flip back faces on those materials and redraw. Camera and buffers stay put."""
+        n = 0
+        for name in names:
+            n += apply_named_two_sided(self._scene.parts, self._batches, name, on)
+        self._shadow_dirty = True
+        self.update()
+        return n
 
     def set_two_sided_for_stems(
         self,
@@ -2208,6 +2462,7 @@ class MeshView(QOpenGLWidget):
         self._shadow_build_i = 0
         self._mat_edge_key = None
         self._mat_edge_cache = None
+        self._release_mat_edge_vbo()
 
     def _release_batch_vbos(self) -> None:
         ids = [int(b.vbo) for b in self._batches if b.vbo]
@@ -2384,10 +2639,6 @@ class MeshView(QOpenGLWidget):
                 gl_shaders.compileShader(GLOW_VERT, GL.GL_VERTEX_SHADER),
                 gl_shaders.compileShader(GLOW_FRAG, GL.GL_FRAGMENT_SHADER),
             )
-            self._outline_prog = gl_shaders.compileProgram(
-                gl_shaders.compileShader(OUTLINE_VERT, GL.GL_VERTEX_SHADER),
-                gl_shaders.compileShader(OUTLINE_FRAG, GL.GL_FRAGMENT_SHADER),
-            )
             self._sky_prog = gl_shaders.compileProgram(
                 gl_shaders.compileShader(SKY_VERT, GL.GL_VERTEX_SHADER),
                 gl_shaders.compileShader(SKY_FRAG, GL.GL_FRAGMENT_SHADER),
@@ -2401,7 +2652,6 @@ class MeshView(QOpenGLWidget):
             self._prog = None
             self._line_prog = None
             self._glow_prog = None
-            self._outline_prog = None
             self._sky_prog = None
             self._depth_prog = None
         self._cache_prog_locs()
@@ -2827,13 +3077,14 @@ class MeshView(QOpenGLWidget):
         if self._show_fps:
             self._note_frame_timing(paint_ms)
             self._sync_fps_hud()
-        elif self._fps_label.isVisible():
-            self._fps_label.hide()
+        elif self._fps_chip.isVisible():
+            self._fps_chip.hide()
 
         if self._need_tex_pass:
             QTimer.singleShot(16, self.update)
 
     def _note_frame_timing(self, paint_ms: float) -> None:
+        self._fps_idle_shown = False
         self._frame_id += 1
         self._fps_paint_ms.append(float(paint_ms))
         now = time.perf_counter()
@@ -2841,24 +3092,37 @@ class MeshView(QOpenGLWidget):
             self._fps_wall_ms.append((now - self._fps_last_t) * 1000.0)
         self._fps_last_t = now
 
+    def _mark_fps_idle_if_settled(self) -> None:
+        """Hold the last sample once the camera stops — do not redraw to keep counting."""
+        if self._fps_idle_shown or self._fps_last_t <= 0.0:
+            return
+        if (time.perf_counter() - self._fps_last_t) < 0.45:
+            return
+        self._fps_idle_shown = True
+        self._sync_fps_hud()
+
     def _sync_fps_hud(self) -> None:
-        """Update top-right QLabel — never paint text into the GL framebuffer."""
+        """Refresh the glass chip. The main window owns its top-right anchor."""
+        chip = self._fps_chip
+        if self._fps_suppressed:
+            chip.hide()
+            return
         text = format_fps_hud_text(
-            list(self._fps_paint_ms),
-            list(self._fps_wall_ms),
+            self._fps_paint_ms,
+            self._fps_wall_ms,
             self._frame_id,
+            idle=self._fps_idle_shown,
         )
         if not text:
-            self._fps_label.hide()
+            chip.hide()
             return
-        if self._fps_label.text() != text:
-            self._fps_label.setText(text)
-            self._fps_label.adjustSize()
-        x0 = max(self.width() - self._fps_label.width() - 10, 6)
-        self._fps_label.move(x0, 8)
-        if not self._fps_label.isVisible():
-            self._fps_label.show()
-            self._fps_label.raise_()
+        first = not chip.isVisible()
+        chip.set_hud_text(text)
+        chip.show()
+        self.apply_fps_place()
+        # Reparent/raise after paint returns — doing it here re-enters the GL widget.
+        if first and self._fps_host_hook is not None:
+            QTimer.singleShot(0, self._fps_host_hook)
 
     def _draw_meshes(
         self,
@@ -3682,6 +3946,7 @@ class MeshView(QOpenGLWidget):
         )
 
     def mousePressEvent(self, event) -> None:
+        self._wake_cam_timer()
         self._last = event.position().toPoint()
         self._alt_pick_armed = False
         self.setFocus(Qt.FocusReason.MouseFocusReason)
@@ -3741,11 +4006,8 @@ class MeshView(QOpenGLWidget):
             self._elev_vel += -dy * scale
             self._elev_vel = float(np.clip(self._elev_vel, -self._dist * 0.04, self._dist * 0.04))
             right, _up = self._cam_basis()
-            right_h = np.array([right[0], 0.0, right[2]], dtype=np.float64)
-            rl = float(np.linalg.norm(right_h))
-            if rl > 1e-8:
-                right_h = right_h / rl
-                self._move_vel = self._move_vel - right_h * dx * scale
+            _fwd, right_h = horizontal_walk_dirs(self._target - self._eye(), right)
+            self._move_vel = self._move_vel - right_h * dx * scale
             self.update()
 
     def mouseReleaseEvent(self, event) -> None:
@@ -3802,6 +4064,7 @@ class MeshView(QOpenGLWidget):
             impulse = -angle / 120.0 * 0.085  # notch ≈ one step
         else:
             return
+        self._wake_cam_timer()
         self._cancel_fly()
         mods = event.modifiers()
         if mods & Qt.KeyboardModifier.ControlModifier:
@@ -3840,6 +4103,11 @@ class MeshView(QOpenGLWidget):
         super().keyReleaseEvent(event)
 
     def _tick_camera(self) -> None:
+        # HOME / hidden GL: sleep the timer — was burning ~60 wakeups/s idle.
+        if not self.isVisible() or not self._render_active:
+            if self._cam_timer.interval() != 120:
+                self._cam_timer.setInterval(120)
+            return
         dirty = False
         if self._fly_active:
             u = (time.perf_counter() - self._fly_t0) / self._fly_dur
@@ -3891,20 +4159,10 @@ class MeshView(QOpenGLWidget):
                 self._elev_vel = 0.0
             dirty = True
 
-        # walk: arrows move on horizontal plane relative to camera look
+        # walk: Up/Down = forward/back on XY, Left/Right = strafe (Z-up)
         if self._keys_down:
             right, _up = self._cam_basis()
-            forward = self._target - self._eye()
-            forward[1] = 0.0
-            fl = float(np.linalg.norm(forward))
-            if fl < 1e-8:
-                forward = np.array([0.0, 0.0, -1.0])
-            else:
-                forward = forward / fl
-            right_h = np.array([right[0], 0.0, right[2]], dtype=np.float64)
-            rl = float(np.linalg.norm(right_h))
-            if rl > 1e-8:
-                right_h = right_h / rl
+            forward, right_h = horizontal_walk_dirs(self._target - self._eye(), right)
             step = self._dist * 0.0032
             if int(Qt.Key.Key_Up) in self._keys_down:
                 self._move_vel = self._move_vel + forward * step
@@ -3938,8 +4196,15 @@ class MeshView(QOpenGLWidget):
             if parent is not None:
                 QTimer.singleShot(40, parent._refresh_side_frost)
 
-        if dirty or self._show_fps:
+        # Stay at 16ms while visible — dropping to 33ms made orbit/dolly steppy.
+        if self._cam_timer.interval() != 16:
+            self._cam_timer.setInterval(16)
+
+        if dirty:
             self.update()
+        elif self._show_fps:
+            # F3 used to call update() every 16ms while idle, so Lit never rested.
+            self._mark_fps_idle_if_settled()
 
     def _eye(self) -> np.ndarray:
         """Orbit eye in Trainz Z-up: pitch elevates +Z, yaw spins about Z."""
