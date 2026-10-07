@@ -176,45 +176,58 @@ def read_two_sided(meta_path: Path | None, material: str) -> bool | None:
     return None
 
 
-def write_two_sided(meta_path: Path, material: str, on: bool) -> Path:
-    """Create/update mesh metadata so ``material`` has ``two-sided``."""
+def write_two_sided_map(meta_path: Path, flags: dict[str, bool]) -> Path:
+    """Upsert each material's own ``two-sided`` flag in one file write."""
     path = Path(meta_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     except OSError:
         text = ""
-    path.write_text(set_material_two_sided(text, material, on), encoding="utf-8")
+    for material, on in flags.items():
+        text = set_material_two_sided(text, material, bool(on))
+    path.write_text(text, encoding="utf-8")
     return path
+
+
+def write_two_sided_many(meta_path: Path, materials: list[str], on: bool) -> Path:
+    """Upsert ``two-sided`` for each material name in one file write."""
+    return write_two_sided_map(meta_path, {name: on for name in materials})
+
+
+def write_two_sided(meta_path: Path, material: str, on: bool) -> Path:
+    """Create/update mesh metadata so ``material`` has ``two-sided``."""
+    return write_two_sided_many(meta_path, [material], on)
 
 
 def apply_meta_two_sided_to_parts(
     parts: list,
     meta_path: Path | None,
     *,
-    default: bool = True,
+    default: bool = False,
 ) -> int:
     """Set ``part.two_sided`` from metadata by matching ``part.name``.
 
+    Missing / empty meta → every part gets ``default`` (False).
     Returns how many parts got an explicit meta value.
     """
     if meta_path is None or not Path(meta_path).is_file():
         for p in parts:
-            if getattr(p, "two_sided", None) is None:
-                p.two_sided = default
+            p.two_sided = default
         return 0
     try:
         text = Path(meta_path).read_text(encoding="utf-8", errors="replace")
     except OSError:
+        for p in parts:
+            p.two_sided = default
         return 0
     mapping = parse_two_sided_map(text)
-    if not mapping:
-        return 0
     lower = {k.lower(): v for k, v in mapping.items()}
     n = 0
     for p in parts:
         name = (getattr(p, "name", "") or "").strip()
         if not name:
+            p.two_sided = default
             continue
         if name.lower() in lower:
             p.two_sided = lower[name.lower()]
@@ -222,8 +235,13 @@ def apply_meta_two_sided_to_parts(
             continue
         # family-ish: meta key without .m.* suffix
         base = name.split(".m.", 1)[0].lower()
-        hit = next((v for k, v in lower.items() if k == base or k.startswith(base + ".")), None)
+        hit = next(
+            (v for k, v in lower.items() if k == base or k.startswith(base + ".")),
+            None,
+        )
         if hit is not None:
             p.two_sided = hit
             n += 1
+        else:
+            p.two_sided = default
     return n
