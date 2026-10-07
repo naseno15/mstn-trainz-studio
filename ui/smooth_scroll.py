@@ -1,7 +1,8 @@
 """Damped pixel scroll for QAbstractItemView / QScrollArea / code editors."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QTimer, Qt
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -29,7 +30,11 @@ CODE_EDGE_DAMP = 0.08
 
 
 class DampedScrollFilter(QObject):
-    """Wheel inertia — soft coast, passes through when view can't scroll."""
+    """Wheel inertia — soft coast, passes through when view can't scroll.
+
+    With ``middle_auto=True`` (CodeEdit): middle-click toggles browser-style
+    autoscroll — move mouse above/below origin to scroll; middle/left/Esc stops.
+    """
 
     def __init__(
         self,
@@ -41,6 +46,7 @@ class DampedScrollFilter(QObject):
         vel_cap: float = DEFAULT_VEL_CAP,
         stop_vel: float = 0.08,
         edge_damp: float = 0.18,
+        middle_auto: bool = False,
     ) -> None:
         super().__init__(view)
         self._view = view
@@ -50,6 +56,10 @@ class DampedScrollFilter(QObject):
         self._vel_cap = float(vel_cap)
         self._stop_vel = float(stop_vel)
         self._edge_damp = float(edge_damp)
+        self._middle_auto = bool(middle_auto)
+        self._auto_active = False
+        self._auto_origin: QPoint | None = None
+        self._cursor_overridden = False
         self._vel = 0.0
         self._pos: float | None = None
         self._timer = QTimer(self)
@@ -95,7 +105,65 @@ class DampedScrollFilter(QObject):
             w = w.parentWidget()
         return False
 
+    def _brake_coast(self) -> None:
+        self._vel = 0.0
+        try:
+            self._pos = float(self._bar().value())
+        except RuntimeError:
+            self._pos = None
+
+    def _start_auto(self, origin: QPoint) -> None:
+        self._brake_coast()
+        self._auto_active = True
+        self._auto_origin = QPoint(origin)
+        if not self._cursor_overridden:
+            QApplication.setOverrideCursor(Qt.CursorShape.SizeVerCursor)
+            self._cursor_overridden = True
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def _stop_auto(self) -> None:
+        self._auto_active = False
+        self._auto_origin = None
+        self._brake_coast()
+        if self._cursor_overridden:
+            QApplication.restoreOverrideCursor()
+            self._cursor_overridden = False
+        if self._timer.isActive() and abs(self._vel) < self._stop_vel:
+            self._timer.stop()
+
+    def _handle_middle_auto(self, obj, event) -> bool:
+        """Toggle / stop middle-click autoscroll. True = event consumed."""
+        if not self._middle_auto:
+            return False
+        et = event.type()
+        if et == QEvent.Type.KeyPress and self._auto_active:
+            if event.key() == Qt.Key.Key_Escape:
+                self._stop_auto()
+                event.accept()
+                return True
+            return False
+        if et == QEvent.Type.MouseButtonPress:
+            btn = event.button()
+            if self._auto_active:
+                # second middle / any left click stops (even outside the view)
+                if btn in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
+                    self._stop_auto()
+                    event.accept()
+                    return True
+                return False
+            if btn == Qt.MouseButton.MiddleButton and self._under_view(obj):
+                bar = self._bar()
+                if bar.maximum() <= bar.minimum():
+                    return False
+                self._start_auto(QCursor.pos())
+                event.accept()
+                return True
+        return False
+
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if self._handle_middle_auto(obj, event):
+            return True
         if event.type() != QEvent.Type.Wheel:
             return False
         view = getattr(self, "_view", None)
@@ -105,6 +173,9 @@ class DampedScrollFilter(QObject):
             vp = view.viewport()
         except RuntimeError:
             return False
+        if self._auto_active:
+            # wheel exits autoscroll then applies normal impulse
+            self._stop_auto()
         if not self._under_view(obj):
             return False
         pixel = event.pixelDelta().y()
@@ -144,6 +215,32 @@ class DampedScrollFilter(QObject):
         hi = float(bar.maximum())
         if self._pos is None:
             self._pos = float(bar.value())
+
+        if self._auto_active and self._auto_origin is not None:
+            if hi <= lo:
+                return
+            dy = QCursor.pos().y() - self._auto_origin.y()
+            dead = 12
+            if abs(dy) <= dead:
+                self._vel = 0.0
+            else:
+                signed = float(dy - dead if dy > 0 else dy + dead)
+                # farther from origin → faster; 80px ≈ full cap
+                self._vel = max(
+                    -self._vel_cap,
+                    min(self._vel_cap, signed / 80.0 * self._vel_cap),
+                )
+            if abs(self._vel) >= self._stop_vel:
+                self._pos += self._vel
+                if self._pos < lo:
+                    self._pos = lo
+                    self._vel = 0.0
+                elif self._pos > hi:
+                    self._pos = hi
+                    self._vel = 0.0
+                bar.setValue(int(round(self._pos)))
+            return
+
         if abs(self._vel) < self._stop_vel:
             self._vel = 0.0
             self._pos = float(bar.value())
@@ -241,7 +338,8 @@ def enable_smooth_table(
         if not view.objectName():
             view.setObjectName("studioTable")
         hdr = view.horizontalHeader()
-        if hdr is not None:
+        # Don't clobber page-specific headers (e.g. pkgFinderHeader).
+        if hdr is not None and not hdr.objectName():
             hdr.setObjectName("studioTableHeader")
 
 
@@ -258,7 +356,7 @@ def enable_smooth_scroll_area(area: QScrollArea, *, coast: float = DEFAULT_COAST
 
 
 def enable_code_scroll(area: QAbstractScrollArea) -> None:
-    """Short-coast wheel for CodeEdit / plain-text viewers (brakes quickly)."""
+    """Short-coast wheel + middle-click toggle autoscroll for CodeEdit."""
     area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     bar = area.verticalScrollBar()
     bar.setSingleStep(3)
@@ -273,6 +371,7 @@ def enable_code_scroll(area: QAbstractScrollArea) -> None:
             vel_cap=CODE_VEL_CAP,
             stop_vel=CODE_STOP_VEL,
             edge_damp=CODE_EDGE_DAMP,
+            middle_auto=True,
         ),
     )
 
@@ -281,6 +380,8 @@ def _bind_damped(host: QAbstractScrollArea, filt: DampedScrollFilter) -> None:
     """Keep one live filter. A replaced filter stays installed and then throws."""
     old = getattr(host, "_damped_scroll", None)
     if old is not None and old is not filt:
+        if hasattr(old, "_stop_auto"):
+            old._stop_auto()
         app = QApplication.instance()
         if app is not None:
             app.removeEventFilter(old)
@@ -290,3 +391,24 @@ def _bind_damped(host: QAbstractScrollArea, filt: DampedScrollFilter) -> None:
             pass
         old.deleteLater()
     host._damped_scroll = filt  # type: ignore[attr-defined]
+
+
+if __name__ == "__main__":
+    # ponytail: middle-auto toggle + brake — fails if autoscroll state breaks
+    import sys
+
+    from PySide6.QtWidgets import QApplication, QPlainTextEdit
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    ed = QPlainTextEdit()
+    ed.setPlainText("\n".join(f"line {i}" for i in range(80)))
+    ed.resize(320, 200)
+    enable_code_scroll(ed)
+    filt = ed._damped_scroll  # type: ignore[attr-defined]
+    assert filt._middle_auto
+    assert not filt._auto_active
+    filt._start_auto(QPoint(100, 100))
+    assert filt._auto_active and filt._auto_origin == QPoint(100, 100)
+    filt._stop_auto()
+    assert not filt._auto_active and filt._auto_origin is None
+    print("smooth_scroll middle_auto: ok")

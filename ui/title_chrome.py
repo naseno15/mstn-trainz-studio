@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .frost import glass_is_dark, set_glass_dark
+from .frost import glass_is_dark, paint_soft_shadow, set_glass_dark
 from .motion import (
     apple_pop_pill,
     attach_hover_bubble,
@@ -54,7 +54,7 @@ from .motion import (
     stop_slide,
 )
 
-TITLE_BAR_H = 52
+TITLE_BAR_H = 60  # +8 so capsule shadow can fade (was clipped at 52)
 TITLE_MARGIN = 12
 # Keep page content below the floating bar — no logo bleed-through.
 TITLE_CONTENT_INSET = TITLE_MARGIN + TITLE_BAR_H + 6
@@ -516,8 +516,8 @@ class FloatTitleBar(QFrame):
         self._drop.closed.connect(self._on_drop_closed)
 
         lay = QHBoxLayout(self)
-        # Symmetric vertical pad — asymmetric 8/10 was eating descender room.
-        lay.setContentsMargins(14, 9, 16, 9)
+        # Pad clears the soft shadow room (plate inset ~5/12 inside TITLE_BAR_H).
+        lay.setContentsMargins(14, 12, 16, 14)
         lay.setSpacing(6)
 
         self.lights = TrafficLights(self)
@@ -606,12 +606,22 @@ class FloatTitleBar(QFrame):
         full = QRectF(self.rect())
         if full.width() < 4 or full.height() < 4:
             return
-        for grow, alpha in ((5.0, 28), (2.5, 48), (0.8, 70)):
-            sr = full.adjusted(3.0, 4.0 + grow * 0.3, -3.0, 1.0 + grow)
-            sp = QPainterPath()
-            sp.addRoundedRect(sr, TITLE_RADIUS, TITLE_RADIUS)
-            p.fillPath(sp, QColor(0, 0, 0, int(alpha * (1.0 if dark else 0.55))))
-        r = full.adjusted(3.5, 2.5, -3.5, -5.0)
+        side, top, bot = 8.0, 5.0, 12.0
+        r = full.adjusted(side, top, -side, -bot)
+        if r.width() < 8 or r.height() < 8:
+            r = full.adjusted(3.5, 2.5, -3.5, -5.0)
+        clip = full.adjusted(1.0, 1.0, -1.0, -1.0)
+        paint_soft_shadow(
+            p,
+            r,
+            radius=TITLE_RADIUS,
+            dark=dark,
+            clip=clip,
+            max_spread=min(11.0, bot - 1.0),
+            dy=2.0,
+            peak_alpha=44.0,
+            layers=12,
+        )
         rad = min(TITLE_RADIUS, r.width() * 0.5, r.height() * 0.5)
         path = QPainterPath()
         path.addRoundedRect(r, rad, rad)

@@ -8,7 +8,15 @@ delegate paints a full-row pill; ``install_rounded_rows`` is hooked from
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QPersistentModelIndex, QRect, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QRegion
+from PySide6.QtGui import (
+    QColor,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QRegion,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -17,9 +25,9 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
 )
 
-ROW_RADIUS = 10.0
-ROW_INSET_X = 4
-ROW_INSET_Y = 1
+ROW_RADIUS = 12.0
+ROW_INSET_X = 6
+ROW_INSET_Y = 3
 VIEW_CLIP_RADIUS = 12
 
 
@@ -39,18 +47,30 @@ def _theme_mode(widget: QObject | None) -> str:
     return "dark"
 
 
-def _row_fills(widget: QObject | None) -> tuple[QColor, QColor]:
+def _hover_fill(widget: QObject | None) -> QColor:
     from .theme import palette
 
     p = palette(_theme_mode(widget))
-    # Stronger wash than p.selection (0.18α reads as hollow orange rim on dark glass).
     if p.mode == "dark":
-        sel = QColor(255, 90, 31, 72)
-        hover = QColor(255, 255, 255, 28)
-    else:
-        sel = QColor(255, 90, 31, 56)
-        hover = QColor(0, 0, 0, 22)
-    return sel, hover
+        return QColor(255, 255, 255, 28)
+    return QColor(0, 0, 0, 22)
+
+
+def _paint_selection_bubble(painter: QPainter, row: QRect) -> None:
+    """Same proud orange bubble as AccentPill / bottom nav — not a flat Highlight slab."""
+    r = QRectF(row)
+    if r.width() < 4 or r.height() < 4:
+        return
+    path = QPainterPath()
+    path.addRoundedRect(r, ROW_RADIUS, ROW_RADIUS)
+    grad = QLinearGradient(r.topLeft(), r.bottomLeft())
+    grad.setColorAt(0.0, QColor("#ff7a45"))
+    grad.setColorAt(0.42, QColor("#ff5a1f"))
+    grad.setColorAt(1.0, QColor("#c43a10"))
+    painter.fillPath(path, grad)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(QColor(255, 214, 180, 150), 1.0))
+    painter.drawPath(path)
 
 
 def _view_column_count(view: QAbstractItemView) -> int:
@@ -141,26 +161,22 @@ class RoundedRowDelegate(QStyledItemDelegate):
                 ROW_INSET_X, ROW_INSET_Y, -ROW_INSET_X, -ROW_INSET_Y
             )
             if row.width() > 4 and row.height() > 4:
-                sel_c, hover_c = _row_fills(self._view)
                 painter.save()
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
                 # Each column paints its slice of the same rounded path.
                 painter.setClipRect(option.rect)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(sel_c if selected else hover_c)
-                painter.drawRoundedRect(QRectF(row), ROW_RADIUS, ROW_RADIUS)
-                # Soft rim — selected = warm edge; hover = hairline only.
                 if selected:
-                    rim = QColor(255, 90, 31, 160)
-                elif hovered:
+                    _paint_selection_bubble(painter, row)
+                else:
+                    hover_c = _hover_fill(self._view)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(hover_c)
+                    painter.drawRoundedRect(QRectF(row), ROW_RADIUS, ROW_RADIUS)
                     rim = (
                         QColor(255, 255, 255, 40)
                         if _theme_mode(self._view) == "dark"
                         else QColor(0, 0, 0, 28)
                     )
-                else:
-                    rim = None
-                if rim is not None:
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.setPen(rim)
                     painter.drawRoundedRect(
@@ -241,6 +257,15 @@ def install_rounded_rows(view: QAbstractItemView) -> None:
     if vp is not None:
         vp.setMouseTracking(True)
         vp.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+    # Kill solid QPalette Highlight slabs (Win paints these under cell widgets).
+    for w in (view, vp):
+        if w is None:
+            continue
+        pal = w.palette()
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
+        pal.setColor(QPalette.ColorGroup.Active, QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
+        pal.setColor(QPalette.ColorGroup.Inactive, QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
+        w.setPalette(pal)
     # Full-row select so the orange pill reads as one bubble.
     view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     delegate = RoundedRowDelegate(view)

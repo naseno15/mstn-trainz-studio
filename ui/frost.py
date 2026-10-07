@@ -13,6 +13,10 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QFrame, QScrollArea, QWidget
 
+# Layout insets for FrostGlassFrame — must cover plate pad + soft shadow room.
+# Qt clips paint outside the widget; short margins cut the fade into a hard edge.
+FROST_CONTENT_MARGINS = (28, 24, 28, 30)  # L,T,R,B — was 18/16/18/18
+
 
 def make_frost_pixmap(src: QImage) -> QPixmap:
     """Cheap frosted backdrop — downscale / upscale (no QGraphicsBlurEffect)."""
@@ -66,6 +70,66 @@ def prepare_frost_scroll(area: QScrollArea) -> None:
         body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
 
+def paint_soft_shadow(
+    p: QPainter,
+    plate: QRectF,
+    *,
+    radius: float,
+    dark: bool,
+    clip: QRectF,
+    max_spread: float = 14.0,
+    dy: float = 2.5,
+    peak_alpha: float = 38.0,
+    layers: int = 14,
+) -> None:
+    """Contact shadow clamped inside ``clip`` — wide fade, no hard widget cut.
+
+    Many thin rings (not 3 stepped slabs) so the falloff reads smooth instead
+    of banded / pixel-y. Qt still clips paint outside the widget; callers must
+    keep ``plate`` inset enough that ``max_spread`` fits in ``clip``.
+    """
+    if plate.width() < 4 or plate.height() < 4 or layers < 1:
+        return
+    scale = 1.0 if dark else 0.55
+    n = max(1, int(layers))
+    spread = max(4.0, float(max_spread))
+    for i in range(n, 0, -1):
+        t = i / n  # 1 = outer
+        grow = spread * t
+        # Ease-out alpha: near plate denser, outer rings nearly gone.
+        fall = (1.0 - t) ** 1.55
+        alpha = int(peak_alpha * fall * scale)
+        if alpha < 2:
+            continue
+        sr = QRectF(plate).adjusted(
+            -grow * 0.9,
+            dy * 0.25,
+            grow * 0.9,
+            dy + grow,
+        )
+        sr = sr.intersected(clip)
+        if sr.width() < 4 or sr.height() < 4:
+            continue
+        sp = QPainterPath()
+        rad = min(radius + grow * 0.35, sr.width() * 0.5, sr.height() * 0.5)
+        sp.addRoundedRect(sr, rad, rad)
+        p.fillPath(sp, QColor(0, 0, 0, alpha))
+
+
+def _glass_plate_rect(
+    full: QRectF,
+    *,
+    side: float,
+    top: float,
+    bottom: float,
+) -> QRectF:
+    """Plate inset that never leaves ``full`` (shadow air stays inside)."""
+    r = full.adjusted(side, top, -side, -bottom)
+    if r.width() < 8 or r.height() < 8:
+        return full.adjusted(4.0, 3.0, -4.0, -6.0)
+    return r
+
+
 def paint_glass_chip(widget: QWidget, radius: float = 22.0) -> None:
     """Floating glass pill — theme-aware (``glassDark`` property)."""
     dark = glass_is_dark(widget)
@@ -74,14 +138,22 @@ def paint_glass_chip(widget: QWidget, radius: float = 22.0) -> None:
     full = QRectF(widget.rect())
     if full.width() < 4 or full.height() < 4:
         return
-    shadow_scale = 1.0 if dark else 0.72
-    for grow, alpha in ((5.0, 22), (2.5, 40), (0.8, 55)):
-        sr = full.adjusted(3.0, 4.0 + grow * 0.3, -3.0, 1.0 + grow)
-        sp = QPainterPath()
-        sp.addRoundedRect(sr, radius, radius)
-        p.fillPath(sp, QColor(0, 0, 0, int(alpha * shadow_scale)))
+    # Room for a wide soft halo — was ~5px bottom and got clipped hard.
+    side, top, bot = 8.0, 5.0, 12.0
+    r = _glass_plate_rect(full, side=side, top=top, bottom=bot)
+    clip = full.adjusted(1.0, 1.0, -1.0, -1.0)
+    paint_soft_shadow(
+        p,
+        r,
+        radius=float(radius),
+        dark=dark,
+        clip=clip,
+        max_spread=min(11.0, bot - 1.0),
+        dy=2.0,
+        peak_alpha=40.0,
+        layers=12,
+    )
 
-    r = full.adjusted(3.5, 2.5, -3.5, -5.0)
     rad = min(float(radius), r.width() * 0.5, r.height() * 0.5)
     path = QPainterPath()
     path.addRoundedRect(r, rad, rad)
@@ -130,13 +202,22 @@ def _paint_frost_glass(
     full = QRectF(widget.rect())
     if full.width() < 4 or full.height() < 4:
         return
-    for grow, alpha in ((6.0, 18), (3.5, 32), (1.5, 48)):
-        sr = full.adjusted(4.0 - grow * 0.2, 5.0, -4.0 + grow * 0.2, 2.0 + grow)
-        spath = QPainterPath()
-        spath.addRoundedRect(sr, radius + 1.0, radius + 1.0)
-        p.fillPath(spath, QColor(0, 0, 0, alpha if dark else max(14, alpha // 2)))
+    # Match FROST_CONTENT_MARGINS air: side/top/bot leave room for a full fade.
+    side, top, bot = 14.0, 11.0, 16.0
+    r = _glass_plate_rect(full, side=side, top=top, bottom=bot)
+    clip = full.adjusted(1.0, 1.0, -1.0, -1.0)
+    paint_soft_shadow(
+        p,
+        r,
+        radius=float(radius),
+        dark=dark,
+        clip=clip,
+        max_spread=min(14.0, bot - 1.5),
+        dy=2.5,
+        peak_alpha=36.0,
+        layers=14,
+    )
 
-    r = full.adjusted(4.0, 3.0, -4.0, -6.0)
     rad = min(radius, r.width() * 0.5, r.height() * 0.5)
     path = QPainterPath()
     path.addRoundedRect(r, rad, rad)

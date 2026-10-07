@@ -229,6 +229,26 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
     header_fill = "#252b33" if p.mode == "dark" else "#d5dae2"
     edit_fill = "#14181d" if p.mode == "dark" else "#e8ebf0"
     well_list = _css_well(p, edit_fill)
+    # Recessed slot: dark lip on top, light catch on the bottom. Flat #14181d
+    # sat on the glass and the narrow RGBA boxes disappeared.
+    if p.mode == "dark":
+        edit_well = (
+            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            " stop:0 #07090c, stop:0.38 #1a212b, stop:1 #3e4a56);"
+            "border-top: 1px solid rgba(0, 0, 0, 0.90);"
+            "border-left: 1px solid rgba(0, 0, 0, 0.60);"
+            "border-bottom: 1px solid rgba(255, 255, 255, 0.46);"
+            "border-right: 1px solid rgba(255, 255, 255, 0.18);"
+        )
+    else:
+        edit_well = (
+            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            " stop:0 #c5ccd4, stop:0.4 #e6eaef, stop:1 #fbfcfd);"
+            "border-top: 1px solid rgba(0, 0, 0, 0.28);"
+            "border-left: 1px solid rgba(0, 0, 0, 0.14);"
+            "border-bottom: 1px solid rgba(255, 255, 255, 0.95);"
+            "border-right: 1px solid rgba(255, 255, 255, 0.75);"
+        )
     list_chrome = _css_raised(p, list_fill)
     raised_accent = _css_raised_accent(p)
     pressed = _css_well(p, p.well_fill)
@@ -874,13 +894,21 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         color: {p.accent};
         border: 1px solid {p.accent};
     }}
+    QLabel#pkgFinderTitle, QLabel#pkgFinderSub {{
+        /* Beat global * {{ font-size: 13px }}; no pad (pad shrinks paint box under fixed height). */
+        background: transparent;
+        padding: 0;
+        margin: 0;
+    }}
     QLabel#pkgFinderTitle {{
         color: {p.ink};
-        background: transparent;
+        font-size: 12px;
+        font-weight: 600;
     }}
     QLabel#pkgFinderSub {{
         color: {p.muted};
-        background: transparent;
+        font-size: 11px;
+        font-weight: 400;
     }}
     QHeaderView#pkgFinderHeader {{
         background: transparent;
@@ -905,21 +933,24 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         alternate-background-color: transparent;
     }}
     QTableWidget#pkgFinder::item {{
-        padding: 4px 10px;
+        /* No vertical pad/margin — stole height from cell widgets → clipped descenders.
+           Horizontal inset only; _FinderNameCell owns vertical spacing. */
+        padding: 0 4px;
+        min-height: 0;
         color: {p.ink};
         border: none;
         border-bottom: 1px solid {"rgba(255, 255, 255, 0.045)" if p.mode == "dark" else "rgba(0, 0, 0, 0.045)"};
-        border-radius: 10px;
-        margin: 1px 3px;
+        border-radius: 12px;
+        margin: 0 4px;
     }}
     QTableWidget#pkgFinder::item:selected,
     QListWidget::item:selected, QTreeWidget::item:selected, QTableWidget::item:selected,
     QTreeWidget#matTable::item:selected, QTreeWidget#lampTable::item:selected,
     QTreeWidget#engineTable::item:selected {{
-        /* delegate paints orange pill — avoid square QSS slab */
+        /* delegate paints AccentPill bubble — never solid Highlight slab */
         background: transparent;
-        color: {p.ink};
-        border-radius: 10px;
+        color: #ffffff;
+        border-radius: 12px;
     }}
     QTableWidget#pkgFinder::item:hover:!selected,
     QListWidget::item:hover:!selected, QTreeWidget::item:hover:!selected,
@@ -1076,16 +1107,38 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         background: transparent;
     }}
     /* Editor dock — one control height. Vertical padding is 0: Qt adds
-       padding on top of min-height, which made rows 42px and clipped setFixedHeight(36). */
+       padding on top of min-height, which made rows 42px and clipped setFixedHeight(36).
+       Inset edge is 1px inside that 36 (setFixedHeight), not extra layout. */
     QFrame#editorDock QLineEdit,
     QFrame#editorDock QComboBox,
     QFrame#editorDock QDoubleSpinBox,
     QFrame#editorDock QSpinBox {{
         padding: 0 10px;
-        min-height: 36px;
-        max-height: 36px;
-        border: none;
+        /* 34 + 1px inset edge = the 36px setFixedHeight. 36 here made spins 46. */
+        min-height: 34px;
+        max-height: 34px;
         border-radius: 8px;
+        {edit_well}
+    }}
+    QFrame#editorDock QLineEdit:focus,
+    QFrame#editorDock QComboBox:focus,
+    QFrame#editorDock QDoubleSpinBox:focus,
+    QFrame#editorDock QSpinBox:focus {{
+        border-bottom: 1px solid {p.accent};
+    }}
+    /* Spin/combo paint the well. Their inner editor must not cover it with a flat fill. */
+    QFrame#editorDock QSpinBox QLineEdit,
+    QFrame#editorDock QDoubleSpinBox QLineEdit,
+    QFrame#editorDock QComboBox QLineEdit {{
+        background: transparent;
+        border: none;
+        padding: 0;
+        min-height: 0px;
+        max-height: 36px;
+    }}
+    /* RGBA number only — the letter is a label beside the box, so the well stays narrow. */
+    QFrame#editorDock QSpinBox#rgbaChannel {{
+        padding: 0 2px;
     }}
     QFrame#editorDock QDoubleSpinBox::up-button, QFrame#editorDock QDoubleSpinBox::down-button,
     QFrame#editorDock QSpinBox::up-button, QFrame#editorDock QSpinBox::down-button {{

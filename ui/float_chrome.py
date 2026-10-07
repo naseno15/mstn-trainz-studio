@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 from .frost import glass_is_dark, paint_glass_chip, set_glass_dark
 from .icons import set_home_icon
 
-FLOAT_NAV_HEIGHT = 64
+FLOAT_NAV_HEIGHT = 72  # +8 so chip bottom shadow can fade (was clipped at 64)
 FLOAT_NAV_RADIUS = 30.0
 NAV_ICON_SIDE = 36
 
@@ -115,7 +115,7 @@ def mount_center_icon_nav(
     """pages-left | Home | pages-right — Theme is top-bar only."""
     del theme_btn  # kept for call-site compat; never mounted
     left, right = split_page_btns(page_btns)
-    lay.setContentsMargins(12, 10, 12, 12)
+    lay.setContentsMargins(14, 12, 14, 14)
     lay.setSpacing(4)
     for b in left:
         lay.addWidget(b)
@@ -161,7 +161,7 @@ def mount_page_only_nav(
 ) -> list[QPushButton]:
     """Centered page labels only — no Home/Theme (top sub-nav)."""
     btns = list(page_btns)
-    lay.setContentsMargins(12, 10, 12, 12)
+    lay.setContentsMargins(14, 12, 14, 14)
     lay.setSpacing(4)
     lay.addStretch(1)
     for b in btns:
@@ -222,7 +222,7 @@ class FloatActionBar(QFrame):
         self.theme_btn.hide()
         self.home_btn.clicked.connect(self.home_clicked.emit)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setContentsMargins(14, 12, 14, 14)
         lay.setSpacing(10)
         lay.addWidget(self.home_btn)
         from .motion import attach_hover_bubble
