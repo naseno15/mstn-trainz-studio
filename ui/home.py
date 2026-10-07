@@ -721,8 +721,8 @@ class HomePage(QFrame):
                 on_assets,
             ),
             (
-                "Texture / Mesh",
-                "Maps · LM · materials",
+                "Texture & Mesh Lods",
+                "LODs · maps · bake",
                 "texture",
                 on_texmesh,
             ),

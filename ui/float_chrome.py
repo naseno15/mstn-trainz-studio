@@ -11,9 +11,13 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 from .frost import glass_is_dark, paint_glass_chip, set_glass_dark
 from .icons import set_home_icon
 
-FLOAT_NAV_HEIGHT = 72  # +8 so chip bottom shadow can fade (was clipped at 64)
+FLOAT_NAV_HEIGHT = 72  # single-line suites (Mesh / Engine / Assets / Sounds)
+FLOAT_NAV_HEIGHT_TALL = 88  # two-line labels (Texture & Mesh Lods)
 FLOAT_NAV_RADIUS = 30.0
 NAV_ICON_SIDE = 36
+NAV_ICON_SIDE_TALL = 48  # matches two-line page buttons
+HOME_GAP = 16  # air between page cluster and Home (was 8 — too tight)
+HOME_GAP_TALL = 22
 
 
 def split_page_btns(
@@ -71,9 +75,9 @@ def paint_float_nav(widget: QWidget) -> None:
             _paint_inset(p, ir, dark=dark, pad=(-8, -4, 8, 4))
 
 
-def prepare_float_nav(frame: QFrame) -> None:
+def prepare_float_nav(frame: QFrame, *, height: int | None = None) -> None:
     frame.setObjectName("bottomNav")
-    frame.setFixedHeight(FLOAT_NAV_HEIGHT)
+    frame.setFixedHeight(int(height if height is not None else FLOAT_NAV_HEIGHT))
     # Soft corners need translucency; icon buttons stay opaque so they still click.
     frame.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
@@ -85,11 +89,12 @@ def _harden_nav_icon(btn: QPushButton) -> None:
     btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
 
-def make_home_button(parent: QWidget) -> QPushButton:
+def make_home_button(parent: QWidget, *, side: int | None = None) -> QPushButton:
     """Center Home control — Theme lives in the top FloatTitleBar menu."""
+    side = int(side if side is not None else NAV_ICON_SIDE)
     home = QPushButton(parent)
-    set_home_icon(home, square=NAV_ICON_SIDE)
-    home.setFixedSize(NAV_ICON_SIDE, NAV_ICON_SIDE)
+    set_home_icon(home, square=side)
+    home.setFixedSize(side, side)
     _harden_nav_icon(home)
     return home
 
@@ -111,19 +116,21 @@ def mount_center_icon_nav(
     home_btn: QPushButton,
     page_btns: list[QPushButton] | tuple[QPushButton, ...],
     theme_btn: QPushButton | None = None,
+    home_gap: int | None = None,
 ) -> tuple[list[QPushButton], list[QPushButton]]:
     """pages-left | Home | pages-right — Theme is top-bar only."""
     del theme_btn  # kept for call-site compat; never mounted
+    gap = int(home_gap if home_gap is not None else HOME_GAP)
     left, right = split_page_btns(page_btns)
     lay.setContentsMargins(14, 12, 14, 14)
     lay.setSpacing(4)
     for b in left:
         lay.addWidget(b)
     if left:
-        lay.addSpacing(8)
+        lay.addSpacing(gap)
     lay.addWidget(home_btn)
     if right:
-        lay.addSpacing(8)
+        lay.addSpacing(gap)
     for b in right:
         lay.addWidget(b)
     return left, right

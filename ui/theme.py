@@ -492,7 +492,10 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         color: white;
         font-weight: 600;
         border-radius: 14px;
-        padding: 12px 22px;
+        /* Pad only — never pair with setFixedHeight(36); Qt pads inside the
+           fixed box and clips descenders (Denoise / Save). */
+        padding: 10px 18px;
+        min-height: 20px;
     }}
     QPushButton#accentBtn:hover {{
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -516,10 +519,10 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         background: transparent;
         border: none;
         border-radius: 14px;
-        /* Vertical pad ≤7 — 10px + fixed-height hosts clipped descenders (g/y/p). */
-        padding: 7px 18px;
+        /* Tight pad — two-line labels (Texture\\nParams) need room inside FLOAT_NAV. */
+        padding: 4px 10px;
         font-weight: 600;
-        min-width: 92px;
+        min-width: 72px;
         color: {p.muted};
     }}
     QPushButton#navBtn:checked {{

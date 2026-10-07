@@ -146,13 +146,15 @@ def set_theme_toggle_icon(
 def set_home_icon(
     btn: QAbstractButton, *, back: bool = False, square: int = 36
 ) -> None:
+    # Tall two-line bars use a bigger hit target — scale the glyph with it.
+    glyph_px = 20 if square <= 36 else max(22, int(square * 0.52))
     if back:
         apply_icon(
             btn,
             "arrow_back",
             tip="Back",
             kind="nav",
-            size=20,
+            size=glyph_px,
             square=square,
         )
     else:
@@ -161,7 +163,7 @@ def set_home_icon(
             "home",
             tip="Home",
             kind="nav",
-            size=20,
+            size=glyph_px,
             square=square,
         )
 

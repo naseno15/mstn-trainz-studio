@@ -8,6 +8,8 @@ the menu — Popup was closing instantly on Windows frameless hosts.
 """
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
@@ -63,6 +65,35 @@ TITLE_RADIUS = 22.0
 MENU_BTN_H = 34
 DROP_RADIUS = 16.0
 EDGE_GRIP = 6
+
+
+def begin_frameless_move(window: QWidget | None) -> bool:
+    """Start a system move on a frameless top-level window.
+
+    Qt ``startSystemMove`` often no-ops on maximized frameless HWND on Windows.
+    Win32 ``WM_NCLBUTTONDOWN`` / ``HTCAPTION`` is the reliable path (also lets
+    the user drag a maximized window onto another monitor).
+    """
+    if window is None:
+        return False
+    host = window.window() if window is not None else None
+    if host is None:
+        host = window
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            hwnd = int(host.winId())
+            # ReleaseCapture + WM_NCLBUTTONDOWN(HTCAPTION) — blocks until drag ends.
+            ctypes.windll.user32.ReleaseCapture()
+            ctypes.windll.user32.SendMessageW(hwnd, 0x00A1, 2, 0)
+            return True
+        except Exception:
+            pass
+    wh = host.windowHandle()
+    if wh is not None:
+        return bool(wh.startSystemMove())
+    return False
 
 
 class AccentPill(QWidget):
@@ -799,11 +830,8 @@ class FloatTitleBar(QFrame):
             if b.geometry().contains(pt):
                 super().mousePressEvent(event)
                 return
-        win = self.window()
         if event.modifiers() == Qt.KeyboardModifier.NoModifier:
-            wh = win.windowHandle() if win is not None else None
-            if wh is not None:
-                wh.startSystemMove()
+            if begin_frameless_move(self.window()):
                 event.accept()
                 return
         super().mousePressEvent(event)
