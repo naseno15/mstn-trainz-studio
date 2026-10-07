@@ -10,7 +10,7 @@ from pathlib import Path
 
 _MESH_PREVIEW_EXTS = {".trainzmesh", ".fbx", ".im", ".pm"}
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QDragEnterEvent,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -45,6 +46,7 @@ from ...io.cdp import (
     asset_config_text,
     browse_cdp,
     classify_size,
+    discard_cdp_bak,
     estimate_pack_size,
     extract_cdp,
     format_bytes,
@@ -63,6 +65,7 @@ from ...io.cdp import (
 from ...io.cdp_lzss import decode_asset_text
 from ...io.chump import ChumpFile
 from ...io.tzarc import extract_tzarc, list_tzarc
+from ...lib.engine_tuner.config_io import looks_like_enginespec
 from ..code_edit import (
     CodeEdit,
     apply_code_edit_theme,
@@ -152,6 +155,9 @@ _ROLE_KUID = int(Qt.ItemDataRole.UserRole) + 2
 _ROLE_REL = int(Qt.ItemDataRole.UserRole) + 3
 _ROLE_ENTRY = int(Qt.ItemDataRole.UserRole) + 4
 
+# Natural two-line cell fits ~45px after polish; clipping was ::item pad / bad label height.
+_FINDER_ROW_H = 48
+
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tga", ".dds"}
 _AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aiff", ".aif"}
 _TEXT_EXTS = {
@@ -194,8 +200,22 @@ def _finder_badge_for(e: "FinderEntry") -> tuple[str, str]:
     return "·", "#8e8e93"
 
 
+def _finder_label(text: str, *, object_name: str, point: int, weight: QFont.Weight) -> QLabel:
+    """Single-line Finder label — height after QSS polish so g/y are not clipped."""
+    lab = QLabel(text)
+    lab.setObjectName(object_name)
+    lab.setFont(app_font(point, weight))
+    lab.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    lab.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+    lab.ensurePolished()
+    fm = lab.fontMetrics()
+    # Paint box must cover ascent+descent; QLabel default height() clips faces.
+    lab.setFixedHeight(max(fm.height(), fm.ascent() + fm.descent()) + 2)
+    return lab
+
+
 class _FinderNameCell(QWidget):
-    """Badge + title / subtitle for Finder rows."""
+    """Badge + title / subtitle for Finder rows (+ optional Edited mark)."""
 
     def __init__(
         self,
@@ -204,12 +224,21 @@ class _FinderNameCell(QWidget):
         *,
         badge: str,
         color: str,
+        edited: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        # Opaque cell widgets eat the rounded selection pill (Win Highlight slab).
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.setMinimumWidth(0)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 4, 10, 4)
+        lay.setContentsMargins(8, 2, 8, 2)
         lay.setSpacing(10)
+        lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         mark = QLabel(badge)
         mark.setObjectName("pkgFinderBadge")
         mark.setFixedSize(28, 28)
@@ -219,20 +248,43 @@ class _FinderNameCell(QWidget):
             f"background: {color}33; color: {color}; border-radius: 8px;"
             f"font-weight: 700; font-size: 12px;}}"
         )
-        lay.addWidget(mark)
+        lay.addWidget(mark, 0, Qt.AlignmentFlag.AlignVCenter)
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(1)
-        t = QLabel(title)
-        t.setObjectName("pkgFinderTitle")
-        t.setFont(app_font(12, QFont.Weight.DemiBold))
-        text.addWidget(t)
+        text.setSpacing(0)
+        text.addWidget(
+            _finder_label(
+                title, object_name="pkgFinderTitle", point=12, weight=QFont.Weight.DemiBold
+            )
+        )
         if subtitle:
-            s = QLabel(subtitle)
-            s.setObjectName("pkgFinderSub")
-            s.setFont(app_font(10, QFont.Weight.Normal))
-            text.addWidget(s)
+            text.addWidget(
+                _finder_label(
+                    subtitle,
+                    object_name="pkgFinderSub",
+                    point=10,
+                    weight=QFont.Weight.Normal,
+                )
+            )
         lay.addLayout(text, 1)
+        if edited:
+            edit = QLabel("E")
+            edit.setObjectName("pkgFinderEdited")
+            edit.setFixedSize(22, 22)
+            edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            edit.setToolTip("Edited — Save CDP… to write to disk")
+            edit.setStyleSheet(
+                "QLabel#pkgFinderEdited {"
+                "background: #ff5a1f44; color: #ff5a1f; border-radius: 7px;"
+                "font-weight: 800; font-size: 11px;}"
+            )
+            lay.addWidget(edit, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(120, _FINDER_ROW_H)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(72, _FINDER_ROW_H)
 
 
 @dataclass
@@ -413,91 +465,9 @@ def _is_audio_name(name: str) -> bool:
     return Path(name).suffix.lower() in _AUDIO_EXTS
 
 
-class _PkgDropZone(QFrame):
-    """Dashed drop rail for queue (folders + CDP)."""
-
-    paths_dropped = Signal(object)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._drag_over = False
-        self.setObjectName("homeDropZone")
-        self.setAcceptDrops(True)
-        self.setMinimumHeight(72)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(4)
-        t = QLabel("Drop asset folders or CDP")
-        t.setObjectName("homeDropTitle")
-        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        t.setFont(app_font(13, QFont.Weight.DemiBold))
-        exts = QLabel("folder · config.txt · .cdp")
-        exts.setObjectName("homeDropTypes")
-        exts.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        exts.setFont(app_font(11, QFont.Weight.Medium))
-        lay.addWidget(t)
-        lay.addWidget(exts)
-
-    def _ok(self, event: QDragEnterEvent | QDragMoveEvent) -> bool:
-        if not event.mimeData().hasUrls():
-            return False
-        return bool(_filter_queue_paths(_local_paths(event.mimeData().urls())))
-
-    def _set_drag_over(self, active: bool) -> None:
-        if self._drag_over == active:
-            return
-        self._drag_over = active
-        self.setProperty("dragOver", active)
-        sty = self.style()
-        sty.unpolish(self)
-        sty.polish(self)
-        self.update()
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if self._ok(event):
-            event.acceptProposedAction()
-            self._set_drag_over(True)
-        else:
-            event.ignore()
-
-    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if self._ok(event):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
-        self._set_drag_over(False)
-        super().dragLeaveEvent(event)
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        self._set_drag_over(False)
-        paths = _filter_queue_paths(
-            _local_paths(event.mimeData().urls() if event.mimeData().hasUrls() else [])
-        )
-        if paths:
-            self.paths_dropped.emit(paths)
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def paintEvent(self, event) -> None:  # noqa: ANN001
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = QColor("#ff5a1f") if self._drag_over else QColor("#98989d")
-        if not self._drag_over:
-            color.setAlpha(170)
-        pen = QPen(color)
-        pen.setWidthF(2.0)
-        pen.setStyle(Qt.PenStyle.CustomDashLine)
-        pen.setDashPattern([6.0, 5.0])
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(self.rect().adjusted(4, 4, -4, -4), 16, 16)
-
-
 class _DropTable(QTableWidget):
+    """Queue table — sole drop target for asset folders / CDP."""
+
     paths_dropped = Signal(object)
 
     def __init__(self, columns: list[str], parent: QWidget | None = None) -> None:
@@ -566,14 +536,6 @@ class _DropTable(QTableWidget):
         painter.drawRoundedRect(self.viewport().rect().adjusted(3, 3, -3, -3), 10, 10)
 
 
-def _looks_like_enginespec(text: str) -> bool:
-    """Cheap button gate; Engine Tuner does full parse on open."""
-    t = (text or "").lower()
-    if "enginespec" in t and "kind" in t:
-        return True
-    return "throttle-power" in t
-
-
 class PackagesPage(QWidget):
     """Finder · preview/editor; queue_rail mounts into Assets left sidebar."""
 
@@ -590,6 +552,9 @@ class PackagesPage(QWidget):
         self._active_cdp: Path | None = None
         self._chump: ChumpFile | None = None
         self._chump_dirty = False
+        # per-path edits in open CDP (Finder "E" mark) — cleared on Save CDP / Clear / open
+        self._dirty_paths: set[str] = set()
+        self._dirty_assets: set[str] = set()
         self._nested_stack: list[tuple[str, ChumpFile, Path | None]] = []
         self._tzarc_path: Path | None = None
         self._pkg_kuids: list[str] = []
@@ -670,9 +635,6 @@ class PackagesPage(QWidget):
         left_lab = QLabel("Folders & CDP")
         left_lab.setObjectName("mutedTip")
         ll.addWidget(left_lab)
-        self.queue_drop = _PkgDropZone()
-        self.queue_drop.paths_dropped.connect(self.add_queue_paths)
-        ll.addWidget(self.queue_drop)
         self.queue_table = _DropTable(["Kind", "Name", "Size", "Info"])
         self.queue_table.setColumnWidth(0, 56)
         self.queue_table.setColumnWidth(1, 120)
@@ -760,11 +722,13 @@ class PackagesPage(QWidget):
         hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         hdr.setSectionResizeMode(0, hdr.ResizeMode.Stretch)
         hdr.setSectionResizeMode(1, hdr.ResizeMode.Fixed)
-        self.finder_table.setColumnWidth(1, 88)
-        self.finder_table.verticalHeader().setVisible(False)
+        self.finder_table.setColumnWidth(1, 108)
+        vh = self.finder_table.verticalHeader()
+        vh.setVisible(False)
+        vh.setDefaultSectionSize(_FINDER_ROW_H)
+        vh.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.finder_table.setShowGrid(False)
         self.finder_table.setWordWrap(False)
-        self.finder_table.setAlternatingRowColors(False)
         self.finder_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.finder_table.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
@@ -775,6 +739,9 @@ class PackagesPage(QWidget):
             "ดับเบิลคลิกเข้าโฟลเดอร์ · คลิกไฟล์เพื่อดู · Shift/Ctrl เลือกหลายไฟล์แล้ว Delete"
         )
         enable_smooth_table(self.finder_table)
+        # enable_smooth_scroll forces alternating on — Finder stays flat.
+        self.finder_table.setAlternatingRowColors(False)
+        hdr.setObjectName("pkgFinderHeader")
         self.finder_table.itemDoubleClicked.connect(self._on_finder_dbl)
         self.finder_table.itemSelectionChanged.connect(self._on_finder_selected)
         rl.addWidget(self.finder_table, 1)
@@ -1210,7 +1177,17 @@ class PackagesPage(QWidget):
         self.add_queue_paths(paths)
 
     def clear_queue(self) -> None:
+        # drop temp *.cdp.bak left from an interrupted overwrite
+        if self._active_cdp is not None:
+            discard_cdp_bak(self._active_cdp)
+        for q in self._queue:
+            if q.kind == "cdp":
+                discard_cdp_bak(q.path)
         self._queue.clear()
+        self._chump = None
+        self._active_cdp = None
+        self._clear_cdp_edits()
+        self._nested_stack.clear()
         self._refresh_queue()
         self._finder_mode = "empty"
         self.btn_finder_up.setEnabled(False)
@@ -1335,7 +1312,7 @@ class PackagesPage(QWidget):
                 self._refresh_queue()
         self._active_cdp = path
         self._chump = chump
-        self._chump_dirty = False
+        self._clear_cdp_edits()
         self._pkg_kuids = [a.kuid for a in idx.assets if a.kuid]
         self._tzarc_path = None
         self.tz_lab.setVisible(False)
@@ -1359,7 +1336,7 @@ class PackagesPage(QWidget):
             self.btn_nested.setEnabled(True)
         self._active_cdp = None
         self._chump = chump
-        self._chump_dirty = False
+        self._clear_cdp_edits()
         nodes = browse_cdp(chump)
         self._pkg_kuids = [n.kuid for n in nodes if n.kuid]
         self._finder_mode = "cdp"
@@ -1374,7 +1351,7 @@ class PackagesPage(QWidget):
         label, chump, path = self._nested_stack.pop()
         self._chump = chump
         self._active_cdp = path
-        self._chump_dirty = False
+        self._clear_cdp_edits()
         self.btn_nested.setEnabled(bool(self._nested_stack))
         self._pkg_kuids = [n.kuid for n in browse_cdp(chump) if n.kuid]
         self._finder_mode = "cdp"
@@ -1395,6 +1372,36 @@ class PackagesPage(QWidget):
             if self._cdp_cwd:
                 self._cdp_cwd = self._cdp_cwd[:-1]
                 self._refresh_finder()
+
+    def _cdp_edit_key(self, kuid: str, rel: str) -> str:
+        return f"{kuid}/{(rel or '').replace(chr(92), '/')}"
+
+    def _mark_cdp_edited(self, kuid: str, rel: str = "") -> None:
+        """Flag asset / file as edited until Save CDP… (Finder shows E)."""
+        if not kuid:
+            return
+        self._chump_dirty = True
+        self._dirty_assets.add(kuid)
+        if rel:
+            self._dirty_paths.add(self._cdp_edit_key(kuid, rel))
+
+    def _clear_cdp_edits(self) -> None:
+        self._chump_dirty = False
+        self._dirty_paths.clear()
+        self._dirty_assets.clear()
+
+    def _is_finder_edited(self, e: FinderEntry) -> bool:
+        if self._finder_mode != "cdp" or not e.kuid:
+            return False
+        if e.kind == "asset":
+            return e.kuid in self._dirty_assets
+        if e.kind == "dir" and e.folder_part:
+            parts = [*self._cdp_cwd[1:], e.folder_part]
+            prefix = self._cdp_edit_key(e.kuid, "/".join(parts))
+            return any(p == prefix or p.startswith(prefix + "/") for p in self._dirty_paths)
+        if e.rel:
+            return self._cdp_edit_key(e.kuid, e.rel) in self._dirty_paths
+        return e.kuid in self._dirty_assets
 
     def _clear_finder_scan(self) -> None:
         self._finder_scan = None
@@ -1698,7 +1705,7 @@ class PackagesPage(QWidget):
         for e in shown:
             row = self.finder_table.rowCount()
             self.finder_table.insertRow(row)
-            self.finder_table.setRowHeight(row, 48)
+            self.finder_table.setRowHeight(row, _FINDER_ROW_H)
             title = e.name.rstrip("/")
             if e.detail:
                 sub = e.detail
@@ -1713,15 +1720,20 @@ class PackagesPage(QWidget):
             # invisible item carries entry data for selection / dbl-click
             name_item = QTableWidgetItem("")
             name_item.setData(_ROLE_ENTRY, e)
+            edited = self._is_finder_edited(e)
             tip = f"{title}\n{sub}" if sub else title
             if e.kuid and e.kuid not in tip:
                 tip = f"{tip}\n{e.kuid}"
+            if edited:
+                tip = f"{tip}\nEdited — Save CDP… to write to disk"
             if e.kind in ("dir", "asset") or e.is_nested_cdp:
                 tip = f"{tip}\nดับเบิลคลิกเพื่อเปิด"
             name_item.setToolTip(tip)
             self.finder_table.setItem(row, 0, name_item)
             letter, color = _finder_badge_for(e)
-            cell = _FinderNameCell(title, sub, badge=letter, color=color)
+            cell = _FinderNameCell(
+                title, sub, badge=letter, color=color, edited=edited
+            )
             cell.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.finder_table.setCellWidget(row, 0, cell)
             if e.kind in ("dir", "asset"):
@@ -2269,30 +2281,28 @@ class PackagesPage(QWidget):
         worker.start()
 
     def _enginespec_target(self) -> tuple[str, str] | None:
-        """(kuid, config text) when preview/cwd is an enginespec Engine Tuner accepts."""
+        """(kuid, config text) only when preview is that asset's config.txt and kind is enginespec."""
         if self._chump is None:
             return None
-        kuid: str | None = None
-        text: str | None = None
         src = self._preview_src
-        if src is not None and src[0] == "cdp":
-            key = src[1]
-            if "/__config__" in key or key.endswith("/config.txt"):
-                kuid = key.split("/", 1)[0]
-                if self.preview_stack.currentIndex() == 2:
-                    text = self.preview_edit.toPlainText()
-                else:
-                    try:
-                        text = asset_config_text(self._chump, kuid)
-                    except Exception:
-                        text = None
-        if kuid is None and self._cdp_cwd:
-            kuid = self._cdp_cwd[0]
+        if src is None or src[0] != "cdp":
+            return None
+        key = src[1]
+        # only the virtual / real config — never .gse / mesh.txt / random txt in the asset
+        if "/__config__" not in key and not key.lower().endswith("/config.txt"):
+            return None
+        kuid = key.split("/", 1)[0]
+        if not kuid:
+            return None
+        if self.preview_stack.currentIndex() == 2:
+            text = self.preview_edit.toPlainText()
+        else:
             try:
                 text = asset_config_text(self._chump, kuid)
             except Exception:
                 return None
-        if not kuid or text is None or not _looks_like_enginespec(text):
+        # parsed kind == enginespec (or real throttle-power block) — not substring "enginespec"
+        if not looks_like_enginespec(text):
             return None
         return kuid, text
 
@@ -2318,11 +2328,11 @@ class PackagesPage(QWidget):
         if self._chump is None:
             raise RuntimeError("No CDP open")
         replace_asset_config(self._chump, kuid, text)
-        self._chump_dirty = True
+        self._mark_cdp_edited(kuid, "__config__")
         out: Path | None = self._active_cdp
         if out is not None:
             save_cdp(out, self._chump)
-            self._chump_dirty = False
+            self._clear_cdp_edits()
         else:
             start = str(Path.home() / "edited.cdp")
             path, _ = QFileDialog.getSaveFileName(
@@ -2335,7 +2345,7 @@ class PackagesPage(QWidget):
                 out = out.with_suffix(".cdp")
             save_cdp(out, self._chump)
             self._active_cdp = out
-            self._chump_dirty = False
+            self._clear_cdp_edits()
             if not any(q.path == out for q in self._queue):
                 self._queue.append(QueueItem(out, "cdp"))
             self._refresh_queue()
@@ -2503,18 +2513,41 @@ class PackagesPage(QWidget):
         src, key, name = self._preview_src
         if src == "disk":
             path = Path(key)
-            path.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+            # ponytail: temp sibling .bak only for the overwrite; delete on success
+            bak_path = path.with_suffix(path.suffix + ".bak")
+            wrote_bak = False
+            if path.is_file():
+                bak_path.write_bytes(path.read_bytes())
+                wrote_bak = True
+            try:
+                path.write_text(
+                    text if text.endswith("\n") else text + "\n", encoding="utf-8"
+                )
+            except Exception:
+                raise
+            if wrote_bak and bak_path.is_file():
+                try:
+                    bak_path.unlink()
+                except OSError:
+                    pass
             self._msg(f"Saved {path.name}")
             self._refresh_finder()
             return
-        # cdp — replace file bytes (config.txt virtual: not re-injected into tags this pass)
+        # cdp — config is virtual tags; other paths are BINARY blobs
         if key.endswith("/__config__"):
-            QMessageBox.information(
-                self,
-                "Save text",
-                "config.txt ภายใน CDP แก้ผ่าน Config page / extract แล้ว pack ใหม่\n"
-                "ไฟล์อื่นใน CDP ใช้ Replace… หรือ Save หลังแก้แล้ว Replace",
-            )
+            kuid = key[: -len("/__config__")]
+            if self._chump is None or not kuid:
+                return
+            try:
+                replace_asset_config(self._chump, kuid, text)
+            except Exception as exc:
+                QMessageBox.warning(self, "Save into CDP", str(exc))
+                return
+            self._mark_cdp_edited(kuid, "__config__")
+            self._invalidate_mesh_stage()
+            self._preview_bytes = data
+            self._refresh_finder()
+            self._msg(f"Updated config.txt for {kuid} (Save CDP… to write)")
             return
         kuid, _, rel = key.partition("/")
         if self._chump is None or not rel:
@@ -2524,7 +2557,7 @@ class PackagesPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Save into CDP", str(exc))
             return
-        self._chump_dirty = True
+        self._mark_cdp_edited(kuid, rel)
         self._invalidate_mesh_stage()
         self._preview_bytes = data
         self._refresh_finder()
@@ -2555,7 +2588,7 @@ class PackagesPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Replace", str(exc))
             return
-        self._chump_dirty = True
+        self._mark_cdp_edited(e.kuid, e.rel)
         self._invalidate_mesh_stage()
         self._refresh_finder()
         self._msg(f"Replaced {e.rel} (Save CDP… to write)")
@@ -2588,7 +2621,8 @@ class PackagesPage(QWidget):
             e = assets[0]
             if not remove_asset(self._chump, e.kuid):
                 return
-            self._chump_dirty = True
+            self._mark_cdp_edited(e.kuid)
+            self._dirty_paths = {p for p in self._dirty_paths if not p.startswith(e.kuid + "/")}
             self._invalidate_mesh_stage()
             self._cdp_cwd = []
             self._refresh_finder()
@@ -2612,9 +2646,10 @@ class PackagesPage(QWidget):
         for e in files:
             if remove_file(self._chump, e.kuid, e.rel):
                 removed += 1
+                # keep path in dirty set so parent folders still show E
+                self._mark_cdp_edited(e.kuid, e.rel)
         if removed <= 0:
             return
-        self._chump_dirty = True
         self._invalidate_mesh_stage()
         self._refresh_finder()
         self._clear_preview()
@@ -2652,7 +2687,7 @@ class PackagesPage(QWidget):
         for e in hits:
             if remove_file(self._chump, e.kuid, e.rel):
                 removed += 1
-        self._chump_dirty = True
+                self._mark_cdp_edited(e.kuid, e.rel)
         self._invalidate_mesh_stage()
         self._finder_scan = "fbx"
         if hasattr(self, "btn_find_fbx"):
@@ -2679,11 +2714,14 @@ class PackagesPage(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Save CDP", str(exc))
             return
+        # save_cdp already drops temp .bak on success; sweep any leftover
+        discard_cdp_bak(out)
         self._active_cdp = out
-        self._chump_dirty = False
+        self._clear_cdp_edits()
         if not any(q.path == out for q in self._queue):
             self._queue.append(QueueItem(out, "cdp"))
         self._refresh_queue()
+        self._refresh_finder()
         self._msg(f"Saved {out.name}")
 
     # ── sidebar actions ──────────────────────────────────────
@@ -2757,6 +2795,7 @@ class PackagesPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Extract CDP", str(exc))
             return
+        discard_cdp_bak(path)
         self._msg(f"Extracted {len(written)} file(s) → {dest}")
         # open extract dest in Finder
         self.add_queue_paths([Path(dest)])

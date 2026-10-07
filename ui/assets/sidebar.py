@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..frost import FrostGlassFrame
+from ..frost import FROST_CONTENT_MARGINS, FrostGlassFrame
 from ..icons import apply_icon
 from ..motion import fade_widget
 from ..smooth_scroll import enable_smooth_scroll_area
@@ -31,6 +31,8 @@ _PAGE_TITLES = {
     "packages": "Packages",
     "config": "Config",
     "texture": "Texture",
+    "parameter": "Parameter",
+    "denoise": "Denoise",
     "meshops": "Mesh Ops",
     "kuid": "KUID",
 }
@@ -56,6 +58,19 @@ _ACTIONS: dict[str, list[tuple[str, str, bool]]] = {
         ("VE39 fix…", "tex_ve39_fix", False),
         ("Check file…", "open_texture", False),
         ("Scan folder…", "scan_folder", False),
+    ],
+    "parameter": [
+        ("Open parameter…", "param_open", True),
+        ("Save (overwrite)", "param_save", True),
+        ("Undo", "param_undo", False),
+        ("Redo", "param_redo", False),
+        ("Revert", "param_revert", False),
+    ],
+    "denoise": [
+        ("Open bake…", "denoise_open", True),
+        ("Denoise", "denoise_run", True),
+        ("Save (overwrite)", "denoise_save", True),
+        ("Revert", "denoise_revert", False),
     ],
     "meshops": [
         ("Add mesh row", "lm_add", False),
@@ -141,8 +156,8 @@ class AssetsSidebar(FrostGlassFrame):
         self._queue_rail: QWidget | None = None
 
         outer = QVBoxLayout(self)
-        # inset for shadow ring painted inside FrostGlassFrame (same as Mesh)
-        outer.setContentsMargins(18, 16, 18, 18)
+        # inset for soft shadow ring painted inside FrostGlassFrame (same as Mesh)
+        outer.setContentsMargins(*FROST_CONTENT_MARGINS)
         outer.setSpacing(10)
 
         logo_plate = QFrame()
@@ -360,6 +375,8 @@ class AssetsSidebar(FrostGlassFrame):
             "packages": "Queue — ลากโฟลเดอร์ asset หรือ .cdp · Pack ≤500 / ≤800 / max 1 GB",
             "config": "Edit config.chump · pack/export config.txt · VE rules on asset folder.",
             "texture": "Texture rules (VE37/39/65…) · .texture.txt · Resize → _prep/.",
+            "parameter": "m.pbrmetal Parameter · R/G/B/A = Emissive/Rough/AO/Metal · paint · Save overwrite.",
+            "denoise": "Bake AO/lightmap denoise · OIDN + OpenCV · preview then Save overwrite.",
             "meshops": "Mesh/LOD/material rules · .lm.txt · .m.pbrmetal / .m.onetex.",
             "kuid": "Normalize · hex · hash-XX folder (chump buckets).",
         }

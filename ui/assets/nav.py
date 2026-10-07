@@ -239,9 +239,9 @@ class AssetsPageNav(_ScrubPillNav):
             (92, 92, 92),
         ),
         "texmesh": (
-            ("texture", "meshops"),
-            ("Texture", "Mesh Ops"),
-            (108, 108),
+            ("texture", "parameter", "denoise", "meshops"),
+            ("Texture", "Parameter", "Denoise", "Mesh Ops"),
+            (88, 96, 88, 92),
         ),
     }
     # Back-compat aliases used by older checks / callers.
@@ -301,7 +301,13 @@ class AssetsPageNav(_ScrubPillNav):
         QTimer.singleShot(0, lambda: self._sync_pill(False))
 
     def _normalize_page(self, page: str) -> str:
-        if self._suite == "assets" and page in ("texture", "meshops", "texmesh"):
+        if self._suite == "assets" and page in (
+            "texture",
+            "parameter",
+            "denoise",
+            "meshops",
+            "texmesh",
+        ):
             return "packages"
         if page not in self._pages:
             return self._pages[0]
@@ -326,10 +332,11 @@ class AssetsPageNav(_ScrubPillNav):
 
 
 class AssetsSubNav(_ScrubPillNav):
-    """Top bar — Texture | Mesh Ops (bottom-bar capsule, no Home/Theme)."""
+    """Top bar — Texture | Parameter | Denoise | Mesh Ops (no Home/Theme)."""
 
-    PAGES = ("texture", "meshops")
-    LABELS = ("Texture", "Mesh Ops")
+    PAGES = ("texture", "parameter", "denoise", "meshops")
+    LABELS = ("Texture", "Parameter", "Denoise", "Mesh Ops")
+    WIDTHS = (88, 96, 88, 92)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -340,12 +347,12 @@ class AssetsSubNav(_ScrubPillNav):
         lay = QHBoxLayout(self)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
-        for i, (page, label) in enumerate(zip(self.PAGES, self.LABELS)):
+        for i, (page, label, width) in enumerate(zip(self.PAGES, self.LABELS, self.WIDTHS)):
             b = QPushButton(label)
             b.setObjectName("navBtn")
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setFixedWidth(108)
+            b.setFixedWidth(width)
             b.setAutoExclusive(True)
             self._group.addButton(b, i)
             b.installEventFilter(self)

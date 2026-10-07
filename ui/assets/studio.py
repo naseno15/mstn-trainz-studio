@@ -96,6 +96,7 @@ from ...io.ve_rules import (
 )
 from ..code_edit import CodeEdit, apply_code_edit_theme
 from ..frost import (
+    FROST_CONTENT_MARGINS,
     FrostGlassFrame,
     glass_is_dark,
     prepare_frost_scroll,
@@ -114,8 +115,11 @@ from ..motion import (
 
 # Texture / Mesh right props column — Maps viewer needs room for channels.
 _RIGHT_DOCK_MIN = 560
-_RIGHT_DOCK_MAX = 920
-_RIGHT_DOCK_DEFAULT = 700
+_RIGHT_DOCK_MAX = 920  # Mesh Ops
+_RIGHT_DOCK_DEFAULT = 700  # Mesh Ops
+# Texture Params / Maps / Resize — wider by default (user wants near-max).
+_RIGHT_DOCK_TEX_MAX = 1100
+_RIGHT_DOCK_TEX_DEFAULT = 1040
 _TEX_ROW_H = 64  # badge + title + subtitle — 52 clipped the second line
 # Longer + InOutCubic + frozen page paint = silk (setSizes every frame was janky).
 _DOCK_ANIM_MS = 560
@@ -123,10 +127,20 @@ _DOCK_TICK_MS = 24
 from ..smooth_scroll import enable_smooth_scroll_area, enable_smooth_table
 from ..theme import app_font
 from .kuid import count_kuids, describe_kuid, normalize_list
+from .denoise_page import DenoisePage
 from .nav import AccentPill, AssetsPageNav, AssetsSubNav
 from .packages import PackagesPage
+from .param_page import ParameterPage
 from .sidebar import AssetsSidebar
 from .tex_map_panel import TexMapSidePanel
+
+_TEXMESH_SUB_PAGES = ("texture", "parameter", "denoise", "meshops")
+_TEXMESH_SUB_LABELS = {
+    "texture": "Texture",
+    "parameter": "Parameter",
+    "denoise": "Denoise",
+    "meshops": "Mesh Ops",
+}
 
 
 class _PageSlideHost(QWidget):
@@ -881,12 +895,13 @@ class AssetsStudioHost(QWidget):
         # Built before pages so Texture / Mesh Ops can mount into it.
         self._right_dock_host = QWidget()
         self._right_dock_host.setMinimumWidth(0)
-        self._right_dock_host.setMaximumWidth(_RIGHT_DOCK_MAX)
+        self._right_dock_host.setMaximumWidth(_RIGHT_DOCK_TEX_MAX)
         self._right_dock_host.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
         )
         dock_lay = QVBoxLayout(self._right_dock_host)
-        dock_lay.setContentsMargins(10, 0, 0, 0)
+        # Gap from splitter only — frost plate owns content insets (FROST_CONTENT_MARGINS).
+        dock_lay.setContentsMargins(8, 0, 0, 0)
         dock_lay.setSpacing(0)
         self._right_dock = QStackedWidget()
         self._right_dock.setObjectName("assetsRightDock")
@@ -895,7 +910,7 @@ class AssetsStudioHost(QWidget):
         )
         dock_lay.addWidget(self._right_dock, 1)
         self._right_dock_host.hide()
-        self._dock_width_saved = _RIGHT_DOCK_DEFAULT
+        self._dock_width_saved = _RIGHT_DOCK_TEX_DEFAULT
         self._dock_animating = False
 
         self._stack = QStackedWidget()
@@ -1022,7 +1037,7 @@ class AssetsStudioHost(QWidget):
         return page
 
     def _build_texmesh_page(self) -> QWidget:
-        """Grouped hub — top sub-nav Texture | Mesh Ops + slide content."""
+        """Grouped hub — Texture | Parameter | Denoise | Mesh Ops + slide content."""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -1037,11 +1052,26 @@ class AssetsStudioHost(QWidget):
         nav_wrap.addStretch(1)
         lay.addLayout(nav_wrap)
 
+        self.param_page = ParameterPage()
+        self.param_page.status.connect(self._msg)
+        self.denoise_page = DenoisePage()
+        self.denoise_page.status.connect(self._msg)
         self._sub_slide = _PageSlideHost(
-            [self._build_texture_page(), self._build_meshops_page()]
+            [
+                self._build_texture_page(),
+                self.param_page,
+                self.denoise_page,
+                self._build_meshops_page(),
+            ]
         )
         lay.addWidget(self._sub_slide, 1)
         return page
+
+    def _texmesh_sub_index(self, page: str) -> int:
+        try:
+            return _TEXMESH_SUB_PAGES.index(page)
+        except ValueError:
+            return 0
 
     def _build_texture_page(self) -> QWidget:
         page = QWidget()
@@ -1168,8 +1198,9 @@ class AssetsStudioHost(QWidget):
         props.set_dark(self._theme != "light")
         self._tex_props = props
         pr = QVBoxLayout(props)
-        pr.setContentsMargins(16, 14, 16, 16)
-        pr.setSpacing(8)
+        # Same air as left Assets sidebar / Mesh Editor — shadow fade needs room.
+        pr.setContentsMargins(*FROST_CONTENT_MARGINS)
+        pr.setSpacing(10)
 
         props_title = QLabel("Texture Params")
         props_title.setObjectName("welcomeTitle")
@@ -1578,7 +1609,7 @@ class AssetsStudioHost(QWidget):
         props.set_dark(self._theme != "light")
         self._lm_props = props
         pr = QVBoxLayout(props)
-        pr.setContentsMargins(16, 16, 16, 16)
+        pr.setContentsMargins(*FROST_CONTENT_MARGINS)
         pr.setSpacing(10)
         props_title = QLabel(".lm.txt params")
         props_title.setObjectName("welcomeTitle")
@@ -1650,6 +1681,12 @@ class AssetsStudioHost(QWidget):
         if self._on_theme is not None:
             self._on_theme()
 
+    def _dock_width_budget(self) -> tuple[int, int, int]:
+        """``(min, preferred, max)`` — Texture runs near-max; Mesh Ops stays moderate."""
+        if getattr(self, "_sub_page", "texture") == "texture":
+            return _RIGHT_DOCK_MIN, _RIGHT_DOCK_TEX_DEFAULT, _RIGHT_DOCK_TEX_MAX
+        return _RIGHT_DOCK_MIN, _RIGHT_DOCK_DEFAULT, _RIGHT_DOCK_MAX
+
     def _dock_target_sizes(self, *, open_dock: bool) -> list[int]:
         split = self._main_split
         sizes = [int(x) for x in split.sizes()]
@@ -1657,13 +1694,18 @@ class AssetsStudioHost(QWidget):
             sizes.append(0)
         total = max(1, sum(sizes) or int(split.width()) or 1800)
         left = sizes[0] if sizes[0] > 80 else min(400, total // 5)
+        dmin, dpref, dmax = self._dock_width_budget()
         if open_dock:
-            right = int(self._dock_width_saved or _RIGHT_DOCK_DEFAULT)
-            right = max(_RIGHT_DOCK_MIN, min(_RIGHT_DOCK_MAX, right))
+            # Texture: prefer near-max. Mesh Ops: keep last drag if in range.
+            if getattr(self, "_sub_page", "texture") == "texture":
+                right = dpref
+            else:
+                right = int(self._dock_width_saved or dpref)
+            right = max(dmin, min(dmax, right))
             mid = max(240, total - left - right)
             # If mid got crushed, shrink right toward min.
             if mid < 240:
-                right = max(_RIGHT_DOCK_MIN, total - left - 240)
+                right = max(dmin, total - left - 240)
                 mid = max(240, total - left - right)
             return [left, mid, right]
         # Collapse dock — give its width to the mid column (bars stay centered smoothly).
@@ -1721,23 +1763,32 @@ class AssetsStudioHost(QWidget):
                 after()
             return
 
-        want_open = self._page == "texmesh"
+        # Params / Maps dock only for Texture + Mesh Ops (Parameter / Denoise are self-contained).
+        want_open = self._page == "texmesh" and self._sub_page in ("texture", "meshops")
         if want_open:
             dock.setCurrentIndex(0 if self._sub_page == "texture" else 1)
+            dmin, _dpref, dmax = self._dock_width_budget()
+            host.setMaximumWidth(dmax)
             cur = [int(x) for x in split.sizes()]
             already_open = (not host.isHidden()) and len(cur) >= 3 and cur[2] >= 80
-            if already_open and not self._dock_animating:
-                host.setMinimumWidth(_RIGHT_DOCK_MIN)
+            target = self._dock_target_sizes(open_dock=True)
+            # Texture wants near-max — resize even if the dock is already open.
+            need_resize = (
+                already_open
+                and len(cur) >= 3
+                and abs(cur[2] - target[2]) > 24
+            )
+            if already_open and not need_resize and not self._dock_animating:
+                host.setMinimumWidth(dmin)
                 QTimer.singleShot(0, self._tex_sync_side_scroll)
                 if after is not None:
                     after()
                 return
             host.setMinimumWidth(0)
             host.show()
-            target = self._dock_target_sizes(open_dock=True)
             if not animate:
                 split.setSizes(target)
-                host.setMinimumWidth(_RIGHT_DOCK_MIN)
+                host.setMinimumWidth(dmin)
                 self._relayout_nav_bars()
                 QTimer.singleShot(0, self._tex_sync_side_scroll)
                 if after is not None:
@@ -1752,7 +1803,7 @@ class AssetsStudioHost(QWidget):
                 split.setSizes([left, mid, 0])
 
             def _opened() -> None:
-                host.setMinimumWidth(_RIGHT_DOCK_MIN)
+                host.setMinimumWidth(dmin)
                 QTimer.singleShot(0, self._tex_sync_side_scroll)
                 if after is not None:
                     after()
@@ -1797,7 +1848,9 @@ class AssetsStudioHost(QWidget):
 
     def _on_page(self, page: str) -> None:
         # Bottom group + legacy aliases
-        if page in ("texture", "meshops"):
+        prev = getattr(self, "_page", None)
+        prev_sub = getattr(self, "_sub_page", "texture")
+        if page in _TEXMESH_SUB_PAGES:
             self._sub_page = page
             page = "texmesh"
         elif page == "texmesh":
@@ -1808,8 +1861,10 @@ class AssetsStudioHost(QWidget):
             "texmesh": 2,
             "kuid": 3,
         }.get(page, 0)
-        prev = getattr(self, "_page", None)
         changed = prev != page
+        sub_changed = (
+            prev == "texmesh" and page == "texmesh" and prev_sub != self._sub_page
+        )
         entering_tex = page == "texmesh" and prev != "texmesh"
         leaving_tex = prev == "texmesh" and page != "texmesh"
         self._page = page
@@ -1818,7 +1873,7 @@ class AssetsStudioHost(QWidget):
             clear_button_hover_chrome()
             self._freeze_page_paint(True)
         self._stack.setCurrentIndex(idx)
-        # Pill slide — suite nav speaks texture/meshops or packages/config/kuid
+        # Pill slide — suite nav speaks texture/…/meshops or packages/config/kuid
         if self._suite == "texmesh":
             self._nav.set_page(self._sub_page, emit=False, animate=True)
         else:
@@ -1831,10 +1886,10 @@ class AssetsStudioHost(QWidget):
                     self._sub_page, emit=False, animate=(prev == "texmesh")
                 )
             self._sub_slide.set_index(
-                0 if self._sub_page == "texture" else 1,
+                self._texmesh_sub_index(self._sub_page),
                 animate=(prev == "texmesh"),
             )
-            label = "Texture" if self._sub_page == "texture" else "Mesh Ops"
+            label = _TEXMESH_SUB_LABELS.get(self._sub_page, "Texture")
         else:
             label = {
                 "packages": "Packages",
@@ -1852,21 +1907,22 @@ class AssetsStudioHost(QWidget):
             else:
                 self.sidebar.set_page(page, animate=leaving_tex or changed)
 
-        self._sync_right_dock(animate=changed, after=_after_dock)
+        # Animate dock when entering/leaving texmesh OR switching texture↔meshops↔tools.
+        self._sync_right_dock(animate=changed or sub_changed, after=_after_dock)
         msg = f"{self._suite_label()} — {label}"
         self.path_lab.setText(msg)
         self.status.emit(msg)
 
     def _on_sub_page(self, page: str) -> None:
-        if page not in ("texture", "meshops"):
+        if page not in _TEXMESH_SUB_PAGES:
             page = "texture"
         self._sub_page = page
-        self._sub_slide.set_index(0 if page == "texture" else 1, animate=True)
+        self._sub_slide.set_index(self._texmesh_sub_index(page), animate=True)
         self.sidebar.set_page(page, animate=True)
         self._sync_right_dock()
         if self._suite == "texmesh":
             self._nav.set_page(page, emit=False, animate=True)
-        label = "Texture" if page == "texture" else "Mesh Ops"
+        label = _TEXMESH_SUB_LABELS.get(page, "Texture")
         msg = f"{self._suite_label()} — {label}"
         self.path_lab.setText(msg)
         self.status.emit(msg)
@@ -1894,6 +1950,15 @@ class AssetsStudioHost(QWidget):
             "open_texture": self._check_texture_file,
             "scan_folder": self._scan_texture_folder,
             "cfg_rules_scan": self._cfg_rules_scan,
+            "param_open": lambda: getattr(self, "param_page", None) and self.param_page.open_file(),
+            "param_save": lambda: getattr(self, "param_page", None) and self.param_page.save(),
+            "param_undo": lambda: getattr(self, "param_page", None) and self.param_page.undo(),
+            "param_redo": lambda: getattr(self, "param_page", None) and self.param_page.redo(),
+            "param_revert": lambda: getattr(self, "param_page", None) and self.param_page.revert(),
+            "denoise_open": lambda: getattr(self, "denoise_page", None) and self.denoise_page.open_file(),
+            "denoise_run": lambda: getattr(self, "denoise_page", None) and self.denoise_page.run_denoise(),
+            "denoise_save": lambda: getattr(self, "denoise_page", None) and self.denoise_page.save(),
+            "denoise_revert": lambda: getattr(self, "denoise_page", None) and self.denoise_page.revert(),
             "lm_add": lambda: self._lm_add_row(1.0, "mesh.im"),
             "lm_remove": self._lm_remove_row,
             "lm_load": self._lm_load,
