@@ -1,12 +1,66 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-07 (Asia/Bangkok) — Mesh nav flanks Home; Editor dock has no Attachments/Meshes tabs
+**Last updated:** 2026-10-08 (Asia/Bangkok) — Packages Finder edited mark + config Save
+
+### Packages Finder — Edited mark + config Save (2026-10-08)
+
+| Bug | Fix |
+|-----|-----|
+| Save on CDP `config.txt` was a stub → reopen looked “reset” | `_save_preview_text` → `replace_asset_config` |
+| Temp bak only | `save_cdp` writes `*.cdp.bak` then deletes on success; Clear / Extract discards leftovers |
+| Finder showed type badge only (T/F/I) — no edit state | orange **E** badge on edited file / parent folder / asset until **Save CDP…** |
+| Track | `_dirty_paths` + `_dirty_assets` (cleared on Save / Clear / open CDP) |
+| Engine Tuner button on every txt | was substring `"enginespec"` + cwd fallback → traincar kuid-table false positive; now only preview `config.txt` + parsed `looks_like_enginespec` |
+
+### Packages Finder — descenders + selection bubble (2026-10-07)
+
+| Bug | Fix |
+|-----|-----|
+| Flat Win `Highlight` under opaque name cell | translucent cell + AccentPill bubble in `table_chrome` |
+| `g/y/p` clipped | **not** taller rows — (1) `::item` vertical pad was stealing cell height → `padding: 0 4px` (2) global `* { font-size: 13px }` overrode label fonts → explicit 12/11px + `ensurePolished` then `setFixedHeight(ascent+descent+2)` |
+| Size `33.8…` | Size column **108** (was 88) |
+| `_FINDER_ROW_H` | **48** again (64 was a wrong guess) |
+
+### Texture right dock — padding + width (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `FROST_CONTENT_MARGINS` on Texture / Mesh Ops props | 28/24/28/30 — was 16px (content sat on glass edge) |
+| Texture dock default | **1040** (max **1100**) — Mesh Ops stays 700 / 920 |
+| `_dock_width_budget` | Texture always opens near-max; resize if already open |
+
+### Parameter + Bake Denoise (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| Bottom nav (texmesh) | **Texture · Parameter · Denoise · Mesh Ops** |
+| `io/param_map_edit.py` | m.pbrmetal RGBA ops · fill/offset/scale/B·C/mean/invert/overlay/paint |
+| `ui/assets/param_page.py` | Parameter page · paint mode · Save overwrite (+ `.bak` once) |
+| `io/bake_denoise.py` | OIDN RTLightmap → OpenCV NLM (+ guided/bilateral) · black UV lock |
+| `ui/assets/denoise_page.py` | Bake Denoise page · preview in memory · Save overwrite |
+| `vendor/oidn/bin` | Intel Open Image Denoise 2.5.1 Windows binaries (~75 MB) |
+| Dep | `opencv-contrib-python-headless` (ximgproc; bilateral fallback if missing) |
+| Right dock | Still Texture Params/Maps + Mesh Ops only — Parameter/Denoise self-contained |
+| Maps tab | Mild Pillow denoise unchanged (albedo/normal polish) |
+
+### Frost backdrop shadows — wider fade (2026-10-07)
+
+Qt clips paint outside the widget, so 3-step shadow rings + tight insets cut the halo into a hard edge (sidebar bottom, title/nav capsules looked stepped/pixel-y).
+
+| Piece | Role |
+|--------|------|
+| `ui/frost.py` `paint_soft_shadow` | ~12–14 thin rings, ease-out alpha, clamped inside widget |
+| `FROST_CONTENT_MARGINS` | `(28, 24, 28, 30)` — Mesh/Editor/Assets/Engine side panels |
+| Plate inset | Panels ~14/11/16 · chips ~8/5/12 (was ~4/3/6) |
+| `TITLE_BAR_H` / `FLOAT_NAV_HEIGHT` | 60 / 72 — room for capsule bottom fade |
 
 ### Mesh Studio nav + Editor fields (2026-10-07)
 
 Bottom capsule is symmetric: **Preview · Meshes Editor** | Home | **Attachs Editor · Settings**. The right dock no longer has an Attachments/Meshes tab strip — the nav picks the page. Legacy page id `editor` still opens whichever tab is already showing (old projects).
 
-Meshes fields share one height (36) and one value column. Texture browse is a folder icon; `$pbr-env*` is a lock; color pick is a palette glyph on the swatch.
+Meshes fields share one height (36) and one value column. Texture browse is a folder icon; `$pbr-env*` is a lock; color pick is a palette glyph on the swatch. Material / emissive / specular: R G B A are labels beside the box; the input is the 0–255 number only. Editor inputs are inset wells (dark top lip, light bottom edge) so the narrow color boxes read against the glass.
+
+Attachs Location / Rotation are one axis per row, same width as Name. A tzMF byte hit is kept only when the quaternion is near unit length and the position is inside 10 km — a finite `10000` ghost no longer fills Name when the attachment list is empty.
 
 ### Double Sided — preview until Save (2026-10-07)
 
@@ -16,7 +70,7 @@ Editor → Meshes: left Scene list rows have checkboxes. **Select all** + **Appl
 
 ### Editor dock chrome (2026-10-07)
 
-Right Editor uses the same frost inset as the left sidebar (18/16/18/18). `editorTabStack` stays transparent so it does not paint a square black plate over the rounded glass. Width **480**.
+Right Editor uses the same frost inset as the left sidebar (`FROST_CONTENT_MARGINS` 28/24/28/30). `editorTabStack` stays transparent so it does not paint a square black plate over the rounded glass. Width **480**.
 
 ### tzMF select showed the wrong piece (2026-10-07)
 
@@ -102,7 +156,7 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 |--------|------|
 | Home cards | 5 in one row — Mesh · Sounds · Engine · **Assets** · **Texture / Mesh** |
 | Assets Tools | Packages · Config · KUID only (`set_suite("assets")`) |
-| Texture / Mesh | Texture · Mesh Ops (`set_suite("texmesh")`) — same `AssetsStudioHost` |
+| Texture / Mesh | Texture · Parameter · Denoise · Mesh Ops (`set_suite("texmesh")`) — same `AssetsStudioHost` |
 | Bottom nav | Suite-specific `AssetsPageNav` (no combined Texture/Mesh tab on Assets) |
 | View menu | Assets Tools · Texture / Mesh Tools |
 
@@ -270,7 +324,7 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 | Opaque list+header fills (`#1a1f26` / `#252b33`) | `rgba` headers over Windows Base → white N0–N8 / Parameters / Queue |
 | Style all `QTableWidget` + `QTextEdit` | Packages queue + Sounds Loop QC had no sheet |
 | `_prepare_item_view` on smooth scroll | Viewport/header autofill fought QSS |
-| `ui/table_chrome.py` rounded rows | Real row radius + hover bubble + orange pill (Win QSS `::item` radii ignored) · hooked via `enable_smooth_scroll` |
+| `ui/table_chrome.py` rounded rows | AccentPill-style selection bubble + hover wash (Win QSS `::item` radii ignored) · hooked via `enable_smooth_scroll` · Highlight cleared on view |
 | Header `:first`/`:last` top radii + view mask | Table face matches glass shell corners |
 
 ### Theme — white/black slabs (2026-10-07)
@@ -289,13 +343,13 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 | `io/cdp_lzss.py` | LZSS decompress (cdptool MIT port) + level-0 store pack · `decode_asset_text` |
 | `io/cdp.py` | pack folders · extract · browse tree · delete asset/file · size bands |
 | `ui/assets/packages.py` | Finder · Viewer/Editor; `queue_rail` mounted in Assets sidebar |
-| Queue | Drop + table + Remove/Clear in **left sidebar** (wider) · CDP/TZarc icon footer |
+| Queue | Table drop only (no dashed rail) + Remove/Clear in **left sidebar** · CDP/TZarc icon footer |
 | Sidebar footer | Material icons + tooltips: Open/Pack/Extract CDP · TZarc · Copy KUIDs |
 | Finder | hierarchical folders first · drill-in · folder size · styled list |
 | Sidebar | Viewer\|Editor toggle · title = mode + file · back + expand icons (top-right) · A+/A− · Save CDP on action row |
 | Expand / Restore | Animated Finder splitter collapse (~420ms) · Editor tab disabled for view-only files |
 | Texture / Mesh dock | Right props ~600px (min 480) · silk open/shut (InOutCubic 560ms, freeze page paint, defer sidebar) |
-| CodeEdit | global font pt · `enable_code_scroll` coast **0.78** (hard brake / reverse kills coast) |
+| CodeEdit | global font pt · `enable_code_scroll` coast **0.78** · **middle-click toggle autoscroll** (move ↑↓ to scroll; middle/left/Esc/wheel stops) |
 | LZSS fix | mode-0: u32 `mask` wrap + flag bits **span** words (`_FlagBits`) — was garbling `.lm.txt` / long text |
 | Size bands | hard ≤1 GB · recommend ≤500 MB · soft warn ≤800 MB |
 | Nested CDP | double-click `.cdp` inside files → open; ← Nested CDP |
