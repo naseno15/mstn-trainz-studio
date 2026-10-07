@@ -505,6 +505,43 @@ def test_fly_approach_dist_stable() -> None:
     assert fly_approach_dist(20.0, approach=True) == 20.0
 
 
+def test_orbit_yaw_follows_drag() -> None:
+    """LMB drag-right (+yaw) must move a +X landmark right on screen — not invert."""
+    import math
+
+    from trainz_studio.render.view3d import (
+        WORLD_UP,
+        _look_at_mat,
+        _perspective_mat,
+        project_world_to_screen,
+    )
+
+    def eye_at(yaw_deg: float, pitch_deg: float, dist: float = 10.0) -> np.ndarray:
+        yaw = math.radians(yaw_deg)
+        pitch = math.radians(pitch_deg)
+        return np.array(
+            [
+                dist * math.cos(pitch) * math.sin(yaw),
+                dist * math.cos(pitch) * math.cos(yaw),
+                dist * math.sin(pitch),
+            ],
+            dtype=np.float64,
+        )
+
+    def sx_of(yaw_deg: float) -> float:
+        eye = eye_at(yaw_deg, 25.0)
+        target = np.zeros(3, dtype=np.float64)
+        mvp = _perspective_mat(45.0, 1.0, 0.05, 5000.0) @ _look_at_mat(
+            eye, target, WORLD_UP
+        )
+        hit = project_world_to_screen(mvp, (1.0, 0.0, 0.0), 400, 400)
+        assert hit is not None
+        return float(hit[0])
+
+    # Same sign as mouseMoveEvent: drag right → +yaw
+    assert sx_of(40.0) > sx_of(35.0)
+
+
 def test_screen_delta_to_world() -> None:
     from trainz_studio.render.view3d import screen_delta_to_world
 
@@ -886,19 +923,29 @@ def test_lerp_pill_rect() -> None:
 
 def test_rounded_table_rows_install() -> None:
     """Studio tables get rounded-row delegate via enable_smooth_scroll."""
-    from PySide6.QtWidgets import QApplication, QTableWidget
+    from PySide6.QtCore import QStringListModel
+    from PySide6.QtWidgets import QApplication, QListView, QTableWidget
 
     app = QApplication.instance() or QApplication([])
     del app
-    from trainz_studio.ui.smooth_scroll import enable_smooth_table
-    from trainz_studio.ui.table_chrome import RoundedRowDelegate
+    from trainz_studio.ui.smooth_scroll import enable_smooth_scroll, enable_smooth_table
+    from trainz_studio.ui.table_chrome import RoundedRowDelegate, _row_rect, _view_column_count
 
-    t = QTableWidget(2, 2)
+    t = QTableWidget(2, 3)
     enable_smooth_table(t)
     assert getattr(t, "_rounded_rows_installed", False)
     assert isinstance(t.itemDelegate(), RoundedRowDelegate)
     enable_smooth_table(t)  # idempotent
     assert isinstance(t.itemDelegate(), RoundedRowDelegate)
+    assert _view_column_count(t) == 3
+    # Must not touch model.columnCount (PySide binding traps differ by model type)
+    _row_rect(t, t.model().index(0, 0))
+
+    lv = QListView()
+    lv.setModel(QStringListModel(["a", "b"]))
+    enable_smooth_scroll(lv)
+    assert _view_column_count(lv) == 1
+    _row_rect(lv, lv.model().index(0, 0))
 
 
 def test_short_glass_tip() -> None:
@@ -943,8 +990,59 @@ def test_button_hover_chrome_install() -> None:
     chrome = install_button_hover_chrome(app)
     assert chrome is install_button_hover_chrome(app)  # idempotent
     assert "navBtn" in _SKIP_BUTTON_LIFT
+    assert "titleNavBtn" in _SKIP_BUTTON_LIFT
     assert "navIconBtn" in _SKIP_BUTTON_LIFT
     clear_button_hover_chrome()  # must not throw when nothing hovered
+
+
+def test_animate_window_quit() -> None:
+    """Quit uses compositor opacity — not QGraphicsOpacityEffect on the window."""
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    from trainz_studio.ui.motion import animate_window_quit
+
+    app = QApplication.instance() or QApplication([])
+    win = QWidget()
+    win.resize(320, 200)
+    win.show()
+    done = {"ok": False}
+
+    def _finish() -> None:
+        done["ok"] = True
+        loop.quit()
+
+    loop = QEventLoop()
+    animate_window_quit(win, _finish, ms=80)
+    QTimer.singleShot(600, loop.quit)
+    loop.exec()
+    assert done["ok"]
+    assert win.graphicsEffect() is None
+    win.close()
+    win.deleteLater()
+
+
+def test_crash_dialog_quit_flag() -> None:
+    """Live error OK quits; previous-session warning only dismisses."""
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.crash_dialog import _GlassCrashDialog
+
+    app = QApplication.instance() or QApplication([])
+    log = Path(".")
+    err = _GlassCrashDialog(
+        title="t", summary="s", detail="d", log_path=log, kind="error", quit_on_ok=True
+    )
+    warn = _GlassCrashDialog(
+        title="t", summary="s", detail="d", log_path=log, kind="warning", quit_on_ok=False
+    )
+    assert err._quit_on_ok is True
+    assert warn._quit_on_ok is False
+    err.deleteLater()
+    warn.deleteLater()
+    del app
 
 
 def test_ease_out_cubic() -> None:
@@ -1095,10 +1193,11 @@ def test_float_chrome_bookends() -> None:
 def test_float_title_bar_chrome() -> None:
     """Inset glass title bar: traffic lights + menus + drop animation hooks."""
     from PySide6.QtCore import QPoint, QSize, Qt
-    from PySide6.QtGui import QAction
+    from PySide6.QtGui import QAction, QFontMetrics
     from PySide6.QtWidgets import QApplication, QMainWindow, QMenu
 
     from trainz_studio.ui.title_chrome import (
+        MENU_BTN_H,
         TITLE_BAR_H,
         TITLE_CONTENT_INSET,
         TITLE_MARGIN,
@@ -1118,6 +1217,12 @@ def test_float_title_bar_chrome() -> None:
     assert set(bar._btns) == {"File", "Edit", "View", "Theme", "Lang"}
     assert getattr(bar, "_hover_bubble", None) is not None
     assert all(not b.isCheckable() for b in bar._btns.values())
+    assert all(b.objectName() == "titleNavBtn" for b in bar._btns.values())
+    # Descender room: fixed height must clear font height after compact pad.
+    lang = bar._btns["Lang"]
+    fm = QFontMetrics(lang.font())
+    assert MENU_BTN_H >= fm.height() + 8, (MENU_BTN_H, fm.height())
+    assert lang.height() == MENU_BTN_H
 
     file_m = QMenu("File", win)
     file_m.addAction(QAction("Open…", win))
@@ -2049,6 +2154,66 @@ def test_editor_find_config_and_workspace() -> None:
     _ = app  # keep alive for widget lifetime
 
 
+def test_mat_names() -> None:
+    """Mesh Ops material suffix check + FBX rename round-trip."""
+    import tempfile
+
+    from trainz_studio.io.mat_names import (
+        apply_renames,
+        check_mat_name,
+        list_materials,
+        scan_materials,
+        suggested_mapping,
+    )
+
+    ok = check_mat_name("body.m.pbrmetal")
+    assert ok.kind == "ok" and not ok.needs_fix
+    miss = check_mat_name("body")
+    assert miss.kind == "missing_suffix" and miss.suggested == "body.m.pbrmetal"
+    typo = check_mat_name("door.m.pbrmetl")
+    assert typo.needs_fix and typo.suggested == "door.m.pbrmetal"
+    blend = check_mat_name("lamp.m.onetex.001")
+    assert blend.kind == "blender_dup" and blend.suggested == "lamp.m.onetex"
+    alias = check_mat_name("glow.m.stdonetex")
+    assert alias.suggested == "glow.m.onetex"
+
+    sample = (
+        Path(__file__).resolve().parent.parent
+        / "backups"
+        / "26-10-03"
+        / "kuid 1125787 100059 MSTN KIHA _ ______40"
+        / "body"
+        / "body.fbx"
+    )
+    if not sample.is_file():
+        return
+    names = list_materials(sample)
+    assert "body.m.pbrmetal" in names
+    issues = scan_materials(sample)
+    assert all(i.kind == "ok" for i in issues)
+    assert suggested_mapping(issues) == {}
+
+    with tempfile.TemporaryDirectory(prefix="mat_names_") as tmp:
+        dest = Path(tmp) / "body.fbx"
+        dest.write_bytes(sample.read_bytes())
+        n = apply_renames(
+            dest,
+            {"body.m.pbrmetal": "body_renamed.m.pbrmetal"},
+            backup=True,
+        )
+        assert n == 1
+        assert "body_renamed.m.pbrmetal" in list_materials(dest)
+        assert "body.m.pbrmetal" not in list_materials(dest)
+        assert dest.with_suffix(".fbx.bak-mat").is_file()
+        n2 = apply_renames(
+            dest,
+            {"body_renamed.m.pbrmetal": "body.m.pbrmetal"},
+            backup=False,
+        )
+        assert n2 == 1
+        assert "body.m.pbrmetal" in list_materials(dest)
+
+
 def test_assets_kuid_normalize() -> None:
     from trainz_studio.io import kuid_bin
     from trainz_studio.io.lm import LmFile, LmMesh, format_lm_txt, parse_lm_txt
@@ -2078,9 +2243,30 @@ def test_assets_kuid_normalize() -> None:
     assert len(back.meshes) == 2 and back.meshes[0].name == "a.im"
 
     # Mesh Ops drop classifier (no GUI)
-    from trainz_studio.ui.assets.studio import _LM_MESH_EXTS, _lm_drop_paths
+    from trainz_studio.ui.assets.studio import (
+        _LM_MESH_EXTS,
+        _lm_drop_paths,
+        _lm_mesh_name_for_lm,
+    )
 
     assert _LM_MESH_EXTS == {".trainzmesh", ".im", ".fbx"}
+    assert _lm_mesh_name_for_lm(Path("hi.fbx")) == "hi.trainzmesh"
+    assert _lm_mesh_name_for_lm(Path("body.im")) == "body.im"
+    assert _lm_mesh_name_for_lm(Path("a.trainzmesh")) == "a.trainzmesh"
+
+    # Name cell: narrow width hint + tall enough for title+subtitle (row 64).
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.assets.studio import _ElideLabel, _TEX_ROW_H, _TexNameCell
+
+    _ = QApplication.instance() or QApplication([])
+    assert _TEX_ROW_H >= 60
+    assert _ElideLabel("main_mstn_pa_cursor_albedo.png").sizeHint().width() <= 40
+    cell = _TexNameCell(
+        "main_mstn_pa_cursor_albedo.png", "fam · PBR ✓", badge="A", color="#30d158"
+    )
+    assert cell.minimumSizeHint().width() <= 80
+    assert cell.sizeHint().height() >= _TEX_ROW_H
 
     class _Url:
         def __init__(self, path: str) -> None:
@@ -2299,6 +2485,7 @@ def main() -> int:
     test_glow_billboard_mesh()
     test_sun_dir_yup()
     test_fly_approach_dist_stable()
+    test_orbit_yaw_follows_drag()
     test_screen_delta_to_world()
     test_screen_delta_along_axis()
     test_pick_translate_handle()
@@ -2311,6 +2498,7 @@ def main() -> int:
     test_fade_stack_no_opacity()
     test_hub_reveal_overlay_plays()
     test_assets_kuid_normalize()
+    test_mat_names()
     test_frost_clears_on_set_dark()
     test_damped_scroll_passes_when_table_cant_scroll()
     test_island_light_positions()
@@ -2324,6 +2512,8 @@ def main() -> int:
     test_hover_bubble_row_slide()
     test_float_chrome_bookends()
     test_float_title_bar_chrome()
+    test_animate_window_quit()
+    test_crash_dialog_quit_flag()
     test_smooth_scroll_filter()
     test_lamp_discover_and_pack()
     test_cuda_texel_chunk_size()
