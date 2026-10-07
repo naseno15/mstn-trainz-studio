@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -96,6 +97,8 @@ class _Preview(QWidget):
 
 
 class DenoisePage(QWidget):
+    """Preview page — tools live in the host right dock (``tools_panel``)."""
+
     status = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -109,7 +112,7 @@ class DenoisePage(QWidget):
         self._build()
 
     def _build(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
         panel = QFrame()
@@ -131,17 +134,19 @@ class DenoisePage(QWidget):
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
-        body = QHBoxLayout()
-        body.setSpacing(12)
         self._preview = _Preview()
-        body.addWidget(self._preview, 1)
+        lay.addWidget(self._preview, 1)
+        root.addWidget(panel, 1)
 
-        side = QFrame()
-        side.setObjectName("mapRoleWell")
-        side.setFixedWidth(280)
-        sl = QVBoxLayout(side)
-        sl.setContentsMargins(10, 10, 10, 10)
+        self.tools_panel = self._build_tools()
+
+    def _build_tools(self) -> QWidget:
+        body = QWidget()
+        body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        sl = QVBoxLayout(body)
+        sl.setContentsMargins(0, 0, 0, 0)
         sl.setSpacing(8)
+        sl.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         open_btn = QPushButton("Open bake…")
         open_btn.setObjectName("mapToolBtn")
@@ -192,7 +197,6 @@ class DenoisePage(QWidget):
 
         run = QPushButton("Denoise")
         run.setObjectName("accentBtn")
-        run.setFixedHeight(36)
         run.clicked.connect(self.run_denoise)
         sl.addWidget(run)
 
@@ -214,14 +218,10 @@ class DenoisePage(QWidget):
 
         save = QPushButton("Save (overwrite)")
         save.setObjectName("accentBtn")
-        save.setFixedHeight(36)
         save.clicked.connect(self.save)
         sl.addWidget(save)
         sl.addStretch(1)
-
-        body.addWidget(side)
-        lay.addLayout(body, 1)
-        root.addWidget(panel, 1)
+        return body
 
     def _lab(self, text: str) -> QLabel:
         lab = QLabel(text)
@@ -251,21 +251,24 @@ class DenoisePage(QWidget):
         if path.suffix.lower() not in IMAGE_EXTS:
             self.status.emit(f"Unsupported: {path.suffix}")
             return
-        bgr, alpha = load_bake_image(path)
-        rgba = compose_with_alpha(bgr, alpha)
+        try:
+            bgr, alpha = load_bake_image(path)
+            self._orig = compose_with_alpha(bgr, alpha)
+        except Exception as e:
+            self.status.emit(f"Load failed: {e}")
+            return
         self._path = path
-        self._orig = rgba
-        self._work = rgba.copy()
+        self._work = None
         self._dirty = False
         self._path_lab.setText(path.name)
-        self._preview.set_image(_rgba_to_pixmap(rgba), path.name)
+        self._preview.set_image(_rgba_to_pixmap(self._orig), path.name)
         self._bar.setValue(0)
-        self._prog_lab.setText("Loaded")
+        self._prog_lab.setText("Idle")
         self.status.emit(f"Bake · {path.name}")
 
     def run_denoise(self) -> None:
         if self._orig is None:
-            self.status.emit("Open a bake first")
+            self.status.emit("Open a bake image first")
             return
         if self._worker is not None and self._worker.isRunning():
             self.status.emit("Denoise already running")
@@ -279,15 +282,15 @@ class DenoisePage(QWidget):
         self._worker.start()
 
     def _on_progress(self, msg: str, frac: float) -> None:
-        self._bar.setValue(int(frac * 100))
+        self._bar.setValue(int(max(0.0, min(1.0, frac)) * 100))
         self._prog_lab.setText(msg)
-        self.status.emit(msg)
 
     def _on_done(self, rgba: object, engine: str) -> None:
         self._work = np.asarray(rgba, dtype=np.uint8)
         self._dirty = True
+        self._bar.setValue(100)
+        self._prog_lab.setText(f"Done · {engine}")
         self._preview.set_image(_rgba_to_pixmap(self._work))
-        self._prog_lab.setText(f"Done · {engine} (unsaved)")
         self.status.emit(f"Denoised via {engine} — Save to overwrite")
 
     def _on_fail(self, err: str) -> None:
@@ -305,23 +308,25 @@ class DenoisePage(QWidget):
     def revert(self) -> None:
         if self._orig is None:
             return
-        self._work = self._orig.copy()
+        self._work = None
         self._dirty = False
-        self._preview.set_image(_rgba_to_pixmap(self._work))
-        self._prog_lab.setText("Reverted")
-        self.status.emit("Reverted to original")
+        self._preview.set_image(_rgba_to_pixmap(self._orig))
+        self._bar.setValue(0)
+        self._prog_lab.setText("Idle")
+        self.status.emit("Reverted")
 
     def save(self) -> None:
-        if self._path is None or self._work is None:
+        if self._path is None:
             self.status.emit("Nothing to save")
             return
-        if not self._dirty and np.array_equal(self._work, self._orig):
-            self.status.emit("No changes to save")
+        pixels = self._work if self._work is not None else self._orig
+        if pixels is None:
+            self.status.emit("Nothing to save")
             return
-        out = save_trainz_image(self._path, self._work, bak=True)
-        self._orig = self._work.copy()
+        out = save_trainz_image(self._path, pixels, bak=True)
         self._dirty = False
-        self._prog_lab.setText("Saved")
+        self._orig = np.asarray(pixels, dtype=np.uint8).copy()
+        self._work = None
         self.status.emit(f"Saved {out.name}")
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802

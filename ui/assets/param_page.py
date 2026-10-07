@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -208,7 +209,7 @@ class _PaintCanvas(QWidget):
 
 
 class ParameterPage(QWidget):
-    """Full page — edit Parameter maps; Save overwrites (+ ``.bak`` once)."""
+    """Canvas page — tools live in the host right dock (``tools_panel``)."""
 
     status = Signal(str)
 
@@ -221,7 +222,7 @@ class ParameterPage(QWidget):
         self._build()
 
     def _build(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
@@ -242,19 +243,21 @@ class ParameterPage(QWidget):
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
-        body = QHBoxLayout()
-        body.setSpacing(12)
-
         self._canvas = _PaintCanvas()
         self._canvas.painted.connect(self._refresh)
-        body.addWidget(self._canvas, 1)
+        lay.addWidget(self._canvas, 1)
+        root.addWidget(panel, 1)
 
-        side = QFrame()
-        side.setObjectName("mapRoleWell")
-        side.setFixedWidth(300)
-        sl = QVBoxLayout(side)
-        sl.setContentsMargins(10, 10, 10, 10)
+        self.tools_panel = self._build_tools()
+
+    def _build_tools(self) -> QWidget:
+        """Controls for the full-height right dock (not nested under bottom bar)."""
+        body = QWidget()
+        body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        sl = QVBoxLayout(body)
+        sl.setContentsMargins(0, 0, 0, 0)
         sl.setSpacing(8)
+        sl.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         open_row = QHBoxLayout()
         open_btn = QPushButton("Open…")
@@ -374,14 +377,10 @@ class ParameterPage(QWidget):
 
         save = QPushButton("Save (overwrite)")
         save.setObjectName("accentBtn")
-        save.setFixedHeight(36)
         save.clicked.connect(self.save)
         sl.addWidget(save)
         sl.addStretch(1)
-
-        body.addWidget(side)
-        lay.addLayout(body, 1)
-        root.addWidget(panel, 1)
+        return body
 
     def _section(self, text: str) -> QLabel:
         lab = QLabel(text)
@@ -472,7 +471,7 @@ class ParameterPage(QWidget):
             apply_retarget_mean(
                 self._session.pixels, self._selected(), int(self._mean.value())
             ),
-            f"Retarget mean → {int(self._mean.value())}",
+            f"Mean → {int(self._mean.value())}",
         )
 
     def _do_invert(self) -> None:

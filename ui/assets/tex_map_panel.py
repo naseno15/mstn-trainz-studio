@@ -481,12 +481,10 @@ class TexMapEditorCore(QWidget):
         if self._compact:
             exp = QPushButton("Expand")
             exp.setObjectName("mapGhostBtn")
-            exp.setFixedHeight(36)
             exp.clicked.connect(self.expand_requested.emit)
             foot.addWidget(exp, 1)
         self._save_btn = QPushButton("Save map")
         self._save_btn.setObjectName("accentBtn")
-        self._save_btn.setFixedHeight(36)
         self._save_btn.clicked.connect(self.save)
         foot.addWidget(self._save_btn, 2)
         lay.addLayout(foot)

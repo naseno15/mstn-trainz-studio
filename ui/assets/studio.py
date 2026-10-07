@@ -113,13 +113,17 @@ from ..motion import (
     stop_slide,
 )
 
-# Texture / Mesh right props column — Maps viewer needs room for channels.
+# Texture & Mesh Lods right props column — Maps viewer needs room for channels.
 _RIGHT_DOCK_MIN = 560
-_RIGHT_DOCK_MAX = 920  # Mesh Ops
-_RIGHT_DOCK_DEFAULT = 700  # Mesh Ops
+_RIGHT_DOCK_MAX = 920  # Mesh Lods
+_RIGHT_DOCK_DEFAULT = 700  # Mesh Lods
 # Texture Params / Maps / Resize — wider by default (user wants near-max).
 _RIGHT_DOCK_TEX_MAX = 1100
 _RIGHT_DOCK_TEX_DEFAULT = 1040
+# Texture Editor / Texture Denoiser — Mesh Editor-style width.
+_RIGHT_DOCK_EDIT_MIN = 320
+_RIGHT_DOCK_EDIT_DEFAULT = 400
+_RIGHT_DOCK_EDIT_MAX = 520
 _TEX_ROW_H = 64  # badge + title + subtitle — 52 clipped the second line
 # Longer + InOutCubic + frozen page paint = silk (setSizes every frame was janky).
 _DOCK_ANIM_MS = 560
@@ -134,17 +138,25 @@ from .param_page import ParameterPage
 from .sidebar import AssetsSidebar
 from .tex_map_panel import TexMapSidePanel
 
-_TEXMESH_SUB_PAGES = ("texture", "parameter", "denoise", "meshops")
+# Nav / slide order: Mesh Lods · Texture Params · Texture Editor · Texture Denoiser
+_TEXMESH_SUB_PAGES = ("meshops", "texture", "parameter", "denoise")
 _TEXMESH_SUB_LABELS = {
-    "texture": "Texture",
-    "parameter": "Parameter",
-    "denoise": "Denoise",
-    "meshops": "Mesh Ops",
+    "meshops": "Mesh Lods",
+    "texture": "Texture Params",
+    "parameter": "Texture Editor",
+    "denoise": "Texture Denoiser",
+}
+# Right dock stack index per sub-page (full-height sibling of left sidebar).
+_TEXMESH_DOCK_INDEX = {
+    "texture": 0,
+    "meshops": 1,
+    "parameter": 2,
+    "denoise": 3,
 }
 
 
 class _PageSlideHost(QWidget):
-    """Horizontal page strip — Texture ↔ Mesh Ops (clipped scroll, animated)."""
+    """Horizontal page strip — Mesh Lods ↔ Texture Denoiser (clipped scroll, animated)."""
 
     def __init__(self, pages: list[QWidget], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -892,7 +904,7 @@ class AssetsStudioHost(QWidget):
         mid.addWidget(self.path_lab)
 
         # Right props dock — sibling of left sidebar (Mesh Studio editor dock).
-        # Built before pages so Texture / Mesh Ops can mount into it.
+        # Built before pages so texmesh tools can mount into it.
         self._right_dock_host = QWidget()
         self._right_dock_host.setMinimumWidth(0)
         self._right_dock_host.setMaximumWidth(_RIGHT_DOCK_TEX_MAX)
@@ -916,14 +928,14 @@ class AssetsStudioHost(QWidget):
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_packages_page())  # 0
         self._stack.addWidget(self._build_config_page())  # 1
-        self._stack.addWidget(self._build_texmesh_page())  # 2 Texture / Mesh
+        self._stack.addWidget(self._build_texmesh_page())  # 2 Texture & Mesh Lods
         self._stack.addWidget(self._build_kuid_page())  # 3
         mid.addWidget(self._stack, 1)
         apply_code_edit_theme(self, self._theme)
 
         nav_wrap = QHBoxLayout()
         nav_wrap.addStretch(1)
-        # Two suite navs — Assets (Packages·Config·KUID) vs Texture / Mesh Tools.
+        # Two suite navs — Assets (Packages·Config·KUID) vs Texture & Mesh Lods.
         self._nav_stack = QStackedWidget()
         self._nav_stack.setSizePolicy(
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
@@ -947,7 +959,7 @@ class AssetsStudioHost(QWidget):
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         split.setStretchFactor(2, 0)
-        # Start with dock collapsed — Texture / Mesh opens it with a slide.
+        # Start with dock collapsed — texmesh opens it with a slide.
         split.setSizes([400, 1420, 0])
         root.addWidget(split, 1)
 
@@ -978,7 +990,7 @@ class AssetsStudioHost(QWidget):
         self._on_page("packages")
 
     def set_suite(self, suite: str) -> None:
-        """Home entry: ``assets`` (pack/config/KUID) or ``texmesh`` (Texture·Mesh Ops)."""
+        """Home entry: ``assets`` (pack/config/KUID) or ``texmesh`` (LODs·maps·bake)."""
         suite = "texmesh" if suite == "texmesh" else "assets"
         same = suite == getattr(self, "_suite", "assets")
         self._suite = suite
@@ -989,8 +1001,8 @@ class AssetsStudioHost(QWidget):
                 stack.setCurrentIndex(1)
             sub = getattr(self, "_sub_nav", None)
             if sub is not None:
-                sub.hide()  # bottom nav is Texture | Mesh Ops
-            self.sidebar.set_brand("Texture / Mesh Tools")
+                sub.hide()  # bottom nav is enough
+            self.sidebar.set_brand("Texture & Mesh Lods tools")
             if not same or self._page != "texmesh":
                 self._on_page("texture")
             else:
@@ -1009,7 +1021,11 @@ class AssetsStudioHost(QWidget):
                 self._nav.set_page(self._page, emit=False, animate=False)
 
     def _suite_label(self) -> str:
-        return "Texture / Mesh Tools" if self._suite == "texmesh" else "Assets Tools"
+        return (
+            "Texture & Mesh Lods tools"
+            if self._suite == "texmesh"
+            else "Assets Tools"
+        )
 
     def _build_config_page(self) -> QWidget:
         page = QWidget()
@@ -1037,7 +1053,7 @@ class AssetsStudioHost(QWidget):
         return page
 
     def _build_texmesh_page(self) -> QWidget:
-        """Grouped hub — Texture | Parameter | Denoise | Mesh Ops + slide content."""
+        """Grouped hub — Mesh Lods · Texture Params · Texture Editor · Texture Denoiser."""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -1056,16 +1072,75 @@ class AssetsStudioHost(QWidget):
         self.param_page.status.connect(self._msg)
         self.denoise_page = DenoisePage()
         self.denoise_page.status.connect(self._msg)
+        # Order must match _TEXMESH_SUB_PAGES (meshops, texture, parameter, denoise).
+        # Texture / Mesh Ops build also mount their own right-dock props (idx 0-1).
+        tex_page = self._build_texture_page()
+        mesh_page = self._build_meshops_page()
+        self._mount_edit_dock(
+            self.param_page.tools_panel,
+            title="Texture Editor",
+            subtitle="Channels · adjust · paint · Save overwrite",
+        )
+        self._mount_edit_dock(
+            self.denoise_page.tools_panel,
+            title="Texture Denoiser",
+            subtitle="OIDN / OpenCV · preview then Save overwrite",
+        )
         self._sub_slide = _PageSlideHost(
             [
-                self._build_texture_page(),
+                mesh_page,
+                tex_page,
                 self.param_page,
                 self.denoise_page,
-                self._build_meshops_page(),
             ]
         )
         lay.addWidget(self._sub_slide, 1)
         return page
+
+    def _mount_edit_dock(
+        self,
+        tools: QWidget,
+        *,
+        title: str,
+        subtitle: str,
+    ) -> FrostGlassFrame:
+        """Full-height right dock chrome — same frost inset as Mesh Editor."""
+        props = FrostGlassFrame(radius=14.0)
+        props.setObjectName("editorDock")
+        props.setMinimumWidth(0)
+        props.setMaximumWidth(16777215)
+        props.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        props.set_dark(self._theme != "light")
+        pr = QVBoxLayout(props)
+        pr.setContentsMargins(*FROST_CONTENT_MARGINS)
+        pr.setSpacing(10)
+
+        head = QLabel(title)
+        head.setObjectName("welcomeTitle")
+        head.setFont(app_font(14, QFont.Weight.DemiBold))
+        pr.addWidget(head)
+        tip = QLabel(subtitle)
+        tip.setObjectName("mutedTip")
+        tip.setWordWrap(True)
+        pr.addWidget(tip)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("editorScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        tools.setParent(None)
+        scroll.setWidget(tools)
+        enable_smooth_scroll_area(scroll)
+        pr.addWidget(scroll, 1)
+        self._right_dock.addWidget(props)
+        return props
 
     def _texmesh_sub_index(self, page: str) -> int:
         try:
@@ -1682,9 +1757,12 @@ class AssetsStudioHost(QWidget):
             self._on_theme()
 
     def _dock_width_budget(self) -> tuple[int, int, int]:
-        """``(min, preferred, max)`` — Texture runs near-max; Mesh Ops stays moderate."""
-        if getattr(self, "_sub_page", "texture") == "texture":
+        """``(min, preferred, max)`` — tex params near-max; editor docks Mesh-sized."""
+        sub = getattr(self, "_sub_page", "texture")
+        if sub == "texture":
             return _RIGHT_DOCK_MIN, _RIGHT_DOCK_TEX_DEFAULT, _RIGHT_DOCK_TEX_MAX
+        if sub in ("parameter", "denoise"):
+            return _RIGHT_DOCK_EDIT_MIN, _RIGHT_DOCK_EDIT_DEFAULT, _RIGHT_DOCK_EDIT_MAX
         return _RIGHT_DOCK_MIN, _RIGHT_DOCK_DEFAULT, _RIGHT_DOCK_MAX
 
     def _dock_target_sizes(self, *, open_dock: bool) -> list[int]:
@@ -1696,8 +1774,9 @@ class AssetsStudioHost(QWidget):
         left = sizes[0] if sizes[0] > 80 else min(400, total // 5)
         dmin, dpref, dmax = self._dock_width_budget()
         if open_dock:
-            # Texture: prefer near-max. Mesh Ops: keep last drag if in range.
-            if getattr(self, "_sub_page", "texture") == "texture":
+            sub = getattr(self, "_sub_page", "texture")
+            # tex params: prefer near-max. Editor docks: fixed preferred. Mesh lods: last drag.
+            if sub in ("texture", "parameter", "denoise"):
                 right = dpref
             else:
                 right = int(self._dock_width_saved or dpref)
@@ -1754,7 +1833,7 @@ class AssetsStudioHost(QWidget):
         )
 
     def _sync_right_dock(self, *, animate: bool = True, after=None) -> None:
-        """Show/hide Texture · Mesh Ops props — silk slide; ``after`` runs when settled."""
+        """Show/hide texmesh right props — silk slide; ``after`` runs when settled."""
         host = getattr(self, "_right_dock_host", None)
         dock = getattr(self, "_right_dock", None)
         split = getattr(self, "_main_split", None)
@@ -1763,10 +1842,10 @@ class AssetsStudioHost(QWidget):
                 after()
             return
 
-        # Params / Maps dock only for Texture + Mesh Ops (Parameter / Denoise are self-contained).
-        want_open = self._page == "texmesh" and self._sub_page in ("texture", "meshops")
+        # All texmesh pages own a full-height right dock (sibling of left sidebar).
+        want_open = self._page == "texmesh" and self._sub_page in _TEXMESH_DOCK_INDEX
         if want_open:
-            dock.setCurrentIndex(0 if self._sub_page == "texture" else 1)
+            dock.setCurrentIndex(_TEXMESH_DOCK_INDEX[self._sub_page])
             dmin, _dpref, dmax = self._dock_width_budget()
             host.setMaximumWidth(dmax)
             cur = [int(x) for x in split.sizes()]
