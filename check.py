@@ -981,6 +981,26 @@ def test_fade_stack_no_opacity() -> None:
     del app
 
 
+def test_boot_prewarms_gl_before_show() -> None:
+    """First MeshView must be built before showMaximized (Win32 HWND flash)."""
+    import inspect
+
+    from trainz_studio.ui import boot
+    from trainz_studio.ui.app import LoadingOverlay, MainWindow
+    from trainz_studio.ui.title_chrome import begin_frameless_move
+
+    src = inspect.getsource(boot.main)
+    assert "prewarm_mesh_gl" in src
+    assert src.index("prewarm_mesh_gl") < src.index("showMaximized")
+    # Remaximize after frost hide — early HWND / drag must not leave restored.
+    assert src.rindex("showMaximized") > src.index("_hide_overlay")
+    assert hasattr(MainWindow, "prewarm_mesh_gl")
+    assert hasattr(MainWindow, "_raise_overlay_chrome")
+    assert callable(getattr(LoadingOverlay, "mousePressEvent", None))
+    assert callable(begin_frameless_move)
+    assert begin_frameless_move(None) is False
+
+
 def test_hub_reveal_overlay_plays() -> None:
     """Hub reveal covers with a pixmap and finishes without stacking opacity on parent."""
     from PySide6.QtCore import QEventLoop, QTimer
@@ -1487,6 +1507,11 @@ def test_float_chrome_bookends() -> None:
 
     from trainz_studio.ui.float_chrome import (
         FLOAT_NAV_HEIGHT,
+        FLOAT_NAV_HEIGHT_TALL,
+        HOME_GAP,
+        HOME_GAP_TALL,
+        NAV_ICON_SIDE,
+        NAV_ICON_SIDE_TALL,
         make_home_button,
         mount_center_icon_nav,
         mount_page_only_nav,
@@ -1501,12 +1526,20 @@ def test_float_chrome_bookends() -> None:
     for b in pages:
         b.setObjectName("navBtn")
     left, right = mount_center_icon_nav(lay, home_btn=home, page_btns=pages)
-    assert FLOAT_NAV_HEIGHT >= 56
+
+    assert FLOAT_NAV_HEIGHT == 72
+    assert FLOAT_NAV_HEIGHT_TALL >= 84
+    assert HOME_GAP >= 14
+    assert HOME_GAP_TALL >= HOME_GAP
+    assert NAV_ICON_SIDE_TALL > NAV_ICON_SIDE
+    assert home.width() == NAV_ICON_SIDE
     assert left == pages[:2] and right == pages[2:]
     assert split_page_btns(pages) == (pages[:2], pages[2:])
-    # Order: A, B, Home, C
+    # Order: A, B, gap, Home, gap, C
     assert lay.itemAt(0).widget() is pages[0]
     assert lay.itemAt(lay.count() - 1).widget() is pages[2]
+    tall_home = make_home_button(host, side=NAV_ICON_SIDE_TALL)
+    assert tall_home.width() == NAV_ICON_SIDE_TALL
 
     # Top sub-nav: page labels only (no Home/Theme)
     top = QWidget()
@@ -1522,18 +1555,24 @@ def test_float_chrome_bookends() -> None:
 
     assert AssetsPageNav.SUITE_PAGES["assets"][0] == ("packages", "config", "kuid")
     assert AssetsPageNav.SUITE_PAGES["texmesh"][0] == (
+        "meshops",
         "texture",
         "parameter",
         "denoise",
-        "meshops",
     )
-    assert AssetsSubNav.PAGES == ("texture", "parameter", "denoise", "meshops")
+    assert AssetsPageNav.SUITE_PAGES["texmesh"][1] == (
+        "Mesh\nLods",
+        "Texture\nParams",
+        "Texture\nEditor",
+        "Texture\nDenoiser",
+    )
+    assert AssetsSubNav.PAGES == ("meshops", "texture", "parameter", "denoise")
 
     # Right props dock is a main-split sibling of left sidebar (not under path/nav).
     assets = AssetsStudioHost(on_home=lambda: None, on_theme=lambda: None)
     assert assets._main_split.indexOf(assets.sidebar) == 0
     assert assets._main_split.indexOf(assets._right_dock_host) == 2
-    assert assets._right_dock.count() == 2
+    assert assets._right_dock.count() == 4  # Texture Params · Mesh Lods · Editor · Denoiser
     assert assets._right_dock_host.isHidden()
     assets.set_suite("texmesh")
     assert assets._suite == "texmesh"
@@ -1544,9 +1583,13 @@ def test_float_chrome_bookends() -> None:
     assets._on_page("parameter")
     assert assets._sub_page == "parameter"
     assert hasattr(assets, "param_page")
+    assert assets._right_dock.currentIndex() == 2
+    assert not assets._right_dock_host.isHidden()
     assets._on_page("denoise")
     assert assets._sub_page == "denoise"
     assert hasattr(assets, "denoise_page")
+    assert assets._right_dock.currentIndex() == 3
+    assert not assets._right_dock_host.isHidden()
     assets.set_suite("assets")
     assert assets._page == "packages"
     assets.deleteLater()
@@ -1682,7 +1725,7 @@ def test_home_glass_hub() -> None:
     assert page.findChildren(QPushButton) == []
     assert cards[0]._icon_lab.width() >= 64
     titles = [c._title_src for c in cards]
-    assert "Assets Tools" in titles and "Texture / Mesh" in titles
+    assert "Assets Tools" in titles and "Texture & Mesh Lods" in titles
     host = page._card_host
     bubble = getattr(host, "_hover_bubble", None)
     assert isinstance(bubble, HoverBubble)
@@ -3156,6 +3199,7 @@ def main() -> int:
     test_auto_exposure()
     test_celestial_sphere_mesh()
     test_fade_stack_no_opacity()
+    test_boot_prewarms_gl_before_show()
     test_hub_reveal_overlay_plays()
     test_assets_kuid_normalize()
     test_mat_names()
