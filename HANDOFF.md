@@ -1,6 +1,6 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-07 (Asia/Bangkok) — Mesh Studio clear + Show table  
+**Last updated:** 2026-10-07 (Asia/Bangkok) — orbit yaw un-invert  
 **Owner chat:** continue from this handoff  
 **Root:** `c:\trs22\trainz_studio\`  
 **Backup (pre-rename):** `c:\trs22\backups\26-10-05\mesh_studio-pre-trainz-studio\`  
@@ -8,6 +8,37 @@
 **EXE:** `trainz_studio\dist\MSTN_TrainzStudio\MSTN_TrainzStudio.exe` — rebuild: `pack\build.bat`  
 **Shell:** `pack\shell\register.ps1` (Open + Quick Preview + Explorer pane) · `unregister.ps1`  
 **Smoke:** `python -m trainz_studio.check` from `c:\trs22` → expect `trainz_studio check: OK`
+
+### Orbit yaw — un-invert (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `view3d.mouseMoveEvent` | LMB: `yaw_vel += +dx` (was `−dx` — content moved opposite drag) |
+| `check.test_orbit_yaw_follows_drag` | +yaw moves +X landmark right on screen |
+
+### PBR HUD (Lit…AO) — top gap (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `_reposition_pbr_hud` | `y=4` inside chrome layer — was double-counting `TITLE_BAR_H` (layer already below `TITLE_CONTENT_INSET`) |
+
+### Mesh Ops — material names + bottom log (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `io/mat_names.py` | Check ``*.m.pbrmetal`` / ``*.m.onetex`` (+ glass/clutter…) · typo / missing / Blender ``.001`` |
+| Drop FBX / trainzmesh | Auto-scan → **lm.txt preview \| material log** twin (Texture layout) |
+| Prompt | Bad names → Yes/No rename in file (``.fbx.bak-mat`` / trainzmesh ``.bak``) |
+| Sidebar | **Scan materials** · **Fix material names…** |
+
+### Quit animation + text descenders (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `animate_window_quit` | Compositor `windowOpacity` + slight shrink — **not** `QGraphicsOpacityEffect` on MainWindow/GL |
+| `closeEvent` | Ignores first close → runs quit anim → `_quit_ready` then real close |
+| `#titleNavBtn` | FloatTitleBar File/Edit/View/Theme/Lang — compact pad (was `#navBtn` 10px + h=32 → clipped **g**) |
+| `#navBtn` / `#segBtn` / `#sideTab` | Lower vertical pad; compact seg 30px; shortcut/status bars 26px |
 
 ### Mesh Studio — clear + Show table (2026-10-07)
 
@@ -195,8 +226,9 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 | Images list → table | Name (A/N/P badge + set subtitle) · Dims · Ch · Size · Status |
 | Role tint | albedo green · normal cyan · parameter orange row wash |
 | PBR grouping | `sort_texture_paths` / `material_family` — family then albedo→normal→parameter |
-| Drop onto table | Dashed rail removed — empty/drag paint on table; more row height |
-| Name overlap fix | Cell widget only (no duplicate `setItem` text under badge title) |
+| Drop onto table | Texture + Mesh Ops — empty/drag hint on table (small ext type) |
+| Name elide | Middle-elide + tiny width hint; row height 64 so title+subtitle are not clipped vertically |
+| Selection pill | Stronger orange wash + soft rim (was rim-only / black center) |
 | Double-click row | Select whole PBR family (ExtendedSelection) |
 | Auto catalog | On drop: `probe_image` + `scan_ve39` → Dims/Ch/Size/Status (OK / VE39 #hex) |
 | `io/texture.py` | `ImageProbe` · `probe_image` · `pbr_set_label` · `sort_texture_paths` |
