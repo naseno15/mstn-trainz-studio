@@ -35,6 +35,23 @@ def test_fps_hud_text() -> None:
     text = format_fps_hud_text([16.7], [16.7], 42)
     assert "fps" in text and "ms" in text and "#42" in text
     assert "\n" in text
+    assert "idle" not in text
+    idle = format_fps_hud_text([16.7], [16.7], 42, idle=True)
+    assert "#42  idle" in idle
+
+
+def test_fps_hud_top_right() -> None:
+    """F3 chip sits on the clear viewport's top-right and dodges the Editor dock."""
+    from trainz_studio.render.view3d import fps_hud_top_right
+
+    x, y = fps_hud_top_right(1000, 200, margin=12, top=10)
+    assert (x, y) == (788, 10)
+    x2, y2 = fps_hud_top_right(1000, 200, margin=12, dock_left=700, top=10)
+    assert (x2, y2) == (488, 10)
+    x3, _y3 = fps_hud_top_right(
+        1000, 200, margin=12, dock_left=180, left_min=160, top=10
+    )
+    assert x3 == 160
 
 
 def test_mesh_key_hidden() -> None:
@@ -46,6 +63,26 @@ def test_mesh_key_hidden() -> None:
     assert not is_mesh_key_hidden("body.fbx", hidden)
     assert not is_mesh_key_hidden("", hidden)
     assert not is_mesh_key_hidden("cab.fbx", set())
+
+
+def test_highlight_pick() -> None:
+    """Mesh row, mesh file, and Mat stem share one outline match."""
+    from trainz_studio.render.view3d import highlight_pick
+
+    door = dict(
+        name="door.m.pbrmetal",
+        mesh_key="body.trainzmesh",
+        ref_stems={"door", "door_albedo"},
+    )
+    cab = dict(name="cab.m.onetex", mesh_key="cab.fbx", ref_stems={"cab"})
+    assert highlight_pick(**door, names={"door.m.pbrmetal"}, stems=set(), mesh_keys=set())
+    assert not highlight_pick(**cab, names={"door.m.pbrmetal"}, stems=set(), mesh_keys=set())
+    assert highlight_pick(**cab, names=set(), stems=set(), mesh_keys={"cab.fbx"})
+    assert not highlight_pick(**door, names=set(), stems=set(), mesh_keys={"cab.fbx"})
+    assert highlight_pick(**door, names=set(), stems={"door_albedo"}, mesh_keys=set())
+    assert not highlight_pick(
+        name="", mesh_key="", ref_stems=set(), names=set(), stems=set(), mesh_keys=set()
+    )
 
 
 def test_face_orient_rgb() -> None:
@@ -142,6 +179,29 @@ def test_flatten_part_indexed() -> None:
     assert int(batch.indices[5]) == 3
 
 
+def test_tiled_uv_chunk_is_kept() -> None:
+    """UV repeat past ±32 must not drop the submesh (that shifted every later part)."""
+    import struct
+
+    from trainz_studio.lib.trainzmesh_viewer.parser import VertexFormat, _sample_ok
+
+    stride = 32
+    count = 4
+    buf = bytearray(count * stride)
+    for i in range(count):
+        struct.pack_into("<3f", buf, i * stride, float(i), 0.0, 1.0)
+        struct.pack_into("<3f", buf, i * stride + 12, 0.0, 0.0, 1.0)
+        struct.pack_into("<2f", buf, i * stride + 24, 0.0, 48.0)
+    fmt = VertexFormat(
+        raw="S0_P3fN3fT02f",
+        stride=stride,
+        position_offset=0,
+        normal_offset=12,
+        uv_offset=24,
+    )
+    assert _sample_ok(bytes(buf), 0, count, stride, fmt)
+
+
 def test_trainzmesh_decode() -> None:
     p = FIXTURES / "body.trainzmesh"
     assert p.is_file(), p
@@ -157,6 +217,14 @@ def test_trainzmesh_decode() -> None:
         "body.trainzmesh should expose normal_ref and/or parameter_ref"
     )
     assert len(sc.attachments) > 0, "fixture should expose a.* from tzMF table"
+    # Material block follows its chunk (gap 0). Index pairing put body_front
+    # on the unnamed 848-vert piece and shifted every later part.
+    counts = {part.name: int(part.vertices.shape[0]) for part in sc.parts}
+    assert counts["rubber.m.pbrmetal"] == 4631
+    assert counts["body_front.m.pbrmetal"] == 14760
+    assert counts["body.m.pbrmetal"] == 7150
+    unnamed = [part for part in sc.parts if str(part.name).startswith("mesh_")]
+    assert len(unnamed) == 1 and int(unnamed[0].vertices.shape[0]) == 848
 
 
 def test_obj_parse_with_uv() -> None:
@@ -304,6 +372,7 @@ def test_i18n_catalogs_and_fonts() -> None:
     assert "VE39" in g("ve39.name") or "ve39" in g("ve39.name").lower()
     tip = g("ve39.tip")
     assert len(tip) > 20
+    assert "VE37" in g("rules.tip") or "power" in g("rules.tip").lower()
     set_language("ja", persist=False)
     assert t("File") != "File"
     set_language("id", persist=False)
@@ -316,6 +385,130 @@ def test_i18n_catalogs_and_fonts() -> None:
     sheet = stylesheet(theme_palette("dark"))
     assert "font-family:" in sheet and "Noto" in sheet
     set_language("en", persist=False)
+
+
+def test_ve_rules_pack() -> None:
+    """Multi-VE texture/config rules scan + safe fixes (no GUI)."""
+    from PIL import Image
+
+    from trainz_studio.io.ve_rules import (
+        catalog_image,
+        fix_finding,
+        scan_asset_folder,
+        scan_config,
+        scan_image,
+        scan_lm_txt,
+        scan_sound,
+        scan_texture_folder,
+        summarize_reports,
+    )
+    from trainz_studio.io.lm import write_lm_txt, LmFile, LmMesh
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        # VE37 + VE39
+        solid = root / "body_albedo.png"
+        Image.new("RGB", (100, 50), (10, 20, 30)).save(solid)
+        r = scan_image(solid)
+        codes = set(r.codes)
+        assert 37 in codes and 39 in codes, codes
+        assert r.status.startswith("VE")
+        # VE65 orphan
+        folder_reports = scan_texture_folder(root)
+        assert any(65 in fr.codes for fr in folder_reports), folder_reports
+        # fix PoT + VE39 + texture.txt
+        for f in r.findings:
+            if f.fixable:
+                ok, msg = fix_finding(f, bak=True)
+                assert ok, (f, msg)
+        # after pot+ve39, re-scan — 65 still until texture_txt fix
+        cat = catalog_image(solid)
+        assert "path" in cat and cat["dims"]
+        # config rules
+        cfg = root / "config.txt"
+        cfg.write_text(
+            'kind "traincar"\n'
+            "trainz-build 2.4\n"
+            'light 1\n'
+            'mesh-table\n{\n  default\n  {\n    mesh "missing.im"\n  }\n}\n',
+            encoding="utf-8",
+        )
+        cr = scan_config(cfg)
+        assert 48 in cr.codes and 44 in cr.codes and 30 in cr.codes, cr.codes
+        # lm.txt
+        lm_path = root / "body.lm.txt"
+        write_lm_txt(
+            lm_path,
+            LmFile(meshes=[LmMesh(width=1.0, name="ghost.im")]),
+        )
+        lr = scan_lm_txt(lm_path)
+        assert 30 in lr.codes or 84 in lr.codes or 161 in lr.codes, lr.codes
+        folder_all = scan_asset_folder(root)
+        assert folder_all
+        summ = summarize_reports(folder_all)
+        assert "line" in summ and summ["hits"] >= 1
+        # VE102 wav
+        wav = root / "beep.wav"
+        wav.write_bytes(b"not-a-wav")
+        assert 102 in scan_sound(wav).codes
+
+
+def test_tex_map_edit_channels_and_bak() -> None:
+    """Maps viewer: channel mute + Trainz sibling .bak on first save."""
+    from PIL import Image
+
+    from trainz_studio.io.tex_map_edit import (
+        TexMapSession,
+        denoise_rgba,
+        invert_channels,
+        view_channels,
+    )
+    from trainz_studio.ui.assets.tex_map_panel import family_role_paths
+
+    rgba = np.zeros((4, 4, 4), dtype=np.uint8)
+    rgba[..., 0] = 200
+    rgba[..., 1] = 100
+    rgba[..., 2] = 50
+    rgba[..., 3] = 255
+    solo_r = view_channels(rgba, r=True, g=False, b=False, a=True)
+    assert int(solo_r[0, 0, 0]) == 200 and int(solo_r[0, 0, 1]) == 200
+    muted = view_channels(rgba, r=True, g=False, b=True, a=False)
+    assert int(muted[0, 0, 1]) == 0 and int(muted[0, 0, 3]) == 255
+    inv = invert_channels(rgba, (True, False, False, False))
+    assert int(inv[0, 0, 0]) == 55 and int(inv[0, 0, 1]) == 100
+    # speckled → denoise must run and keep alpha
+    speck = rgba.copy()
+    speck[0, 0, 0] = 0
+    dn = denoise_rgba(speck, strength=50, role="albedo")
+    assert dn.shape == speck.shape and int(dn[1, 1, 3]) == 255
+    flat_n = np.full((8, 8, 4), (128, 128, 255, 255), dtype=np.uint8)
+    dn_n = denoise_rgba(flat_n, strength=40, role="normal")
+    n = dn_n[..., :3].astype(np.float32) / 255.0 * 2.0 - 1.0
+    assert float(np.sqrt(np.sum(n**2, axis=-1)).mean()) > 0.95
+
+    paths = [
+        Path("body_albedo.tga"),
+        Path("body_normal.tga"),
+        Path("body_parameter.tga"),
+        Path("other_albedo.tga"),
+    ]
+    maps = family_role_paths(paths, "body")
+    assert set(maps) == {"albedo", "normal", "parameter"}
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "body_normal.png"
+        Image.fromarray(rgba, mode="RGBA").save(src)
+        sess = TexMapSession.open(src, role="normal")
+        sess.apply(invert_channels(sess.pixels, (False, True, False, False)))
+        sess.save(bak=True)
+        bak = src.with_suffix(src.suffix + ".bak")
+        assert bak.is_file() and src.is_file()
+        # second save must not clobber .bak
+        first_bak = bak.read_bytes()
+        sess.apply(invert_channels(sess.pixels, (True, False, False, False)))
+        sess.save(bak=True)
+        assert bak.read_bytes() == first_bak
 
 
 def test_image_prep_and_ve39() -> None:
@@ -540,6 +733,38 @@ def test_orbit_yaw_follows_drag() -> None:
 
     # Same sign as mouseMoveEvent: drag right → +yaw
     assert sx_of(40.0) > sx_of(35.0)
+
+
+def test_arrow_walk_is_ground_forward() -> None:
+    """Up/Down walk along camera look on XY. Left/Right stay horizontal strafe.
+
+    Z is up. Flattening Y (the old bug) made Up slide in XZ instead of forward.
+    """
+    import math
+
+    from trainz_studio.render.view3d import WORLD_UP, horizontal_walk_dirs
+
+    yaw = math.radians(35.0)
+    pitch = math.radians(25.0)
+    look = -np.array(
+        [
+            math.cos(pitch) * math.sin(yaw),
+            math.cos(pitch) * math.cos(yaw),
+            math.sin(pitch),
+        ],
+        dtype=np.float64,
+    )
+    look_n = look / np.linalg.norm(look)
+    right = np.cross(look_n, WORLD_UP)
+    right = right / np.linalg.norm(right)
+    forward, right_h = horizontal_walk_dirs(look, right)
+    assert abs(forward[2]) < 1e-9 and abs(right_h[2]) < 1e-9
+    assert abs(float(np.dot(forward, right_h))) < 1e-6
+    # Default view looks mostly along −Y; Up must keep that, not collapse to X.
+    assert forward[1] < -0.7
+    assert abs(float(np.dot(forward[:2], look[:2] / np.linalg.norm(look[:2])))) > 0.99
+    straight = horizontal_walk_dirs(np.array([0.0, 0.0, -1.0]), np.array([0.0, 0.0, 0.0]))
+    assert abs(straight[0][2]) < 1e-9
 
 
 def test_screen_delta_to_world() -> None:
@@ -1045,6 +1270,54 @@ def test_crash_dialog_quit_flag() -> None:
     del app
 
 
+def test_status_toast_save_detect() -> None:
+    """Save / progress / drop helpers for overlay toast bubbles."""
+    from trainz_studio.ui.status_toast import (
+        StudioStatusBar,
+        format_drop_detail,
+        is_save_notice,
+        parse_progress_pct,
+    )
+
+    assert is_save_notice("Saved mesh.trainzmesh")
+    assert is_save_notice("Project saved · demo.mtzs")
+    assert is_save_notice("Wrote 3 file(s) → out")
+    assert is_save_notice("Exported → config.txt")
+    assert is_save_notice("บันทึกแล้ว — CDP")
+    assert not is_save_notice("Autosaved · demo.mtzs")
+    assert not is_save_notice("Save .trainzmesh failed")
+    assert not is_save_notice("Applied — Save to write")
+    assert parse_progress_pct("Loading mesh… 42%") == 42
+    assert parse_progress_pct("Export 100%") == 100
+    assert parse_progress_pct("no percent here") is None
+    assert format_drop_detail([type("P", (), {"name": "a.fbx"})()]) == "a.fbx"
+    from pathlib import Path
+
+    assert "b.im" in format_drop_detail([Path("a.fbx"), Path("b.im")])
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    bar = StudioStatusBar()
+    noticed: list[str] = []
+    prog: list[tuple[str, int]] = []
+    bar.save_noticed.connect(noticed.append)
+    bar.progress_noticed.connect(lambda m, p: prog.append((m, p)))
+    bar.showMessage("Saved ok.im")
+    assert noticed == ["Saved ok.im"]
+    cleared: list[str] = []
+    bar.progress_cleared.connect(cleared.append)
+    bar.showMessage("Baking lamps… 55%")
+    assert prog and prog[-1][1] == 55
+    assert noticed == ["Saved ok.im"]  # % line is progress, not save
+    bar.showMessage("Loaded mesh — done")  # no % → must clear sticky progress
+    assert cleared == ["Loaded mesh — done"]
+    bar.showMessage("Theme: dark")
+    assert len(cleared) == 1  # only after a progress run
+    assert len(bar.history) == 4
+    bar.deleteLater()
+    del app
+
+
 def test_ease_out_cubic() -> None:
     from trainz_studio.render.view3d import ease_out_cubic
 
@@ -1170,8 +1443,8 @@ def test_float_chrome_bookends() -> None:
     from trainz_studio.ui.assets.nav import AssetsPageNav, AssetsSubNav
     from trainz_studio.ui.assets.studio import AssetsStudioHost
 
-    assert AssetsPageNav.PAGES == ("packages", "config", "texmesh", "kuid")
-    assert "Texture / Mesh" in AssetsPageNav.LABELS
+    assert AssetsPageNav.SUITE_PAGES["assets"][0] == ("packages", "config", "kuid")
+    assert AssetsPageNav.SUITE_PAGES["texmesh"][0] == ("texture", "meshops")
     assert AssetsSubNav.PAGES == ("texture", "meshops")
 
     # Right props dock is a main-split sibling of left sidebar (not under path/nav).
@@ -1180,9 +1453,14 @@ def test_float_chrome_bookends() -> None:
     assert assets._main_split.indexOf(assets._right_dock_host) == 2
     assert assets._right_dock.count() == 2
     assert assets._right_dock_host.isHidden()
-    assets._on_page("meshops")
+    assets.set_suite("texmesh")
+    assert assets._suite == "texmesh"
+    assert assets._page == "texmesh"
     assert not assets._right_dock_host.isHidden()
+    assets._on_page("meshops")
     assert assets._right_dock.currentIndex() == 1
+    assets.set_suite("assets")
+    assert assets._page == "packages"
     assets.deleteLater()
 
     host.deleteLater()
@@ -1214,7 +1492,7 @@ def test_float_title_bar_chrome() -> None:
     assert bar.height() == TITLE_BAR_H
     assert TITLE_CONTENT_INSET > TITLE_BAR_H
     assert isinstance(bar.lights, TrafficLights)
-    assert set(bar._btns) == {"File", "Edit", "View", "Theme", "Lang"}
+    assert set(bar._btns) == {"File", "Edit", "View", "Tools", "Theme", "Lang"}
     assert getattr(bar, "_hover_bubble", None) is not None
     assert all(not b.isCheckable() for b in bar._btns.values())
     assert all(b.objectName() == "titleNavBtn" for b in bar._btns.values())
@@ -1275,6 +1553,7 @@ def test_material_icons_font() -> None:
     app = QApplication.instance() or QApplication([])
     assert ensure_material_icons()
     assert GLYPHS["home"] and GLYPHS["save"] and GLYPHS["folder_open"]
+    assert GLYPHS["lock"] and GLYPHS["palette"]
     for key in ("layers", "graphic_eq", "tune", "inventory_2", "upload_file"):
         assert GLYPHS[key], key
     btn = QPushButton()
@@ -1306,13 +1585,16 @@ def test_home_glass_hub() -> None:
         on_sounds=lambda: hits.append("sounds"),
         on_engine=lambda: hits.append("engine"),
         on_assets=lambda: hits.append("assets"),
+        on_texmesh=lambda: hits.append("texmesh"),
         on_drop=lambda _p: None,
         theme_mode="dark",
     )
     cards = page.findChildren(HomeStudioCard)
-    assert len(cards) == 4
+    assert len(cards) == 5
     assert page.findChildren(QPushButton) == []
     assert cards[0]._icon_lab.width() >= 64
+    titles = [c._title_src for c in cards]
+    assert "Assets Tools" in titles and "Texture / Mesh" in titles
     host = page._card_host
     bubble = getattr(host, "_hover_bubble", None)
     assert isinstance(bubble, HoverBubble)
@@ -1327,6 +1609,8 @@ def test_home_glass_hub() -> None:
     assert cards[0]._lift_anim is not None
     cards[0]._on_click()
     assert hits == ["mesh"]
+    cards[4]._on_click()
+    assert hits == ["mesh", "texmesh"]
     page.set_theme("light")
     assert page._theme == "light"
     page.close()
@@ -1427,6 +1711,94 @@ def test_frost_clears_on_set_dark() -> None:
     assert frame._frost is None
     frame.deleteLater()
     del app
+
+
+def test_scroll_wheel_reaches_child() -> None:
+    """Wheel on a child inside the scroll body must move the bar."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QVBoxLayout, QWidget
+
+    from trainz_studio.ui.smooth_scroll import enable_smooth_scroll_area
+
+    app = QApplication.instance() or QApplication([])
+    area = QScrollArea()
+    area.resize(180, 80)
+    body = QWidget()
+    lay = QVBoxLayout(body)
+    child = QLabel("tall")
+    child.setMinimumHeight(400)
+    lay.addWidget(child)
+    area.setWidgetResizable(True)
+    area.setWidget(body)
+    enable_smooth_scroll_area(area)
+    area.show()
+    QTest.qWait(40)
+    bar = area.verticalScrollBar()
+    assert bar.maximum() > 0
+    ev = QWheelEvent(
+        QPointF(8, 8),
+        QPointF(8, 8),
+        QPoint(0, 0),
+        QPoint(0, -120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    assert area._damped_scroll.eventFilter(child, ev) is True  # type: ignore[attr-defined]
+    QTest.qWait(280)
+    assert bar.value() > 0
+    area.deleteLater()
+    app.processEvents()
+
+
+def test_editor_wheel_scrolls_not_combo() -> None:
+    """Wheel over a guarded combo moves the dock and leaves the index alone."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QComboBox, QScrollArea, QVBoxLayout, QWidget
+
+    from trainz_studio.ui.mesh_prop_tree import guard_inputs
+    from trainz_studio.ui.smooth_scroll import enable_smooth_scroll_area
+
+    app = QApplication.instance() or QApplication([])
+    area = QScrollArea()
+    area.resize(180, 80)
+    body = QWidget()
+    lay = QVBoxLayout(body)
+    combo = QComboBox()
+    combo.addItems(["a", "b", "c"])
+    lay.addWidget(combo)
+    filler = QWidget()
+    filler.setMinimumHeight(400)
+    lay.addWidget(filler)
+    area.setWidgetResizable(True)
+    area.setWidget(body)
+    enable_smooth_scroll_area(area)
+    guard_inputs(body)
+    area.show()
+    QTest.qWait(40)
+    bar = area.verticalScrollBar()
+    assert bar.maximum() > 0
+    ev = QWheelEvent(
+        QPointF(8, 8),
+        QPointF(8, 8),
+        QPoint(0, 0),
+        QPoint(0, -120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    assert area._damped_scroll.eventFilter(combo, ev) is True  # type: ignore[attr-defined]
+    QTest.qWait(280)
+    assert bar.value() > 0
+    assert combo.currentIndex() == 0
+    area.deleteLater()
+    app.processEvents()
 
 
 def test_smooth_scroll_filter() -> None:
@@ -1950,12 +2322,38 @@ def test_im_document_add_remove() -> None:
         assert again[0].pos == (0.5, 0.0, -1.0)
 
 
+def test_named_two_sided_does_not_touch_other_parts() -> None:
+    """Double Sided flags that material only — no full scene rebuild."""
+    from trainz_studio.io.scene import MeshPart
+    from trainz_studio.render.view3d import apply_named_two_sided
+
+    body = MeshPart("body.m.pbrmetal", None, None)
+    door = MeshPart("door.m.pbrmetal", None, None)
+    batch_body = type("B", (), {"name": "body.m.pbrmetal", "two_sided": False})()
+    batch_door = type("B", (), {"name": "door.m.pbrmetal", "two_sided": False})()
+    n = apply_named_two_sided(
+        [body, door], [batch_body, batch_door], "body.m.pbrmetal", True
+    )
+    assert n == 1
+    assert body.two_sided is True and batch_body.two_sided is True
+    assert door.two_sided is False and batch_door.two_sided is False
+    short = MeshPart("air_hold", None, None)
+    short_batch = type("B", (), {"name": "air_hold", "two_sided": False})()
+    n2 = apply_named_two_sided(
+        [short, door], [short_batch, batch_door], "air_hold.m.pbrmetal", True
+    )
+    assert n2 == 1 and short.two_sided is True and short_batch.two_sided is True
+    assert door.two_sided is False
+
+
 def test_mesh_meta_two_sided() -> None:
     from trainz_studio.io.mesh_meta import (
         mesh_meta_path,
         parse_two_sided_map,
         set_material_two_sided,
         write_two_sided,
+        write_two_sided_many,
+        write_two_sided_map,
     )
     from trainz_studio.io.scene import MeshPart
     from trainz_studio.io.mesh_meta import apply_meta_two_sided_to_parts
@@ -1980,14 +2378,39 @@ def test_mesh_meta_two_sided() -> None:
         mesh.write_bytes(b"")
         meta = write_two_sided(root / "body.txt", "seat.m.onetex", True)
         assert meta.is_file()
+        write_two_sided_many(
+            meta, ["glass.m.glass", "door.m.pbrmetal"], True
+        )
+        both = parse_two_sided_map(meta.read_text(encoding="utf-8"))
+        assert both["seat.m.onetex"] is True
+        assert both["glass.m.glass"] is True
+        assert both["door.m.pbrmetal"] is True
+        write_two_sided_map(
+            meta, {"glass.m.glass": False, "frame.m.pbrmetal": True}
+        )
+        mapped = parse_two_sided_map(meta.read_text(encoding="utf-8"))
+        assert mapped["glass.m.glass"] is False
+        assert mapped["frame.m.pbrmetal"] is True
+        assert mapped["seat.m.onetex"] is True
+        np = __import__("numpy")
         part = MeshPart(
             name="seat.m.onetex",
-            vertices=__import__("numpy").zeros((3, 3), dtype="float32"),
-            indices=__import__("numpy").array([0, 1, 2], dtype="uint32"),
+            vertices=np.zeros((3, 3), dtype="float32"),
+            indices=np.array([0, 1, 2], dtype="uint32"),
         )
-        n = apply_meta_two_sided_to_parts([part], meta)
+        other = MeshPart(
+            name="body.m.pbrmetal",
+            vertices=np.zeros((3, 3), dtype="float32"),
+            indices=np.array([0, 1, 2], dtype="uint32"),
+        )
+        # no meta → off (not stuck on)
+        assert apply_meta_two_sided_to_parts([part, other], None) == 0
+        assert part.two_sided is False
+        assert other.two_sided is False
+        n = apply_meta_two_sided_to_parts([part, other], meta)
         assert n == 1
         assert part.two_sided is True
+        assert other.two_sided is False  # only listed materials
 
 
 def test_code_edit_trainzconfig_spans() -> None:
@@ -2063,7 +2486,7 @@ def test_editor_find_config_and_workspace() -> None:
         assert find_config_txt(alone) is None
 
     # EditorWorkspace needs a QApplication
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QWidget
 
     app = QApplication.instance() or QApplication([])
     ws = EditorWorkspace()
@@ -2071,7 +2494,8 @@ def test_editor_find_config_and_workspace() -> None:
     assert ws.texture is not None
     assert hasattr(ws, "meshes_page")
     assert hasattr(ws, "attachments_page")
-    assert hasattr(ws, "tab_strip")
+    assert not any(w.objectName() == "sideTabStrip" for w in ws.findChildren(QWidget))
+    assert ws._title.text() == "Attachs Editor"
     assert not hasattr(ws, "config")
     ws.set_im_writable(False)
     assert not ws.att_save_btn.isEnabled()
@@ -2081,8 +2505,67 @@ def test_editor_find_config_and_workspace() -> None:
     assert ws.tabs.currentWidget() is ws.meshes_page
     ws.show_meshes_tab()
     assert ws.tabs.currentWidget() is ws.meshes_page
+    assert ws._title.text() == "Meshes Editor"
+    assert ws.current_mode() == "meshes"
     ws.show_attachments_tab()
     assert ws.tabs.currentIndex() == 0
+    assert ws._title.text() == "Attachs Editor"
+    assert ws.maximumWidth() == 520
+    # Wheel must not step spins, combos, or sliders (including the inner line edit).
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+
+    def _wheel() -> QWheelEvent:
+        return QWheelEvent(
+            QPointF(4, 4),
+            QPointF(4, 4),
+            QPoint(0, 0),
+            QPoint(0, 120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+
+    combo = ws.meshes_page.detail.type_combo
+    combo.setCurrentIndex(0)
+    QApplication.sendEvent(combo, _wheel())
+    assert combo.currentIndex() == 0
+    spin = ws.meshes_page.detail.spec_power
+    detail = ws.meshes_page.detail
+    assert spin.minimumHeight() == detail.name_edit.minimumHeight() == 36
+    assert spin.maximumWidth() > 200  # same column width as Name / texture fields
+    assert detail.type_combo.minimumHeight() == 36
+    assert detail.mat_color._swatch.minimumHeight() == 36
+    assert detail.mat_color._swatch.text()  # palette glyph, not an empty square
+    from trainz_studio.ui.mesh_prop_tree import TextureSlotRow
+
+    slot = TextureSlotRow("txAlbedo", "body.texture")
+    assert slot._btn.property("mi_name") == "folder_open"
+    assert slot._btn.text() != "…"
+    locked = TextureSlotRow("txEnvBRDF", "$pbr-envbrdf", readonly=True)
+    assert locked._btn.property("mi_name") == "lock"
+    slot.deleteLater()
+    locked.deleteLater()
+    spin.setValue(2.5)
+    QApplication.sendEvent(spin, _wheel())
+    assert abs(spin.value() - 2.5) < 1e-6
+    line = spin.lineEdit()
+    assert line is not None
+    QApplication.sendEvent(line, _wheel())
+    assert abs(spin.value() - 2.5) < 1e-6
+    assert ws.attachments_page.detail.loc[0].maximumWidth() <= 80
+    # Noto label column + four color channels. Still far below the 480 dock.
+    assert ws.meshes_page.detail.minimumSizeHint().width() <= 360
+    assert ws.attachments_page.detail.minimumSizeHint().width() <= 300
+    tex_combo = ws.texture._compression
+    tex_idx = tex_combo.currentIndex()
+    QApplication.sendEvent(tex_combo, _wheel())
+    assert tex_combo.currentIndex() == tex_idx
+    slider = ws.texture._emis
+    slider_val = slider.value()
+    QApplication.sendEvent(slider, _wheel())
+    assert slider.value() == slider_val
 
     # Texture.txt helpers still available (hidden editor)
     with tempfile.TemporaryDirectory() as td3:
@@ -2471,13 +2954,35 @@ def test_loop_qc_and_fix() -> None:
     _ = set_ffmpeg_path  # imported for coverage of module
 
 
+def test_mesh_studio_nav_flanks_home() -> None:
+    """Meshes Editor sits left of Home, Attachs Editor sits right. Equal button widths."""
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.app import BottomNav
+
+    app = QApplication.instance() or QApplication([])
+    nav = BottomNav(None)
+    assert nav._pages == ("preview", "meshes", "attachs", "settings")
+    assert nav._left_btns == [nav.preview_btn, nav.meshes_btn]
+    assert nav._right_btns == [nav.attachs_btn, nav.settings_btn]
+    assert nav.meshes_btn.text() == "Meshes Editor"
+    assert nav.attachs_btn.text() == "Attachs Editor"
+    w = nav.meshes_btn.minimumWidth()
+    assert w == nav.attachs_btn.minimumWidth() == nav.preview_btn.minimumWidth() == nav.settings_btn.minimumWidth()
+    assert w >= 108
+    nav.deleteLater()
+    del app
+
+
 def main() -> int:
     test_obj_parse_roundtrip()
     test_obj_parse_with_uv()
     test_attachment_axes()
     test_aabb_wire_lines()
     test_fps_hud_text()
+    test_fps_hud_top_right()
     test_mesh_key_hidden()
+    test_highlight_pick()
     test_mesh_preview_argv()
     test_draw_batch_vbo_slots()
     test_flatten_part_indexed()
@@ -2486,6 +2991,7 @@ def main() -> int:
     test_sun_dir_yup()
     test_fly_approach_dist_stable()
     test_orbit_yaw_follows_drag()
+    test_arrow_walk_is_ground_forward()
     test_screen_delta_to_world()
     test_screen_delta_along_axis()
     test_pick_translate_handle()
@@ -2514,7 +3020,10 @@ def main() -> int:
     test_float_title_bar_chrome()
     test_animate_window_quit()
     test_crash_dialog_quit_flag()
+    test_status_toast_save_detect()
     test_smooth_scroll_filter()
+    test_scroll_wheel_reaches_child()
+    test_editor_wheel_scrolls_not_combo()
     test_lamp_discover_and_pack()
     test_cuda_texel_chunk_size()
     test_bake_lamps_tiny()
@@ -2524,6 +3033,7 @@ def main() -> int:
     test_project_and_crash_backup()
     test_tzmf_material_patch()
     test_trainzmesh_attachments()
+    test_tiled_uv_chunk_is_kept()
     test_trainzmesh_decode()
     test_texture_fixtures()
     test_texcache_roundtrip()
@@ -2532,20 +3042,50 @@ def main() -> int:
     test_probe_image_and_pbr_sort()
     test_stems_match_family()
     test_image_prep_and_ve39()
+    test_ve_rules_pack()
     test_i18n_catalogs_and_fonts()
     test_merge_lamp_packs()
     test_resolve_primary()
     test_kin_scan()
     test_im_document_add_remove()
+    test_named_two_sided_does_not_touch_other_parts()
     test_mesh_meta_two_sided()
     test_code_edit_trainzconfig_spans()
     test_editor_find_config_and_workspace()
-    from trainz_studio.util.hw import bake_workers, cpu_count, decode_workers, summary
+    test_mesh_studio_nav_flanks_home()
+    from trainz_studio.util.hw import (
+        bake_workers,
+        cpu_count,
+        decode_workers,
+        hub_reveal_ms,
+        is_low_end,
+        prefer_instant_panels,
+        prefer_light_boot_frost,
+        prefer_short_hub_motion,
+        summary,
+    )
+    from trainz_studio.util.preload import (
+        hub_modules_ready,
+        join_hub_module_preload,
+        start_hub_module_preload,
+    )
 
     assert cpu_count() >= 1
-    assert 2 <= decode_workers() <= 24
-    assert 2 <= bake_workers() <= 16
-    assert "cpus=" in summary()
+    assert 1 <= decode_workers() <= 24
+    assert 1 <= bake_workers() <= 16
+    assert "cpus=" in summary() and "low_end=" in summary()
+    assert isinstance(is_low_end(), bool)
+    assert prefer_instant_panels() == is_low_end()
+    assert prefer_short_hub_motion() == is_low_end()
+    assert prefer_light_boot_frost() == is_low_end()
+    assert hub_reveal_ms(warm=True) >= 0
+    if is_low_end():
+        assert hub_reveal_ms(warm=True) == 0
+    else:
+        assert 500 <= hub_reveal_ms(warm=True) <= 800
+    start_hub_module_preload()
+    assert join_hub_module_preload(timeout=30.0)
+    assert hub_modules_ready()
     test_lerp_pill_rect()
     test_rounded_table_rows_install()
     test_short_glass_tip()

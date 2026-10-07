@@ -47,6 +47,9 @@ def main() -> None:
 
     page = PackagesPage()
     assert hasattr(page, "btn_mesh_studio") and hasattr(page, "mesh_open")
+    assert callable(getattr(page, "warm_fast_preview_infra", None))
+    page.warm_fast_preview_infra()
+    assert page._mesh_preview is not None
     print("ok")
 
 
