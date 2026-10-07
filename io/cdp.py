@@ -160,8 +160,45 @@ def load_cdp(path: Path | bytes) -> ChumpFile:
     return read_chump(path)
 
 
-def save_cdp(path: Path, chump: ChumpFile) -> Path:
-    return write_chump(path, chump)
+def cdp_bak_path(path: Path) -> Path:
+    """Sibling temp backup: ``foo.cdp`` → ``foo.cdp.bak``."""
+    path = Path(path)
+    return path.with_suffix(path.suffix + ".bak")
+
+
+def discard_cdp_bak(path: Path | None) -> bool:
+    """Remove sibling ``*.cdp.bak`` if present. Returns True when removed."""
+    if path is None:
+        return False
+    bak = cdp_bak_path(Path(path))
+    if not bak.is_file():
+        return False
+    try:
+        bak.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def save_cdp(path: Path, chump: ChumpFile, *, bak: bool = True) -> Path:
+    """Write CDP; temp sibling ``*.cdp.bak`` during overwrite, removed on success.
+
+    On write failure the ``.bak`` is left for recovery. Callers may also
+    ``discard_cdp_bak`` on Clear / abandon.
+    """
+    path = Path(path)
+    wrote_bak = False
+    if bak and path.is_file():
+        bak_path = cdp_bak_path(path)
+        bak_path.write_bytes(path.read_bytes())
+        wrote_bak = True
+    try:
+        write_chump(path, chump)
+    except Exception:
+        raise
+    if wrote_bak:
+        discard_cdp_bak(path)
+    return path
 
 
 # ── browse tree ─────────────────────────────────────────────────────────────
@@ -740,6 +777,19 @@ if __name__ == "__main__":
         note = next(p for p in written if p.name == "note.txt")
         assert note.read_text(encoding="utf-8") == "hello cdp"
         ch = load_cdp(path)
+        # temp .bak during overwrite — gone after success
+        save_cdp(path, ch)
+        bak = cdp_bak_path(path)
+        assert not bak.is_file()
+        replace_asset_config(
+            ch, "<kuid:1:2>", 'username  "Demo2"\nkind  "scenery"\nkuid  <kuid:1:2>\n'
+        )
+        save_cdp(path, ch)
+        assert not bak.is_file()
+        # leftover from a failed write is cleared by discard
+        bak.write_bytes(b"stale")
+        assert discard_cdp_bak(path)
+        assert not bak.is_file()
         nodes = browse_cdp(ch)
         assert nodes[0].files
         assert remove_file(ch, nodes[0].kuid, "note.txt")

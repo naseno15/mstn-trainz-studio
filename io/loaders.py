@@ -14,6 +14,7 @@ import numpy as np
 
 from .anim import scan_kin_files
 from .scene import Attachment, MeshPart, Scene
+from .tzmf_edit import attachment_floats_ok
 
 # Trainzmesh magic from Naito fixtures (not a public format — detect only).
 TRAINZMESH_MAGIC = b"tzMF"
@@ -324,6 +325,9 @@ def parse_trainzmesh_attachments(data: bytes) -> list[Attachment]:
         after = j + name_len
         px, py, pz, qx, qy, qz, qw = struct.unpack_from(">7f", data, after)
         if not all(math.isfinite(v) for v in (px, py, pz, qx, qy, qz, qw)):
+            j += 1
+            continue
+        if not attachment_floats_ok(px, py, pz, qx, qy, qz, qw):
             j += 1
             continue
         pos = (float(px), float(py), float(pz))

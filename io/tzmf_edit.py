@@ -25,6 +25,18 @@ from pathlib import Path
 import numpy as np
 
 _ATT_NAME_RE = re.compile(rb"^a\.[A-Za-z0-9_./+-]+$")
+
+
+def attachment_floats_ok(px: float, py: float, pz: float, qx: float, qy: float, qz: float, qw: float) -> bool:
+    """A real a.* pose, not a finite-float hit inside mesh bytes.
+
+    Unit quaternions have length ~1 (identity is 0,0,0,1). Random BE floats
+    such as 10000²×4 do not. A single consist stays well inside 10 km.
+    """
+    qn = qx * qx + qy * qy + qz * qz + qw * qw
+    if not (0.25 <= qn <= 4.0):
+        return False
+    return max(abs(px), abs(py), abs(pz)) <= 1.0e4
 _MAT_TYPES = (
     b"pbrmetal",
     b"pbrmetalmasked",
@@ -320,6 +332,9 @@ def parse_attachment_records(data: bytes | bytearray) -> list[AttRecord]:
             j += 1
             continue
         px, py, pz, qx, qy, qz, qw = vals
+        if not attachment_floats_ok(px, py, pz, qx, qy, qz, qw):
+            j += 1
+            continue
         out.append(
             AttRecord(
                 name=raw.decode("ascii"),
