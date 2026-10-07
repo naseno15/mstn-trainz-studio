@@ -1,11 +1,11 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-07 (Asia/Bangkok) — v0.3.0 onefile release  
+**Last updated:** 2026-10-07 (Asia/Bangkok) — v0.3.1 full onefile (HDRI+fonts+Assimp)  
 **Owner chat:** continue from this handoff  
 **Root:** `c:\trs22\trainz_studio\`  
 **Backup (pre-rename):** `c:\trs22\backups\26-10-05\mesh_studio-pre-trainz-studio\`  
 **Run:** `start.bat` / `start.vbs` (silent) · `start_debug.bat` (console) · `python -m trainz_studio` (cwd = `c:\trs22`)  
-**EXE:** `trainz_studio\dist\MSTN_TrainzStudio.exe` (onefile) — rebuild: `pack\build.bat` · GitHub Release `v0.3.0`  
+**EXE:** `trainz_studio\dist\MSTN_TrainzStudio.exe` (onefile, full assets) — rebuild: `pack\build.bat` · GitHub Release `v0.3.1`  
 **Shell:** `pack\shell\register.ps1` (Open + Quick Preview + Explorer pane) · `unregister.ps1`  
 **Smoke:** `python -m trainz_studio.check` from `c:\trs22` → expect `trainz_studio check: OK`
 

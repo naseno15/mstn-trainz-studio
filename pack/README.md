@@ -23,7 +23,7 @@ Output:
 trainz_studio\dist\MSTN_TrainzStudio.exe
 ```
 
-onefile layout. Fonts + logo + Assimp DLL are bundled; Poly Haven HDRIs are **not** (re-fetch with `python -m trainz_studio.scripts.fetch_hdris`).
+onefile layout. Bundles fonts, logo, Assimp DLL, and Poly Haven HDRIs under `assets/` (whatever is on disk at build time).
 
 ## Notes
 
