@@ -10,6 +10,7 @@ from PySide6.QtCore import (
     QObject,
     QPropertyAnimation,
     QRectF,
+    QSize,
     Qt,
     QThread,
     QTimer,
@@ -22,6 +23,7 @@ from PySide6.QtGui import (
     QDragMoveEvent,
     QDropEvent,
     QFont,
+    QFontMetrics,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -62,6 +64,12 @@ from ...io.chump import (
 )
 from ...io.lm import LmFile, LmMesh, format_lm_txt, read_lm_txt, write_lm_txt
 from ...io.image_prep import process_image
+from ...io.mat_names import (
+    apply_renames,
+    format_mat_report,
+    scan_materials,
+    suggested_mapping,
+)
 from ...io.texture import (
     IMAGE_EXTS,
     check_texture_txt,
@@ -99,6 +107,7 @@ from ..motion import (
 _RIGHT_DOCK_MIN = 480
 _RIGHT_DOCK_MAX = 780
 _RIGHT_DOCK_DEFAULT = 600
+_TEX_ROW_H = 64  # badge + title + subtitle — 52 clipped the second line
 # Longer + InOutCubic + frozen page paint = silk (setSizes every frame was janky).
 _DOCK_ANIM_MS = 560
 _DOCK_TICK_MS = 24
@@ -188,6 +197,13 @@ _LM_CALC_POINTS = ("center", "near", "far")
 _LM_COL_LOD, _LM_COL_WIDTH, _LM_COL_NAME = 0, 1, 2
 _LM_ROLE_SOURCE = int(Qt.ItemDataRole.UserRole)
 
+
+def _lm_mesh_name_for_lm(path: Path) -> str:
+    """Filename written in lm.txt — Trainz converts .fbx → .trainzmesh on import."""
+    if path.suffix.lower() == ".fbx":
+        return f"{path.stem}.trainzmesh"
+    return path.name
+
 _TEX_OMIT = "—"
 _TEX_TILE_OPTS = ("st", "s", "t", "none", _TEX_OMIT)
 _TEX_USAGE_OPTS = (_TEX_OMIT, "albedo", "normal", "parameter")
@@ -210,6 +226,86 @@ _PREP_MAP_MODE = {"auto": "auto", "albedo": "albedo", "normal": "normal", "param
 _PREP_FMT_OPTS = ("SAME", "PNG", "TGA", "JPG")
 
 
+class _ElideLabel(QLabel):
+    """Single-line label — middle-elide when the Name column is tight.
+
+    sizeHint stays tiny so long filenames cannot force the table wider than
+    the viewport (that was shoving Dims/Ch/Size/Status off the right edge).
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full = text
+        self.setToolTip(text)
+        self.setText(text)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+
+    def set_full_text(self, text: str) -> None:
+        self._full = text
+        self.setToolTip(text)
+        self._elide()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(24, super().sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        w = max(24, self.width() - 2)
+        self.setText(
+            QFontMetrics(self.font()).elidedText(
+                self._full, Qt.TextElideMode.ElideMiddle, w
+            )
+        )
+
+
+def _paint_drop_hint(
+    painter: QPainter,
+    rect,
+    *,
+    title: str,
+    exts: str,
+    hot: bool,
+) -> None:
+    """Empty/drag affordance — title medium, extensions small."""
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    color = QColor("#ff5a1f") if hot else QColor(152, 152, 157, 150)
+    pen = QPen(color)
+    pen.setWidthF(1.75)
+    pen.setStyle(Qt.PenStyle.CustomDashLine)
+    pen.setDashPattern([5.0, 5.0])
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    r = rect.adjusted(8, 8, -8, -8)
+    painter.drawRoundedRect(r, 14, 14)
+    if hot:
+        painter.fillRect(r, QColor(255, 90, 31, 22))
+    title_c = QColor("#ff5a1f") if hot else QColor(235, 235, 245, 200)
+    painter.setPen(title_c)
+    painter.setFont(app_font(13, QFont.Weight.DemiBold))
+    mid = r.adjusted(12, 0, -12, 0)
+    painter.drawText(
+        mid.adjusted(0, -10, 0, -10),
+        int(Qt.AlignmentFlag.AlignCenter),
+        title,
+    )
+    painter.setPen(QColor(152, 152, 157, 170))
+    painter.setFont(app_font(10, QFont.Weight.Normal))
+    painter.drawText(
+        mid.adjusted(0, 14, 0, 14),
+        int(Qt.AlignmentFlag.AlignCenter),
+        exts,
+    )
+
+
 class _TexNameCell(QWidget):
     """Finder-style badge + title / subtitle for Texture rows."""
 
@@ -223,9 +319,17 @@ class _TexNameCell(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        # Ignored: cell geometry comes from the column — never grow the table.
+        self.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.setMinimumWidth(0)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 6, 10, 6)
+        lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(10)
+        lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         mark = QLabel(badge)
         mark.setObjectName("pkgFinderBadge")
         mark.setFixedSize(28, 28)
@@ -235,20 +339,28 @@ class _TexNameCell(QWidget):
             f"background: {color}33; color: {color}; border-radius: 8px;"
             f"font-weight: 700; font-size: 12px;}}"
         )
-        lay.addWidget(mark)
+        lay.addWidget(mark, 0, Qt.AlignmentFlag.AlignVCenter)
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(2)
-        t = QLabel(title)
+        text.setSpacing(1)
+        t = _ElideLabel(title)
         t.setObjectName("pkgFinderTitle")
         t.setFont(app_font(12, QFont.Weight.DemiBold))
+        t.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         text.addWidget(t)
         if subtitle:
-            s = QLabel(subtitle)
+            s = _ElideLabel(subtitle)
             s.setObjectName("pkgFinderSub")
             s.setFont(app_font(10, QFont.Weight.Normal))
+            s.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             text.addWidget(s)
         lay.addLayout(text, 1)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(120, _TEX_ROW_H)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(72, _TEX_ROW_H)
 
 
 class _TexPrepWorker(QThread):
@@ -401,90 +513,6 @@ def _tex_accept_drag(event: QDragEnterEvent | QDragMoveEvent) -> bool:
     return bool(images or texts)
 
 
-class _LmDropZone(QFrame):
-    """Visible dashed rail — drop .trainzmesh / .im / .fbx / .lm.txt."""
-
-    paths_dropped = Signal(object)
-    lm_dropped = Signal(object)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._drag_over = False
-        self.setObjectName("homeDropZone")
-        self.setAcceptDrops(True)
-        self.setMinimumHeight(88)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 14, 20, 14)
-        lay.setSpacing(6)
-        title = QLabel("Drop mesh files")
-        title.setObjectName("homeDropTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setFont(app_font(15, QFont.Weight.DemiBold))
-        exts = QLabel(".trainzmesh   ·   .im   ·   .fbx   ·   .lm.txt")
-        exts.setObjectName("homeDropTypes")
-        exts.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        exts.setFont(app_font(12, QFont.Weight.Medium))
-        lay.addWidget(title)
-        lay.addWidget(exts)
-
-    def _set_drag_over(self, active: bool) -> None:
-        if self._drag_over == active:
-            return
-        self._drag_over = active
-        self.setProperty("dragOver", active)
-        sty = self.style()
-        sty.unpolish(self)
-        sty.polish(self)
-        self.update()
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if _lm_accept_drag(event):
-            event.acceptProposedAction()
-            self._set_drag_over(True)
-        else:
-            event.ignore()
-
-    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if _lm_accept_drag(event):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
-        self._set_drag_over(False)
-        super().dragLeaveEvent(event)
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        self._set_drag_over(False)
-        meshes, lms = _lm_drop_paths(event.mimeData().urls() if event.mimeData().hasUrls() else [])
-        if lms:
-            self.lm_dropped.emit(lms[0])
-            event.acceptProposedAction()
-            return
-        if meshes:
-            self.paths_dropped.emit(meshes)
-            event.acceptProposedAction()
-            return
-        event.ignore()
-
-    def paintEvent(self, event) -> None:  # noqa: ANN001
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self._drag_over:
-            color = QColor("#ff5a1f")
-        else:
-            color = QColor("#98989d")
-            color.setAlpha(170)
-        pen = QPen(color)
-        pen.setWidthF(2.0)
-        pen.setStyle(Qt.PenStyle.CustomDashLine)
-        pen.setDashPattern([6.0, 5.0])
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(self.rect().adjusted(4, 4, -4, -4), 16, 16)
-
-
 class _TexDropTable(QTableWidget):
     """Image table — drop target (rail removed) · Finder-style name cells."""
 
@@ -536,36 +564,21 @@ class _TexDropTable(QTableWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
-        painter = QPainter(self.viewport())
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         empty = self.rowCount() == 0
         if not empty and not self._drag_over:
             return
-        if self._drag_over:
-            color = QColor("#ff5a1f")
-        else:
-            color = QColor("#98989d")
-            color.setAlpha(160)
-        pen = QPen(color)
-        pen.setWidthF(2.0)
-        pen.setStyle(Qt.PenStyle.CustomDashLine)
-        pen.setDashPattern([6.0, 5.0])
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        r = self.viewport().rect().adjusted(6, 6, -6, -6)
-        painter.drawRoundedRect(r, 14, 14)
-        if empty:
-            painter.setPen(QColor("#98989d"))
-            painter.setFont(app_font(14, QFont.Weight.DemiBold))
-            painter.drawText(
-                r,
-                int(Qt.AlignmentFlag.AlignCenter),
-                "Drop image files here\n.tga · .png · .bmp · .jpg · .dds · .texture.txt",
-            )
+        painter = QPainter(self.viewport())
+        _paint_drop_hint(
+            painter,
+            self.viewport().rect(),
+            title="Drop image files here" if empty else "Drop to add",
+            exts=".tga  ·  .png  ·  .bmp  ·  .jpg  ·  .dds  ·  .texture.txt",
+            hot=self._drag_over,
+        )
 
 
 class _LmDropTable(QTableWidget):
-    """Mesh list — same drop types as the rail above."""
+    """Mesh list — drop .trainzmesh / .im / .fbx / .lm.txt onto the table."""
 
     paths_dropped = Signal(object)
     lm_dropped = Signal(object)
@@ -610,6 +623,20 @@ class _LmDropTable(QTableWidget):
             event.acceptProposedAction()
             return
         event.ignore()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        empty = self.rowCount() == 0
+        if not empty and not self._drag_over:
+            return
+        painter = QPainter(self.viewport())
+        _paint_drop_hint(
+            painter,
+            self.viewport().rect(),
+            title="Drop mesh files here" if empty else "Drop to add",
+            exts=".trainzmesh  ·  .im  ·  .fbx  ·  .lm.txt",
+            hot=self._drag_over,
+        )
 
 
 def _set_disabled_dim(widget: QWidget, enabled: bool, *, opacity: float = 0.42) -> None:
@@ -987,7 +1014,7 @@ class AssetsStudioHost(QWidget):
         lh = QVBoxLayout(list_host)
         lh.setContentsMargins(0, 0, 0, 0)
         lh.setSpacing(4)
-        list_lab = QLabel("Images · PBR sets — drop files onto the table")
+        list_lab = QLabel("Images · PBR sets")
         list_lab.setObjectName("mutedTip")
         lh.addWidget(list_lab)
         self.tex_list = _TexDropTable()
@@ -997,8 +1024,8 @@ class AssetsStudioHost(QWidget):
         )
         hdr = self.tex_list.horizontalHeader()
         hdr.setStretchLastSection(False)
+        hdr.setMinimumSectionSize(40)
         hdr.setSectionResizeMode(_TEX_COL_NAME, hdr.ResizeMode.Stretch)
-        # Wide enough for 4096×4096 / RGB (no α) / 48.0 MB (was eliding to "11…").
         for col, w in (
             (_TEX_COL_DIMS, 118),
             (_TEX_COL_CH, 114),
@@ -1007,7 +1034,10 @@ class AssetsStudioHost(QWidget):
         ):
             hdr.setSectionResizeMode(col, hdr.ResizeMode.Fixed)
             self.tex_list.setColumnWidth(col, w)
-        self.tex_list.verticalHeader().setVisible(False)
+        vhdr = self.tex_list.verticalHeader()
+        vhdr.setVisible(False)
+        vhdr.setDefaultSectionSize(_TEX_ROW_H)
+        vhdr.setMinimumSectionSize(_TEX_ROW_H)
         self.tex_list.setShowGrid(False)
         self.tex_list.setWordWrap(False)
         self.tex_list.setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -1016,6 +1046,8 @@ class AssetsStudioHost(QWidget):
         self.tex_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tex_list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tex_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.tex_list.setMinimumWidth(0)
+
         self.tex_list.setToolTip(
             "A/N/P badge = albedo / normal / parameter. "
             "Double-click a row = select whole PBR set. Drop images here."
@@ -1391,17 +1423,13 @@ class AssetsStudioHost(QWidget):
         pl.setSpacing(8)
         pl.addWidget(self._title("LM.txt LOD"))
         tip = QLabel(
-            "Drop meshes → Save all writes one .lm.txt each. "
-            "Tick LOD to combine those rows into a shared LOD table instead."
+            "Drop meshes onto the table → Save all writes one .lm.txt each. "
+            "Tick LOD to combine those rows into a shared LOD table instead. "
+            "FBX / trainzmesh material names are checked for .m.pbrmetal / .m.onetex."
         )
         tip.setObjectName("mutedTip")
         tip.setWordWrap(True)
         pl.addWidget(tip)
-
-        self.lm_drop = _LmDropZone()
-        self.lm_drop.paths_dropped.connect(self._lm_add_from_paths)
-        self.lm_drop.lm_dropped.connect(self._lm_load_path)
-        pl.addWidget(self.lm_drop)
 
         mid = QSplitter(Qt.Orientation.Vertical)
         mid.setChildrenCollapsible(False)
@@ -1415,11 +1443,19 @@ class AssetsStudioHost(QWidget):
         table_lab.setObjectName("mutedTip")
         th.addWidget(table_lab)
         self.lm_table = _LmDropTable()
+        self.lm_table.setObjectName("pkgFinder")
         self.lm_table.setHorizontalHeaderLabels(["LOD", "Width", "Mesh file"])
         self.lm_table.horizontalHeader().setStretchLastSection(True)
         self.lm_table.setColumnWidth(_LM_COL_LOD, 48)
         self.lm_table.setColumnWidth(_LM_COL_WIDTH, 72)
+        self.lm_table.setShowGrid(False)
+        self.lm_table.verticalHeader().setVisible(False)
         self.lm_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.lm_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.lm_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.lm_table.setToolTip(
+            "Drop .trainzmesh / .im / .fbx / .lm.txt here. Tick LOD to combine rows."
+        )
         enable_smooth_table(self.lm_table)
         self.lm_table.paths_dropped.connect(self._lm_add_from_paths)
         self.lm_table.lm_dropped.connect(self._lm_load_path)
@@ -1432,7 +1468,7 @@ class AssetsStudioHost(QWidget):
         ph.setContentsMargins(0, 0, 0, 0)
         ph.setSpacing(4)
         prev_row = QHBoxLayout()
-        prev_lab = QLabel("lm.txt preview")
+        prev_lab = QLabel("lm.txt preview · material check")
         prev_lab.setObjectName("mutedTip")
         prev_row.addWidget(prev_lab)
         prev_row.addStretch(1)
@@ -1440,10 +1476,25 @@ class AssetsStudioHost(QWidget):
         refresh.clicked.connect(self._lm_refresh_preview)
         prev_row.addWidget(refresh)
         ph.addLayout(prev_row)
+
+        # preview | material log side-by-side (same layout language as Texture)
+        twin = QSplitter(Qt.Orientation.Horizontal)
+        twin.setChildrenCollapsible(False)
+        twin.setHandleWidth(6)
         self.lm_preview = CodeEdit(syntax="trainzconfig")
         self.lm_preview.setReadOnly(True)
         self.lm_preview.setPlaceholderText("Drop meshes or Add row → preview")
-        ph.addWidget(self.lm_preview, 1)
+        twin.addWidget(self.lm_preview)
+        self.lm_log = CodeEdit(syntax="plain")
+        self.lm_log.setReadOnly(True)
+        self.lm_log.setPlaceholderText(
+            "Material names… drop .fbx / .trainzmesh to check .m.pbrmetal / .m.onetex"
+        )
+        twin.addWidget(self.lm_log)
+        twin.setStretchFactor(0, 1)
+        twin.setStretchFactor(1, 1)
+        twin.setSizes([420, 420])
+        ph.addWidget(twin, 1)
         mid.addWidget(prev_host)
         mid.setStretchFactor(0, 1)
         mid.setStretchFactor(1, 1)
@@ -1753,6 +1804,8 @@ class AssetsStudioHost(QWidget):
             "lm_remove": self._lm_remove_row,
             "lm_load": self._lm_load,
             "lm_save": self._lm_save,
+            "lm_mat_scan": self._lm_mat_scan_selected,
+            "lm_mat_fix": self._lm_mat_fix_selected,
             "normalize_kuids": self._normalize_kuids,
             "kuid_hash": self._kuid_hash,
             "copy_kuids": self._copy_kuids,
@@ -2021,8 +2074,10 @@ class AssetsStudioHost(QWidget):
         select_row = -1
         for i, (path, fam, role, set_lab) in enumerate(rows):
             self.tex_list.insertRow(i)
-            self.tex_list.setRowHeight(i, 52)
-            accent, tint = _TEX_ROLE_COLORS.get(role or "", ("#8e8e93", QColor(142, 142, 147, 22)))
+            self.tex_list.setRowHeight(i, _TEX_ROW_H)
+            accent, _tint = _TEX_ROLE_COLORS.get(
+                role or "", ("#8e8e93", QColor(142, 142, 147, 22))
+            )
             badge = _TEX_ROLE_BADGE.get(role or "", "·")
             sub = f"{fam} · {set_lab}" if role else set_lab
             self.tex_list.setCellWidget(
@@ -2038,13 +2093,15 @@ class AssetsStudioHost(QWidget):
                 it.setData(_TEX_ROLE_FAMILY, fam)
                 it.setData(_TEX_ROLE_MAP, role or "")
                 it.setToolTip(str(path))
-                it.setBackground(tint)
+                # No solid row tint — was covering selection wash (orange rim / black fill).
+                align = Qt.AlignmentFlag.AlignVCenter
                 if align_right:
-                    it.setTextAlignment(
-                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                    )
+                    align |= Qt.AlignmentFlag.AlignRight
                     it.setForeground(QColor("#98989d"))
                     it.setFont(app_font(11, QFont.Weight.Medium))
+                else:
+                    align |= Qt.AlignmentFlag.AlignLeft
+                it.setTextAlignment(align)
                 return it
 
             # Empty text — name is drawn by _TexNameCell (item text was stacking on top).
@@ -2486,10 +2543,158 @@ class AssetsStudioHost(QWidget):
         if not meshes:
             return
         for p in sorted(meshes, key=lambda x: x.name.lower()):
-            self._lm_add_row(1.0, p.name, lod=False, source=p, refresh=False)
+            self._lm_add_row(
+                1.0,
+                _lm_mesh_name_for_lm(p),
+                lod=False,
+                source=p,
+                refresh=False,
+            )
         self._lm_refresh_preview()
         n = len(meshes)
         self._msg(f"Added {n} mesh{'es' if n != 1 else ''} — Save all writes {n} file(s) unless LOD ticked")
+        self._lm_scan_materials(meshes, offer_fix=True)
+
+    def _lm_source_paths(self, *, selected_only: bool = False) -> list[Path]:
+        """Mesh source paths from table rows (prefer selected when asked)."""
+        table = getattr(self, "lm_table", None)
+        if table is None:
+            return []
+        rows = range(table.rowCount())
+        if selected_only:
+            picked = sorted({i.row() for i in table.selectedIndexes()})
+            if picked:
+                rows = picked
+        out: list[Path] = []
+        seen: set[str] = set()
+        for r in rows:
+            item = table.item(r, _LM_COL_NAME)
+            if item is None:
+                continue
+            raw = item.data(_LM_ROLE_SOURCE)
+            if not raw:
+                continue
+            p = Path(str(raw))
+            key = str(p.resolve()) if p.exists() else str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            if p.suffix.lower() in _LM_MESH_EXTS and p.is_file():
+                out.append(p)
+        return out
+
+    def _lm_log_set(self, text: str) -> None:
+        log = getattr(self, "lm_log", None)
+        if log is not None:
+            log.setPlainText(text)
+
+    def _lm_log_append(self, text: str) -> None:
+        log = getattr(self, "lm_log", None)
+        if log is not None:
+            log.appendPlainText(text)
+
+    def _lm_scan_materials(
+        self, paths: list[Path], *, offer_fix: bool = False
+    ) -> list[tuple[Path, list]]:
+        """Scan material names → lm_log; optionally prompt to rename in place."""
+        reports: list[str] = []
+        scanned: list[tuple[Path, list]] = []
+        fixable: list[tuple[Path, dict[str, str]]] = []
+        for p in paths:
+            try:
+                issues = scan_materials(p)
+            except Exception as exc:
+                reports.append(f"— {p.name} —\n(error: {exc})")
+                continue
+            reports.append(format_mat_report(p, issues))
+            scanned.append((p, issues))
+            mapping = suggested_mapping(issues)
+            if mapping and p.suffix.lower() in {".fbx", ".trainzmesh"}:
+                fixable.append((p, mapping))
+        body = "\n\n".join(reports) if reports else "(no mesh sources to scan)"
+        self._lm_log_set(body)
+        bad_n = sum(len(suggested_mapping(iss)) for _, iss in scanned)
+        if bad_n:
+            self._msg(f"Material names: {bad_n} need fix — see log")
+        elif scanned:
+            self._msg(f"Material names: {sum(len(i) for _, i in scanned)} ok")
+        if offer_fix and fixable:
+            self._lm_offer_mat_fix(fixable)
+        return scanned
+
+    def _lm_offer_mat_fix(self, fixable: list[tuple[Path, dict[str, str]]]) -> None:
+        """Ask whether to apply suggested renames now."""
+        lines: list[str] = []
+        total = 0
+        for path, mapping in fixable:
+            lines.append(path.name)
+            for old, new in mapping.items():
+                lines.append(f"  {old}  ->  {new}")
+                total += 1
+            lines.append("")
+        reply = QMessageBox.question(
+            self,
+            "Material names",
+            f"{total} material name(s) look wrong for Trainz.\n"
+            "Rename in the mesh file now?\n\n"
+            + "\n".join(lines[:40])
+            + ("\n…" if len(lines) > 40 else ""),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self._lm_log_append("\n— fix skipped —")
+            return
+        self._lm_apply_mat_fixes(fixable)
+
+    def _lm_apply_mat_fixes(self, fixable: list[tuple[Path, dict[str, str]]]) -> None:
+        ok = 0
+        fail = 0
+        notes: list[str] = []
+        for path, mapping in fixable:
+            try:
+                n = apply_renames(path, mapping, backup=True)
+                ok += n
+                notes.append(f"fixed {path.name}: {n} rename(s)")
+            except Exception as exc:
+                fail += 1
+                notes.append(f"fix failed {path.name}: {exc}")
+        paths = [p for p, _ in fixable]
+        self._lm_scan_materials(paths, offer_fix=False)
+        if notes:
+            self._lm_log_append("\n— " + " · ".join(notes) + " —")
+        self._msg(f"Material rename — {ok} ok, {fail} fail")
+
+    def _lm_mat_scan_selected(self) -> None:
+        paths = self._lm_source_paths(selected_only=True)
+        if not paths:
+            paths = self._lm_source_paths(selected_only=False)
+        if not paths:
+            QMessageBox.information(
+                self, "Materials", "Drop .fbx / .trainzmesh onto the table first."
+            )
+            return
+        self._lm_scan_materials(paths, offer_fix=False)
+
+    def _lm_mat_fix_selected(self) -> None:
+        paths = self._lm_source_paths(selected_only=True)
+        if not paths:
+            paths = self._lm_source_paths(selected_only=False)
+        if not paths:
+            QMessageBox.information(
+                self, "Materials", "Drop .fbx / .trainzmesh onto the table first."
+            )
+            return
+        scanned = self._lm_scan_materials(paths, offer_fix=False)
+        fixable = [
+            (p, suggested_mapping(issues))
+            for p, issues in scanned
+            if suggested_mapping(issues) and p.suffix.lower() in {".fbx", ".trainzmesh"}
+        ]
+        if not fixable:
+            QMessageBox.information(self, "Materials", "No material renames suggested.")
+            return
+        self._lm_offer_mat_fix(fixable)
 
     def _lm_load_path(self, path: Path) -> None:
         p = Path(path)

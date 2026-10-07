@@ -57,6 +57,8 @@ _ACTIONS: dict[str, list[tuple[str, str, bool]]] = {
     "meshops": [
         ("Add mesh row", "lm_add", False),
         ("Remove selected", "lm_remove", False),
+        ("Scan materials", "lm_mat_scan", False),
+        ("Fix material names…", "lm_mat_fix", True),
         ("Load .lm.txt…", "lm_load", False),
         ("Save all…", "lm_save", True),
     ],
@@ -341,7 +343,7 @@ class AssetsSidebar(FrostGlassFrame):
             "packages": "Queue — ลากโฟลเดอร์ asset หรือ .cdp · Pack ≤500 / ≤800 / max 1 GB",
             "config": "Edit config.chump · pack/export config.txt.",
             "texture": "Texture / Mesh → .texture.txt + Batch Resize → _prep/ · VE39.",
-            "meshops": "Texture / Mesh → LM LOD. Tick LOD to combine rows.",
+            "meshops": "Texture / Mesh → LM LOD + material .m.pbrmetal / .m.onetex check.",
             "kuid": "Normalize · hex · hash-XX folder (chump buckets).",
         }
         blurb = blurbs.get(self._page, "")
