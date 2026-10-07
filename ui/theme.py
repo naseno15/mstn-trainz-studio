@@ -310,7 +310,7 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         border: none;
         font-size: 11px;
         letter-spacing: 0.2px;
-        padding: 0 8px;
+        padding: 2px 8px;
     }}
     QScrollBar:vertical {{
         background: transparent;
@@ -338,6 +338,7 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
     }}
     QLabel#mutedTip {{
         color: {p.muted};
+        padding: 1px 0 2px 0; /* keep g/y descenders inside title bar */
     }}
     QLabel#overlayBrand {{
         color: {p.ink};
@@ -482,7 +483,8 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         background: transparent;
         border: none;
         border-radius: 14px;
-        padding: 10px 20px;
+        /* Vertical pad ≤7 — 10px + fixed-height hosts clipped descenders (g/y/p). */
+        padding: 7px 18px;
         font-weight: 600;
         min-width: 92px;
         color: {p.muted};
@@ -496,6 +498,28 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         color: {p.ink};
     }}
     QPushButton#navBtn:pressed {{
+        background: transparent;
+        border: none;
+    }}
+    /* FloatTitleBar File/Edit/… — must fit MENU_BTN_H with descenders. */
+    QPushButton#titleNavBtn {{
+        background: transparent;
+        border: none;
+        border-radius: 12px;
+        padding: 4px 14px;
+        font-weight: 600;
+        min-width: 52px;
+        color: {p.muted};
+    }}
+    QPushButton#titleNavBtn:checked {{
+        background: transparent;
+        color: white;
+    }}
+    QPushButton#titleNavBtn:hover:!checked {{
+        background: transparent;
+        color: {p.ink};
+    }}
+    QPushButton#titleNavBtn:pressed {{
         background: transparent;
         border: none;
     }}
@@ -576,7 +600,8 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         background: transparent;
         border: none;
         border-radius: 10px;
-        padding: 7px 12px;
+        /* Compact HUD uses fixedHeight 28 — 7px pad left only ~14px for glyphs. */
+        padding: 4px 12px;
         font-weight: 600;
         font-size: 12px;
         color: {p.muted};
@@ -603,11 +628,11 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         border: none;
         border-radius: 11px;
         text-align: center;
-        padding: 7px 8px;
+        padding: 5px 8px;
         font-weight: 650;
         font-size: 12px;
         color: {p.muted};
-        min-height: 18px;
+        min-height: 22px;
     }}
     QPushButton#sideTab:checked {{
         background: transparent;

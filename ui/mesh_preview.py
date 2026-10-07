@@ -194,10 +194,10 @@ class _PreviewSurface(QWidget):
         self.status = QLabel("Ready", self)
         self.status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.status.setStyleSheet(
-            "QLabel{color:#c8ccd0;background:#1a1d20;padding:4px 8px;"
+            "QLabel{color:#c8ccd0;background:#1a1d20;padding:3px 8px;"
             "font:11px 'Cascadia Mono',Consolas,monospace;}"
         )
-        self.status.setFixedHeight(22)
+        self.status.setFixedHeight(26)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)

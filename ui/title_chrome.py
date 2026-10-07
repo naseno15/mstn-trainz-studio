@@ -59,7 +59,8 @@ TITLE_MARGIN = 12
 # Keep page content below the floating bar — no logo bleed-through.
 TITLE_CONTENT_INSET = TITLE_MARGIN + TITLE_BAR_H + 6
 TITLE_RADIUS = 22.0
-MENU_BTN_H = 32
+# Room for 13px + descenders under #titleNavBtn padding (not #navBtn 10px).
+MENU_BTN_H = 34
 DROP_RADIUS = 16.0
 EDGE_GRIP = 6
 
@@ -200,7 +201,8 @@ class _MenuTitleBtn(QPushButton):
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(title, parent)
-        self.setObjectName("navBtn")
+        # titleNavBtn — compact padding; #navBtn's 10px vertical clips Lang's g.
+        self.setObjectName("titleNavBtn")
         self.setCheckable(False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(MENU_BTN_H)
@@ -514,7 +516,8 @@ class FloatTitleBar(QFrame):
         self._drop.closed.connect(self._on_drop_closed)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 8, 16, 10)
+        # Symmetric vertical pad — asymmetric 8/10 was eating descender room.
+        lay.setContentsMargins(14, 9, 16, 9)
         lay.setSpacing(6)
 
         self.lights = TrafficLights(self)
