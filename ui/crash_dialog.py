@@ -47,10 +47,12 @@ class _GlassCrashDialog(QDialog):
         detail: str,
         log_path: Path,
         kind: str = "error",
+        quit_on_ok: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._dark = _theme_dark()
+        self._quit_on_ok = bool(quit_on_ok)
         self.setWindowTitle(title)
         self.setModal(True)
         self.setWindowFlags(
@@ -153,6 +155,8 @@ class _GlassCrashDialog(QDialog):
         ok.setMinimumWidth(110)
         ok.setMinimumHeight(36)
         ok.setDefault(True)
+        if self._quit_on_ok:
+            ok.setToolTip("Close Trainz Studio")
         ok.clicked.connect(self.accept)
         row.addWidget(ok)
         cl.addLayout(row)
@@ -221,6 +225,25 @@ class _GlassCrashDialog(QDialog):
             p.fillRect(bloom, glow)
 
 
+def _find_quit_host(parent: QWidget | None) -> QWidget | None:
+    """Main window (or parent window) that owns the quit fade."""
+    if parent is not None:
+        win = parent.window()
+        if win is not None and win is not parent:
+            return win
+        if parent.isWindow():
+            return parent
+    app = QApplication.instance()
+    if app is None:
+        return None
+    from PySide6.QtWidgets import QMainWindow
+
+    for w in app.topLevelWidgets():
+        if isinstance(w, QMainWindow) and w.isVisible():
+            return w
+    return None
+
+
 def show_crash_dialog(
     *,
     title: str,
@@ -228,15 +251,23 @@ def show_crash_dialog(
     detail: str,
     log_path: Path,
     kind: str = "error",
+    quit_on_ok: bool | None = None,
     parent: QWidget | None = None,
 ) -> None:
-    """Modal glass dialog — safe to call from excepthook / boot notify."""
+    """Modal glass dialog — safe to call from excepthook / boot notify.
+
+    Live ``kind="error"`` closes the main window after OK (quit fade runs).
+    Previous-session ``kind="warning"`` only dismisses so boot can continue.
+    """
+    if quit_on_ok is None:
+        quit_on_ok = kind == "error"
     dlg = _GlassCrashDialog(
         title=title,
         summary=summary,
         detail=detail,
         log_path=log_path,
         kind=kind,
+        quit_on_ok=quit_on_ok,
         parent=parent,
     )
     if parent is not None:
@@ -252,3 +283,14 @@ def show_crash_dialog(
                 ag.center().y() - dlg.height() // 2,
             )
     dlg.exec()
+    if not quit_on_ok:
+        return
+    host = _find_quit_host(parent)
+    if host is not None:
+        # MainWindow.closeEvent runs animate_window_quit, then real close.
+        host.close()
+        return
+    app = QApplication.instance()
+    if app is not None:
+        app.exit(1)
+    raise SystemExit(1)

@@ -552,6 +552,7 @@ class GlassTipBubble(QWidget):
 _SKIP_BUTTON_LIFT = frozenset(
     {
         "navBtn",
+        "titleNavBtn",
         "navIconBtn",
         "segBtn",
         "sideTab",
@@ -1517,6 +1518,56 @@ class HubRevealOverlay(QWidget):
             vig.setColorAt(0.7, QColor(0, 0, 0, 0))
             vig.setColorAt(1.0, QColor(0, 0, 0, vig_a if self._dark else vig_a // 2))
             p.fillRect(full, vig)
+
+
+def animate_window_quit(
+    window: QWidget,
+    on_done: Callable[[], None],
+    *,
+    ms: int = 280,
+) -> None:
+    """Compositor fade + slight shrink on quit.
+
+    Uses windowOpacity / geometry only — never QGraphicsOpacityEffect on
+    MainWindow or GL hosts (that freezes the view — see HANDOFF).
+    """
+    if window is None:
+        on_done()
+        return
+    prev = getattr(window, "_quit_anim", None)
+    if isinstance(prev, QParallelAnimationGroup) and prev.state() == QParallelAnimationGroup.State.Running:
+        return
+
+    group = QParallelAnimationGroup(window)
+    window._quit_anim = group  # type: ignore[attr-defined]
+
+    op = QPropertyAnimation(window, b"windowOpacity", window)
+    op.setDuration(ms)
+    op.setStartValue(float(window.windowOpacity()))
+    op.setEndValue(0.0)
+    op.setEasingCurve(QEasingCurve.Type.InCubic)
+    group.addAnimation(op)
+
+    if not window.isMaximized() and not window.isFullScreen():
+        geo = QRect(window.geometry())
+        dx = max(10, geo.width() // 36)
+        dy = max(8, geo.height() // 36)
+        # Shrink + sink a touch — macOS-ish close settle.
+        end = geo.adjusted(dx, dy + 10, -dx, -dy + 4)
+        geo_anim = QPropertyAnimation(window, b"geometry", window)
+        geo_anim.setDuration(ms)
+        geo_anim.setStartValue(geo)
+        geo_anim.setEndValue(end)
+        geo_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        group.addAnimation(geo_anim)
+
+    def _finish() -> None:
+        if getattr(window, "_quit_anim", None) is group:
+            window._quit_anim = None  # type: ignore[attr-defined]
+        on_done()
+
+    group.finished.connect(_finish)
+    group.start(QParallelAnimationGroup.DeletionPolicy.DeleteWhenStopped)
 
 
 def animate_language_swap(root: QWidget, apply_fn: Callable[[], None], *, ms: int = 320) -> None:

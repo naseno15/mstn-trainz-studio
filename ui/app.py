@@ -136,9 +136,7 @@ from .motion import (
 from .theme import apply_theme, app_font, palette, qpalette_for
 from .title_chrome import (
     EDGE_GRIP,
-    TITLE_BAR_H,
     TITLE_CONTENT_INSET,
-    TITLE_MARGIN,
     FloatTitleBar,
     edge_at,
     install_frameless,
@@ -223,6 +221,10 @@ def _install_crash_log() -> Path:
                     kind="error",
                     parent=app.activeWindow(),
                 )
+                # OK starts MainWindow quit fade — let the event loop finish it.
+                return
+        except SystemExit:
+            raise
         except Exception:
             pass
         sys.__excepthook__(exc_type, exc, tb)
@@ -732,7 +734,7 @@ class SegmentedControl(QFrame):
                 self._mode = mid
                 self._committed = mid
             if compact:
-                btn.setFixedHeight(28)
+                btn.setFixedHeight(30)  # #segBtn 4px pad + 12px glyphs + descenders
             self._group.addButton(btn, mid)
             btn.installEventFilter(self)
             lay.addWidget(btn)
@@ -2167,7 +2169,7 @@ class MainWindow(QMainWindow):
             self._chrome_layer,
         )
         self._shortcut_bar.setObjectName("shortcutBar")
-        self._shortcut_bar.setFixedHeight(22)
+        self._shortcut_bar.setFixedHeight(26)  # 11px + pad — was 22, clipped descenders
         self._shortcut_bar.setAlignment(
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
         )
@@ -5081,8 +5083,8 @@ class MainWindow(QMainWindow):
         w = max(self.pbr_hud.sizeHint().width(), 320)
         self.pbr_hud.setFixedWidth(w)
         x = (host.width() - w) // 2
-        # Sit below the floating title bar (not under File/Edit chrome).
-        y = TITLE_MARGIN + TITLE_BAR_H + 8
+        # Chrome layer already starts under TITLE_CONTENT_INSET — only a small gap.
+        y = 4
         self.pbr_hud.move(max(8, x), y)
         self.pbr_hud.show()
         self.pbr_hud.raise_()
@@ -7484,6 +7486,24 @@ class MainWindow(QMainWindow):
             break
 
     def closeEvent(self, event) -> None:
+        if not getattr(self, "_quit_ready", False):
+            if getattr(self, "_quit_animating", False):
+                event.ignore()
+                return
+            event.ignore()
+            self._quit_animating = True
+            bar = getattr(self, "_title_bar", None)
+            if bar is not None and hasattr(bar, "_close_menu"):
+                bar._close_menu()  # type: ignore[attr-defined]
+            from .motion import animate_window_quit
+
+            def _finish() -> None:
+                self._quit_ready = True
+                self.close()
+
+            animate_window_quit(self, _finish)
+            return
+
         self._stop_anim()
         if self._worker is not None and self._worker.isRunning():
             self._worker.wait(2000)
