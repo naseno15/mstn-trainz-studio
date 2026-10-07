@@ -70,29 +70,35 @@ EDGE_GRIP = 6
 def begin_frameless_move(window: QWidget | None) -> bool:
     """Start a system move on a frameless top-level window.
 
-    Qt ``startSystemMove`` often no-ops on maximized frameless HWND on Windows.
-    Win32 ``WM_NCLBUTTONDOWN`` / ``HTCAPTION`` is the reliable path (also lets
-    the user drag a maximized window onto another monitor).
+    Prefer Qt ``startSystemMove`` — that is what the title bar used and it works
+    on frameless HWND. Win32 ``WM_NCLBUTTONDOWN``/``HTCAPTION`` often no-ops
+    without non-client chrome (returns success but the window never moves).
     """
     if window is None:
         return False
-    host = window.window() if window is not None else None
+    host = window.window()
     if host is None:
         host = window
+    wh = host.windowHandle()
+    if wh is not None:
+        try:
+            if wh.startSystemMove():
+                return True
+        except Exception:
+            pass
     if sys.platform == "win32":
         try:
             import ctypes
 
             hwnd = int(host.winId())
-            # ReleaseCapture + WM_NCLBUTTONDOWN(HTCAPTION) — blocks until drag ends.
-            ctypes.windll.user32.ReleaseCapture()
-            ctypes.windll.user32.SendMessageW(hwnd, 0x00A1, 2, 0)
+            user32 = ctypes.windll.user32
+            user32.ReleaseCapture()
+            # WM_SYSCOMMAND + SC_MOVE|HTCAPTION — works on borderless windows
+            # when startSystemMove is unavailable.
+            user32.PostMessageW(hwnd, 0x0112, 0xF012, 0)
             return True
         except Exception:
             pass
-    wh = host.windowHandle()
-    if wh is not None:
-        return bool(wh.startSystemMove())
     return False
 
 
@@ -574,6 +580,8 @@ class FloatTitleBar(QFrame):
         self._title.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
+        # Title text is the main drag handle — must not eat mouse presses.
+        self._title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         lay.addWidget(self._title, 0, Qt.AlignmentFlag.AlignVCenter)
 
         attach_hover_bubble(

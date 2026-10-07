@@ -19,8 +19,8 @@
 |--------|------|
 | Root cause (flash) | First `QOpenGLWidget` parented into an already-shown Win32 HWND recreates that platform window → looks like the app closed and reopened during warm |
 | Fix (flash) | `MainWindow.prewarm_mesh_gl()` before `showMaximized()` — Mesh chrome + `MeshView` while hidden; Finder preview GL still idle after overlay (shares context) |
-| Root cause (no drag) | Overlay card children ate clicks; Qt `startSystemMove` no-ops on maximized frameless Win HWND |
-| Fix (drag) | `begin_frameless_move` → Win32 `WM_NCLBUTTONDOWN`/`HTCAPTION`; card `WA_TransparentForMouseEvents`; title bar kept above frost each stage |
+| Root cause (no drag) | Overlay card children ate clicks; Win32 `HTCAPTION` no-ops on frameless (broke title-bar drag that used `startSystemMove`) |
+| Fix (drag) | `begin_frameless_move` prefers `startSystemMove`, Win32 `SC_MOVE` fallback; title label + overlay card mouse-transparent; title bar above frost |
 | Root cause (not max) | Early HWND from GL prewarm / failed drag left window restored after frost |
 | Fix (max) | `setWindowState(Maximized)` on first show + `showMaximized()` again after `_hide_overlay` |
 | Boot order | `go_home` → `prewarm_mesh_gl` → `showMaximized` → frost → `warmup_hub_studios` → remmaximize |
