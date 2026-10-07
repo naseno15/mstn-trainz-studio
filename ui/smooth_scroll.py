@@ -5,10 +5,12 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
+    QApplication,
     QHeaderView,
     QScrollArea,
     QTableWidget,
     QTreeWidget,
+    QWidget,
 )
 
 # Heavier coast = longer glide; softer impulse = less twitchy wheel steps.
@@ -54,16 +56,56 @@ class DampedScrollFilter(QObject):
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
         self._view.viewport().installEventFilter(self)
+        # Wheel hits the child under the cursor. Qt does not retarget that
+        # event onto the viewport, so a viewport-only filter never scrolls.
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
     def _bar(self):
         return self._view.verticalScrollBar()
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+    def _under_view(self, obj) -> bool:
+        view = getattr(self, "_view", None)
+        if view is None or not isinstance(obj, QWidget):
+            return False
         try:
-            vp = self._view.viewport()
+            vp = view.viewport()
         except RuntimeError:
             return False
-        if obj is not vp or event.type() != QEvent.Type.Wheel:
+        w: QWidget | None = obj
+        while w is not None:
+            if w is vp or w is view:
+                return True
+            w = w.parentWidget()
+        return False
+
+    def _inner_scroll_takes(self, obj, vp, impulse: float) -> bool:
+        """A nested scroll area that can still move keeps the wheel."""
+        w: QWidget | None = obj if isinstance(obj, QWidget) else None
+        while w is not None and w is not vp and w is not self._view:
+            if isinstance(w, QAbstractScrollArea):
+                bar = w.verticalScrollBar()
+                lo, hi = bar.minimum(), bar.maximum()
+                if hi > lo and (
+                    (impulse > 0 and bar.value() < hi)
+                    or (impulse < 0 and bar.value() > lo)
+                ):
+                    return True
+            w = w.parentWidget()
+        return False
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        view = getattr(self, "_view", None)
+        if view is None:
+            return False
+        try:
+            vp = view.viewport()
+        except RuntimeError:
+            return False
+        if not self._under_view(obj):
             return False
         pixel = event.pixelDelta().y()
         angle = event.angleDelta().y()
@@ -72,6 +114,8 @@ class DampedScrollFilter(QObject):
         elif angle != 0:
             impulse = -float(angle) / 120.0 * self._impulse_notch
         else:
+            return False
+        if obj is not vp and self._inner_scroll_takes(obj, vp, impulse):
             return False
         bar = self._bar()
         lo = bar.minimum()
@@ -163,12 +207,15 @@ def enable_smooth_scroll(
     bar.setSingleStep(4)
     bar.setPageStep(36)
     view.setAlternatingRowColors(True)
-    view._damped_scroll = DampedScrollFilter(  # type: ignore[attr-defined]
+    _bind_damped(
         view,
-        coast=coast,
-        impulse_pixel=impulse_pixel,
-        impulse_notch=impulse_notch,
-        vel_cap=vel_cap,
+        DampedScrollFilter(
+            view,
+            coast=coast,
+            impulse_pixel=impulse_pixel,
+            impulse_notch=impulse_notch,
+            vel_cap=vel_cap,
+        ),
     )
 
 
@@ -207,7 +254,7 @@ def enable_smooth_scroll_area(area: QScrollArea, *, coast: float = DEFAULT_COAST
     bar = area.verticalScrollBar()
     bar.setSingleStep(6)
     bar.setPageStep(48)
-    area._damped_scroll = DampedScrollFilter(area, coast=coast)  # type: ignore[attr-defined]
+    _bind_damped(area, DampedScrollFilter(area, coast=coast))
 
 
 def enable_code_scroll(area: QAbstractScrollArea) -> None:
@@ -216,12 +263,30 @@ def enable_code_scroll(area: QAbstractScrollArea) -> None:
     bar = area.verticalScrollBar()
     bar.setSingleStep(3)
     bar.setPageStep(32)
-    area._damped_scroll = DampedScrollFilter(  # type: ignore[attr-defined]
+    _bind_damped(
         area,
-        coast=CODE_COAST,
-        impulse_pixel=CODE_IMPULSE_PIXEL,
-        impulse_notch=CODE_IMPULSE_NOTCH,
-        vel_cap=CODE_VEL_CAP,
-        stop_vel=CODE_STOP_VEL,
-        edge_damp=CODE_EDGE_DAMP,
+        DampedScrollFilter(
+            area,
+            coast=CODE_COAST,
+            impulse_pixel=CODE_IMPULSE_PIXEL,
+            impulse_notch=CODE_IMPULSE_NOTCH,
+            vel_cap=CODE_VEL_CAP,
+            stop_vel=CODE_STOP_VEL,
+            edge_damp=CODE_EDGE_DAMP,
+        ),
     )
+
+
+def _bind_damped(host: QAbstractScrollArea, filt: DampedScrollFilter) -> None:
+    """Keep one live filter. A replaced filter stays installed and then throws."""
+    old = getattr(host, "_damped_scroll", None)
+    if old is not None and old is not filt:
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(old)
+        try:
+            host.viewport().removeEventFilter(old)
+        except RuntimeError:
+            pass
+        old.deleteLater()
+    host._damped_scroll = filt  # type: ignore[attr-defined]

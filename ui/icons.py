@@ -24,6 +24,8 @@ GLYPHS: dict[str, str] = {
     "redo": "\ue15a",
     "folder": "\ue2c7",
     "folder_open": "\ue2c8",
+    "lock": "\ue897",
+    "palette": "\ue40a",
     "file_open": "\ueaf3",
     "refresh": "\ue5d5",
     "close": "\ue5cd",
@@ -47,6 +49,7 @@ GLYPHS: dict[str, str] = {
     "layers": "\ue53b",
     "graphic_eq": "\ue1b8",
     "tune": "\ue429",
+    "texture": "\ue421",
     "upload_file": "\ue9fc",
 }
 

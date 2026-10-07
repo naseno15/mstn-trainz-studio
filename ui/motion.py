@@ -1010,8 +1010,23 @@ def animate_geometry(
     *,
     on_tick=None,
     on_done=None,
+    min_frame_ms: int | None = None,
 ) -> QPropertyAnimation:
-    """Slide a floating panel (Editor dock overlay) — does not resize GL."""
+    """Slide a floating panel (Editor dock overlay) — does not resize GL.
+
+    ``on_tick`` throttled only on low-end — on normal PCs every frame so chrome
+    tracks the dock (32ms throttle made slides look desynced/stuttery).
+    """
+    from time import monotonic
+
+    if min_frame_ms is None:
+        try:
+            from ..util.hw import prefer_instant_panels
+
+            min_frame_ms = 32 if prefer_instant_panels() else 0
+        except Exception:
+            min_frame_ms = 0
+
     prev = getattr(widget, "_geo_anim", None)
     if prev is not None:
         prev.stop()
@@ -1021,14 +1036,24 @@ def animate_geometry(
     anim.setEndValue(QRect(target))
     anim.setEasingCurve(QEasingCurve.Type.OutCubic)
     widget._geo_anim = anim  # type: ignore[attr-defined]
+    last = {"t": 0.0}
+    throttle = max(0, int(min_frame_ms))
 
     def _tick(_v=None) -> None:
-        if on_tick is not None:
-            on_tick()
+        if on_tick is None:
+            return
+        if throttle > 0:
+            now = monotonic()
+            if (now - last["t"]) * 1000.0 < throttle:
+                return
+            last["t"] = now
+        on_tick()
 
     def _finish() -> None:
         if getattr(widget, "_geo_anim", None) is anim:
             widget._geo_anim = None  # type: ignore[attr-defined]
+        if on_tick is not None:
+            on_tick()
         if on_done is not None:
             on_done()
 

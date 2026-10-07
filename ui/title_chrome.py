@@ -1,4 +1,4 @@
-"""Floating glass title bar — macOS traffic lights + File/Edit/View/Lang menus.
+"""Floating glass title bar — macOS traffic lights + File/Edit/View/Tools/Theme/Lang.
 
 Borderless window chrome: capsule sits inset from the top edges (not docked).
 Dropdowns animate open with hover bubble + orange selection pill.
@@ -490,7 +490,7 @@ class GlassDropMenu(QWidget):
 
 
 class FloatTitleBar(QFrame):
-    """Inset glass capsule: traffic lights + File / Edit / View / Theme / Lang."""
+    """Inset glass capsule: traffic lights + File / Edit / View / Tools / Theme / Lang."""
 
     close_clicked = Signal()
     minimize_clicked = Signal()
@@ -528,7 +528,7 @@ class FloatTitleBar(QFrame):
         lay.addSpacing(10)
 
         self._btns: dict[str, _MenuTitleBtn] = {}
-        for key in ("File", "Edit", "View", "Theme", "Lang"):
+        for key in ("File", "Edit", "View", "Tools", "Theme", "Lang"):
             btn = _MenuTitleBtn(key, self)
             btn.clicked.connect(lambda _=False, k=key: self._on_menu_clicked(k))
             self._btns[key] = btn

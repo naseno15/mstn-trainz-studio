@@ -304,6 +304,15 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         padding: 2px 8px;
         min-height: 28px;
     }}
+    QLabel#statusLogMsg {{
+        color: {p.muted};
+        background: transparent;
+        border: none;
+        padding: 0 4px;
+    }}
+    QLabel#statusLogMsg:hover {{
+        color: {p.ink};
+    }}
     QLabel#shortcutBar {{
         color: {p.muted};
         background: transparent;
@@ -379,6 +388,10 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         background: transparent;
         border: none;
         border-radius: 30px;
+    }}
+    QFrame#fpsHud {{
+        background: transparent;
+        border: none;
     }}
     QLabel#bakeStage {{
         font-weight: 600;
@@ -1062,6 +1075,123 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         border: none;
         background: transparent;
     }}
+    /* Editor dock — one control height. Vertical padding is 0: Qt adds
+       padding on top of min-height, which made rows 42px and clipped setFixedHeight(36). */
+    QFrame#editorDock QLineEdit,
+    QFrame#editorDock QComboBox,
+    QFrame#editorDock QDoubleSpinBox,
+    QFrame#editorDock QSpinBox {{
+        padding: 0 10px;
+        min-height: 36px;
+        max-height: 36px;
+        border: none;
+        border-radius: 8px;
+    }}
+    QFrame#editorDock QDoubleSpinBox::up-button, QFrame#editorDock QDoubleSpinBox::down-button,
+    QFrame#editorDock QSpinBox::up-button, QFrame#editorDock QSpinBox::down-button {{
+        width: 14px;
+    }}
+    /* Texture Maps viewer — role / channel chrome */
+    QFrame#mapRoleWell {{
+        {well_list}
+        border-radius: 14px;
+    }}
+    QLabel#mapSectionLabel {{
+        color: {p.muted};
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+    }}
+    QPushButton#mapRoleAlbedo, QPushButton#mapRoleNormal, QPushButton#mapRoleParam {{
+        background: {"rgba(0,0,0,0.04)" if p.mode == "light" else "rgba(255,255,255,0.04)"};
+        border: 1px solid {p.line};
+        border-radius: 10px;
+        padding: 4px 8px;
+        font-weight: 650;
+        font-size: 12px;
+        color: {p.muted};
+    }}
+    QPushButton#mapRoleAlbedo:checked {{
+        background: rgba(48, 209, 88, 0.22);
+        border: 1px solid rgba(48, 209, 88, 0.55);
+        color: {"#1a7a38" if p.mode == "light" else "#6dff9a"};
+    }}
+    QPushButton#mapRoleNormal:checked {{
+        background: rgba(100, 210, 255, 0.20);
+        border: 1px solid rgba(100, 210, 255, 0.55);
+        color: {"#0a6a9a" if p.mode == "light" else "#9ae4ff"};
+    }}
+    QPushButton#mapRoleParam:checked {{
+        background: rgba(255, 159, 10, 0.20);
+        border: 1px solid rgba(255, 159, 10, 0.55);
+        color: {"#9a5a00" if p.mode == "light" else "#ffc46a"};
+    }}
+    QPushButton#mapRoleAlbedo:disabled, QPushButton#mapRoleNormal:disabled,
+    QPushButton#mapRoleParam:disabled {{
+        color: {"rgba(110,110,115,0.35)" if p.mode == "light" else "rgba(235,235,245,0.22)"};
+        border-color: {"rgba(0,0,0,0.06)" if p.mode == "light" else "rgba(255,255,255,0.06)"};
+        background: transparent;
+    }}
+    QPushButton#mapChR, QPushButton#mapChG, QPushButton#mapChB, QPushButton#mapChA {{
+        background: {"rgba(0,0,0,0.03)" if p.mode == "light" else "rgba(255,255,255,0.04)"};
+        border: 1px solid {p.line};
+        border-radius: 10px;
+        font-weight: 750;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+    }}
+    QPushButton#mapChR {{ color: #ff6b63; }}
+    QPushButton#mapChG {{ color: #3dd068; }}
+    QPushButton#mapChB {{ color: #6ad4ff; }}
+    QPushButton#mapChA {{ color: {p.muted}; }}
+    QPushButton#mapChR:checked {{
+        background: rgba(255, 69, 58, 0.28);
+        border: 1px solid rgba(255, 69, 58, 0.65);
+        color: #ff8f88;
+    }}
+    QPushButton#mapChG:checked {{
+        background: rgba(48, 209, 88, 0.26);
+        border: 1px solid rgba(48, 209, 88, 0.65);
+        color: #6dff9a;
+    }}
+    QPushButton#mapChB:checked {{
+        background: rgba(100, 210, 255, 0.26);
+        border: 1px solid rgba(100, 210, 255, 0.65);
+        color: #9ae4ff;
+    }}
+    QPushButton#mapChA:checked {{
+        background: {"rgba(0,0,0,0.08)" if p.mode == "light" else "rgba(255,255,255,0.12)"};
+        border: 1px solid {p.line};
+        color: {p.ink};
+    }}
+    QPushButton#mapToolBtn {{
+        {raised}
+        border-radius: 10px;
+        padding: 4px 8px;
+        font-weight: 600;
+        font-size: 11px;
+        color: {p.ink};
+    }}
+    QPushButton#mapToolBtn:hover {{
+        color: {p.ink};
+    }}
+    QPushButton#mapGhostBtn {{
+        background: transparent;
+        border: 1px solid {p.line};
+        border-radius: 10px;
+        padding: 4px 10px;
+        font-weight: 600;
+        font-size: 11px;
+        color: {p.muted};
+    }}
+    QPushButton#mapGhostBtn:hover {{
+        color: {p.ink};
+        border-color: {p.muted};
+    }}
+    QWidget#mapPreviewStage {{
+        background: transparent;
+        border: none;
+    }}
     QFrame#lmField {{
         {well_list}
         border-radius: 12px;
@@ -1171,6 +1301,10 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
     QStackedWidget {{
         background: {p.bg};
         color: {p.ink};
+    }}
+    /* Editor dock stack must not paint a square black slab over the frost. */
+    QStackedWidget#editorTabStack {{
+        background: transparent;
     }}
     QWidget#loadingOverlay {{
         background: transparent;
