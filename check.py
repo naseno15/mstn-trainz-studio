@@ -453,6 +453,62 @@ def test_ve_rules_pack() -> None:
         assert 102 in scan_sound(wav).codes
 
 
+def test_param_map_and_bake_denoise() -> None:
+    """Parameter channel ops + bake denoise engine (OpenCV path, no Save)."""
+    from PIL import Image
+
+    from trainz_studio.io.bake_denoise import (
+        DenoiseSettings,
+        compose_with_alpha,
+        denoise_image,
+        oidn_available,
+    )
+    from trainz_studio.io.param_map_edit import (
+        apply_fill,
+        apply_offset,
+        apply_scale,
+        channel_stats,
+        paint_dab,
+        save_parameter,
+    )
+    from trainz_studio import PKG_ROOT
+
+    rgba = np.zeros((16, 16, 4), dtype=np.uint8)
+    rgba[..., 0] = 10
+    rgba[..., 1] = 80
+    rgba[..., 2] = 200
+    rgba[..., 3] = 0
+    filled = apply_fill(rgba, {"A"}, 255)
+    assert int(filled[0, 0, 3]) == 255 and int(filled[0, 0, 1]) == 80
+    off = apply_offset(filled, {"G"}, 20)
+    assert int(off[0, 0, 1]) == 100
+    scaled = apply_scale(off, {"B"}, 0.5)
+    assert int(scaled[0, 0, 2]) == 100
+    paint_dab(scaled, {"R"}, 8, 8, 3, 200, hardness=1.0, opacity=1.0)
+    assert int(scaled[8, 8, 0]) == 200
+    st = channel_stats(scaled)
+    assert st["G"][2] == 100.0
+
+    # speckled gray bake → OpenCV denoise keeps shape; OIDN optional
+    noise = np.random.default_rng(0).integers(40, 220, (32, 32), dtype=np.uint8)
+    bgr = np.dstack([noise, noise, noise])
+    out, engine = denoise_image(
+        bgr,
+        DenoiseSettings(strength="light", prefer_oidn=False, preserve_black=False),
+    )
+    assert out.shape[:2] == bgr.shape[:2]
+    assert engine.startswith("opencv")
+    assert oidn_available() == (PKG_ROOT / "vendor" / "oidn" / "bin" / "oidnDenoise.exe").is_file()
+    rgba_prev = compose_with_alpha(out, None)
+    assert rgba_prev.shape[2] == 4 and int(rgba_prev[0, 0, 3]) == 255
+
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "param.png"
+        Image.fromarray(scaled, mode="RGBA").save(src)
+        save_parameter(src, scaled, bak=True)
+        assert src.with_suffix(".png.bak").is_file()
+
+
 def test_tex_map_edit_channels_and_bak() -> None:
     """Maps viewer: channel mute + Trainz sibling .bak on first save."""
     from PIL import Image
@@ -1148,23 +1204,44 @@ def test_lerp_pill_rect() -> None:
 
 def test_rounded_table_rows_install() -> None:
     """Studio tables get rounded-row delegate via enable_smooth_scroll."""
-    from PySide6.QtCore import QStringListModel
+    from PySide6.QtCore import QStringListModel, Qt
+    from PySide6.QtGui import QPalette
     from PySide6.QtWidgets import QApplication, QListView, QTableWidget
 
     app = QApplication.instance() or QApplication([])
     del app
     from trainz_studio.ui.smooth_scroll import enable_smooth_scroll, enable_smooth_table
-    from trainz_studio.ui.table_chrome import RoundedRowDelegate, _row_rect, _view_column_count
+    from trainz_studio.ui.table_chrome import (
+        ROW_RADIUS,
+        RoundedRowDelegate,
+        _paint_selection_bubble,
+        _row_rect,
+        _view_column_count,
+    )
 
     t = QTableWidget(2, 3)
+    t.setObjectName("pkgFinder")
+    t.horizontalHeader().setObjectName("pkgFinderHeader")
     enable_smooth_table(t)
     assert getattr(t, "_rounded_rows_installed", False)
     assert isinstance(t.itemDelegate(), RoundedRowDelegate)
+    assert t.horizontalHeader().objectName() == "pkgFinderHeader"
+    assert t.palette().color(QPalette.ColorRole.Highlight).alpha() == 0
     enable_smooth_table(t)  # idempotent
     assert isinstance(t.itemDelegate(), RoundedRowDelegate)
     assert _view_column_count(t) == 3
     # Must not touch model.columnCount (PySide binding traps differ by model type)
     _row_rect(t, t.model().index(0, 0))
+    assert ROW_RADIUS >= 12.0
+    # bubble painter must accept a normal row rect (smoke)
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtCore import QRect
+
+    img = QImage(80, 40, QImage.Format.Format_ARGB32)
+    img.fill(Qt.GlobalColor.transparent)
+    p = QPainter(img)
+    _paint_selection_bubble(p, QRect(4, 4, 72, 32))
+    p.end()
 
     lv = QListView()
     lv.setModel(QStringListModel(["a", "b"]))
@@ -1444,8 +1521,13 @@ def test_float_chrome_bookends() -> None:
     from trainz_studio.ui.assets.studio import AssetsStudioHost
 
     assert AssetsPageNav.SUITE_PAGES["assets"][0] == ("packages", "config", "kuid")
-    assert AssetsPageNav.SUITE_PAGES["texmesh"][0] == ("texture", "meshops")
-    assert AssetsSubNav.PAGES == ("texture", "meshops")
+    assert AssetsPageNav.SUITE_PAGES["texmesh"][0] == (
+        "texture",
+        "parameter",
+        "denoise",
+        "meshops",
+    )
+    assert AssetsSubNav.PAGES == ("texture", "parameter", "denoise", "meshops")
 
     # Right props dock is a main-split sibling of left sidebar (not under path/nav).
     assets = AssetsStudioHost(on_home=lambda: None, on_theme=lambda: None)
@@ -1459,6 +1541,12 @@ def test_float_chrome_bookends() -> None:
     assert not assets._right_dock_host.isHidden()
     assets._on_page("meshops")
     assert assets._right_dock.currentIndex() == 1
+    assets._on_page("parameter")
+    assert assets._sub_page == "parameter"
+    assert hasattr(assets, "param_page")
+    assets._on_page("denoise")
+    assert assets._sub_page == "denoise"
+    assert hasattr(assets, "denoise_page")
     assets.set_suite("assets")
     assert assets._page == "packages"
     assets.deleteLater()
@@ -1709,6 +1797,49 @@ def test_frost_clears_on_set_dark() -> None:
     frame.set_dark(False)
     assert frame._dark is False
     assert frame._frost is None
+    frame.deleteLater()
+    del app
+
+
+def test_frost_shadow_room() -> None:
+    """Panel/chip shadow must reserve fade room inside the widget (no hard clip)."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.float_chrome import FLOAT_NAV_HEIGHT
+    from trainz_studio.ui.frost import (
+        FROST_CONTENT_MARGINS,
+        FrostGlassFrame,
+        paint_soft_shadow,
+    )
+    from trainz_studio.ui.title_chrome import TITLE_BAR_H
+
+    l, t, r, b = FROST_CONTENT_MARGINS
+    assert l >= 24 and r >= 24 and t >= 20 and b >= 26
+    assert FLOAT_NAV_HEIGHT >= 70
+    assert TITLE_BAR_H >= 58
+
+    app = QApplication.instance() or QApplication([])
+    frame = FrostGlassFrame()
+    frame.resize(200, 320)
+    img = QImage(frame.size(), QImage.Format.Format_ARGB32)
+    img.fill(0)
+    frame.render(img)  # paintEvent soft-shadow path must not throw
+    assert not img.isNull()
+
+    p = QPainter(img)
+    assert p.isActive()
+    paint_soft_shadow(
+        p,
+        QRectF(20, 20, 160, 260),
+        radius=14.0,
+        dark=True,
+        clip=QRectF(1, 1, 198, 318),
+        max_spread=14.0,
+        layers=14,
+    )
+    p.end()
     frame.deleteLater()
     del app
 
@@ -2180,6 +2311,14 @@ def test_trainzmesh_attachments() -> None:
     assert np.allclose(atts[1].pos, (1.0, 2.0, 3.0), atol=1e-5)
     assert np.allclose(atts[0].orient, (1, 0, 0, 0, 1, 0, 0, 0, 1), atol=1e-5)
 
+    # Finite garbage (all 10000) is not an attachment — it used to fill Name.
+    ghost = b"a.ghostname"
+    junk = bytes([len(ghost)]) + ghost + struct.pack(">7f", *([10000.0] * 7))
+    assert parse_trainzmesh_attachments(junk) == []
+    from trainz_studio.io.tzmf_edit import parse_attachment_records
+
+    assert parse_attachment_records(junk) == []
+
     # Live KIHA body when present: count + one known point vs sibling FBX
     live = (
         Path(__file__).resolve().parents[1]
@@ -2538,6 +2677,12 @@ def test_editor_find_config_and_workspace() -> None:
     assert detail.type_combo.minimumHeight() == 36
     assert detail.mat_color._swatch.minimumHeight() == 36
     assert detail.mat_color._swatch.text()  # palette glyph, not an empty square
+    assert [ch.tag.text() for ch in detail.mat_color._channels] == ["R", "G", "B", "A"]
+    chan = detail.mat_color._spins[0]
+    assert chan.prefix() == ""
+    shown = chan.lineEdit().text()
+    assert shown.strip().lstrip("-").isdigit()
+    assert chan.lineEdit().focusPolicy() != detail.mat_color._channels[0].tag.focusPolicy()
     from trainz_studio.ui.mesh_prop_tree import TextureSlotRow
 
     slot = TextureSlotRow("txAlbedo", "body.texture")
@@ -2554,7 +2699,16 @@ def test_editor_find_config_and_workspace() -> None:
     assert line is not None
     QApplication.sendEvent(line, _wheel())
     assert abs(spin.value() - 2.5) < 1e-6
-    assert ws.attachments_page.detail.loc[0].maximumWidth() <= 80
+    loc0 = ws.attachments_page.detail.loc[0]
+    assert loc0.maximumWidth() > 200  # same column as Name, not a 76px stub
+    assert loc0.minimumHeight() == 36
+    att = ws.attachments_page.detail
+    att.name_edit.setText("ghost")
+    att.loc[0].setValue(10000)
+    att.clear()
+    assert att.name_edit.text() == ""
+    assert att.loc[0].value() == 0.0
+    assert not att.isEnabled()
     # Noto label column + four color channels. Still far below the 480 dock.
     assert ws.meshes_page.detail.minimumSizeHint().width() <= 360
     assert ws.attachments_page.detail.minimumSizeHint().width() <= 300
@@ -3006,6 +3160,7 @@ def main() -> int:
     test_assets_kuid_normalize()
     test_mat_names()
     test_frost_clears_on_set_dark()
+    test_frost_shadow_room()
     test_damped_scroll_passes_when_table_cant_scroll()
     test_island_light_positions()
     test_multi_mesh_keys()
@@ -3042,6 +3197,8 @@ def main() -> int:
     test_probe_image_and_pbr_sort()
     test_stems_match_family()
     test_image_prep_and_ve39()
+    test_tex_map_edit_channels_and_bak()
+    test_param_map_and_bake_denoise()
     test_ve_rules_pack()
     test_i18n_catalogs_and_fonts()
     test_merge_lamp_packs()

@@ -33,9 +33,20 @@ throttle-power {
 }
 """
 
+# traincar that *mentions* enginespec in kuid-table must NOT open Engine Tuner
+TRAINCAR = """
+kuid                                    <kuid:9:9>
+kind                                    traincar
+username                                "Daewoo"
+kuid-table {
+  enginespec                            <kuid:1:2>
+}
+"""
+
 
 def main() -> None:
     assert looks_like_enginespec(SAMPLE)
+    assert not looks_like_enginespec(TRAINCAR)
     cfg = load_config_from_text(SAMPLE)
     text = config_to_text(cfg)
     assert looks_like_enginespec(text)
@@ -53,6 +64,11 @@ def main() -> None:
     again = asset_config_text(chump, "<kuid:1:2>")
     assert looks_like_enginespec(again)
     assert "Test Spec" in again or "enginespec" in again.lower()
+
+    # Packages Save text on config.txt uses the same replace_asset_config path
+    edited = SAMPLE.replace("Test Spec", "Edited Spec")
+    replace_asset_config(chump, "<kuid:1:2>", edited)
+    assert "Edited Spec" in asset_config_text(chump, "<kuid:1:2>")
     print("_check_enginespec_cdp: ok")
 
 
