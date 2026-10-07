@@ -1,6 +1,134 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-07 (Asia/Bangkok) — v0.3.1 full onefile (HDRI+fonts+Assimp)  
+**Last updated:** 2026-10-07 (Asia/Bangkok) — Mesh nav flanks Home; Editor dock has no Attachments/Meshes tabs
+
+### Mesh Studio nav + Editor fields (2026-10-07)
+
+Bottom capsule is symmetric: **Preview · Meshes Editor** | Home | **Attachs Editor · Settings**. The right dock no longer has an Attachments/Meshes tab strip — the nav picks the page. Legacy page id `editor` still opens whichever tab is already showing (old projects).
+
+Meshes fields share one height (36) and one value column. Texture browse is a folder icon; `$pbr-env*` is a lock; color pick is a palette glyph on the swatch.
+
+### Double Sided — preview until Save (2026-10-07)
+
+Checkbox used to emit a material edit, which rewrote tzMF and called `set_scene` (hang + camera home). The click flips cull on that material and redraws the viewport immediately (camera stays). It does **not** write `{mesh}.txt` until Editor **Save** / **Save As**.
+
+Editor → Meshes: left Scene list rows have checkboxes. **Select all** + **Apply Double Sided (N)** turns cull off on the ticked names in the current preview (no camera reset). Those names are queued and written into `{mesh}.txt` only when Save is pressed.
+
+### Editor dock chrome (2026-10-07)
+
+Right Editor uses the same frost inset as the left sidebar (18/16/18/18). `editorTabStack` stays transparent so it does not paint a square black plate over the rounded glass. Width **480**.
+
+### tzMF select showed the wrong piece (2026-10-07)
+
+Selecting a mesh row outlined the **next** geometry. Materials were zipped by list index, but unnamed chunks sit between named ones, so `mats[i]` is not submesh `i`. Pair by chunk tail (`material.type_off == sub.tail_off`, gap 0). `body.trainzmesh`: `body_front` is the 14760-vert shell, not the 848-vert gap chunk.
+
+Also: `_sample_ok` rejected tiled UVs outside ±32 and dropped that chunk (int V≈±52). Limit is now |UV| < 1e5.
+
+### Faster boot + smoother UI (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `util/preload.py` | Background import of Editor/Sounds/Engine/Assets while MainWindow builds |
+| Boot | Still **full** `warmup_hub_studios` before HOME clickable — no deferred studio warm |
+| Cut | No 2nd theme/logo warm · one frost grab (skip on low-end) · throttle `processEvents` · one i18n snapshot |
+| Assets GL | `warm_fast_preview_infra` idle after overlay hide (QOpenGLWidget no longer under frost) |
+| Hub morph | `hub_reveal_ms` ~640–720ms (0 = skip on low-end) |
+| View3D | Cam timer sleeps when hidden; **16ms while visible** (33ms idle was steppy) |
+| Panel slide | `animate_geometry` on_tick every frame on normal PCs (32ms throttle = low-end only) |
+| HOME cards | Instant lift on low-end (no per-card QVariantAnimation) |
+
+### Viewport arrow walk (2026-10-07)
+
+| Key | Move |
+|-----|------|
+| ↑ ↓ | Forward / back along camera look, on the XY ground |
+| ← → | Strafe |
+| PgUp / PgDn | Elevation (±Z) |
+
+World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_dirs` zeros **Z**.
+
+### Mesh pick outline (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| Editor **Meshes** row | Orange triangle-edge frame on that part (no inflated shell — that drew the orange rings) |
+| **Meshes in scene** row | Whole file by `mesh_key` (multi-select). Click only — refill does not fly the camera |
+| Mat deselect | Restores the last mesh outline |
+
+### Texture / Mesh right dock scroll (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `DampedScrollFilter` | Wheel on a child (not only the viewport) moves that scroll area |
+| Mesh Ops props | Same `sideScroll` as Texture — fields were clipped with no bar |
+| Nested scroll | Inner area that can still move keeps the wheel (code preview) |
+
+### Low-spec UI / F3 / Preview dock (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| Boot | **Always** `warmup_hub_studios()` full (Mesh+Sounds+Engine+Assets) — never defer; first studio switch must stay snappy |
+| `util/hw.py` | `is_low_end` / `prefer_instant_panels` / `prefer_short_hub_motion` / `prefer_light_boot_frost` / `hub_reveal_ms` (cpus≤4 or RAM≤8GiB; override `TRAINZ_STUDIO_LOW_END`) |
+| F3 | Handled in `eventFilter` + `keyPressEvent` (hidden menuBar QAction was flaky); ShortcutOverride avoids double-toggle |
+| FPS HUD | Glass chip, top-**right** of the clear viewport. Editor dock slides it left (`fps_hud_top_right`). F3 does **not** force idle GL redraws (that hitch was `update()` every 16ms). Chip is not a child of the GL widget. |
+| Preview / Settings | Editor dock closes **instant** (`animated=False`) — slide-out left dock covering Preview on slow PCs |
+| Dock width | Cap so ≥40% clear viewport; side panel `width//4` (was `//3`) |
+| Anim | `animate_geometry` throttles `on_tick`; low-end skips panel slides + hub morph |
+
+### Double Sided checkbox (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| Default | `two_sided=False` (was always-on for cabin preview) |
+| Source | Sibling `{mesh}.txt` `materials { name { two-sided 0\|1 } }` only |
+| Write | Editor Save / Save As — toggle and Apply are preview only |
+| No meta | Checkbox off · backface cull on (test: KIHA int `int.trainzmesh`) |
+| UI | Editor Meshes · Double Sided + Texture two-sided row |
+
+### Overlay toast bubble + footer status log (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `ui/status_toast.py` | `ToastHost` · `GlassToastBubble` · `StudioStatusBar` · status-log dialog |
+| Bubble | Center-bottom frost overlay · slide-up + fade · kinds save/drop/progress/info |
+| Save | ✓ green · 5s · status `Saved`/`Wrote`/`Exported` (not Autosave/fail) |
+| Drop | ↓ orange · shows file names (`hub.drop` from `_handle_dropped_paths`) |
+| Progress | … blue · bar + `%` · sticky · load/bake · **finish** on 100% / plain status / hide overlay (was stuck at Handing off 99%) |
+| Footer left | Clickable `#statusLogMsg` → frost **Status log** (ring buffer ~400) |
+
+### HOME — Texture / Mesh Tools card (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| Home cards | 5 in one row — Mesh · Sounds · Engine · **Assets** · **Texture / Mesh** |
+| Assets Tools | Packages · Config · KUID only (`set_suite("assets")`) |
+| Texture / Mesh | Texture · Mesh Ops (`set_suite("texmesh")`) — same `AssetsStudioHost` |
+| Bottom nav | Suite-specific `AssetsPageNav` (no combined Texture/Mesh tab on Assets) |
+| View menu | Assets Tools · Texture / Mesh Tools |
+
+### Texture Maps Viewer / Editor (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| Right dock | Wider on Texture (`560–920`, default `700`) |
+| Side tabs | **Params** · **Maps** · **Resize** |
+| `ui/assets/tex_map_panel.py` | Maps UI: hero preview stage · colored A/N/P + R/G/B/A chips · Adjust card · dbl-click solo · Expand |
+| `io/tex_map_edit.py` | Channel view + Denoise + undo + Trainz save (`.bak` once) |
+| Scope | Image edit only — `.texture.txt` still Params / Save .texture.txt |
+
+### VE Rules pack — mesh / texture / config (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `io/ve_rules.py` | **App-wide** scanner (`scan_paths` / `scan_asset_folder` / VE102) |
+| `ui/ve_dialog.py` | Shared report dialog for every studio |
+| **Tools** menu | Ctrl+Shift+V current · Ctrl+Shift+R folder · fix · last report |
+| Status bar **VE** | Click → last report (`VE OK` / `VE!`) |
+| Auto-scan | Mesh open · Engine config · Sounds import · folder drop |
+| Assets sidebars | Rules scan/fix still there (same engine) |
+| Out of scope | Script compile (197/220), DLC featured, CM dependency DB |
+
+**Last updated note:** v0.3.1 full onefile (HDRI+fonts+Assimp) still current ship tag  
 **Owner chat:** continue from this handoff  
 **Root:** `c:\trs22\trainz_studio\`  
 **Backup (pre-rename):** `c:\trs22\backups\26-10-05\mesh_studio-pre-trainz-studio\`  
@@ -8,6 +136,15 @@
 **EXE:** `trainz_studio\dist\MSTN_TrainzStudio.exe` (onefile, full assets) — rebuild: `pack\build.bat` · GitHub Release `v0.3.1`  
 **Shell:** `pack\shell\register.ps1` (Open + Quick Preview + Explorer pane) · `unregister.ps1`  
 **Smoke:** `python -m trainz_studio.check` from `c:\trs22` → expect `trainz_studio check: OK`
+
+### Finder fast preview — warm with Assets Tools (2026-10-07)
+
+| Piece | Role |
+|--------|------|
+| `PackagesPage.warm_fast_preview_infra` | Idle `_PreviewSurface` + `load_any` import during Assets boot warm |
+| `_ensure_assets_host` | Calls infra warm right after Assets Tools build |
+| Select mesh | Stage+parse overlaps GL ensure; when ready → solid preview opens (no 2nd click) |
+| Leave mesh | `_drop_mesh_warm` so stale warm can't steal image/text pane |
 
 ### Orbit yaw — un-invert (2026-10-07)
 
@@ -57,7 +194,7 @@
 | `ui/home.py` `HomeGlassFrame` / `HomeStudioCard` | Painted frost plates (shadow · sheen · accent wash on hover) |
 | Whole-card click | No fat orange `accentBtn` on HOME — soft “Open →” CTA |
 | Material glyphs | Circular glass badge (`HomeIconBadge`) — `layers` · `graphic_eq` · `tune` · `inventory_2` |
-| Layout | Four centered tiles in **one row** — short tags, airier glass, logo without plate |
+| Layout | Five centered tiles in **one row** (card w=220, gap 16) — short tags, airier glass, logo without plate |
 | Hover bubble | Warm glass bubble on `#homeCardHost` — slides along the row (`pop_on_arrive=False`) |
 | Card lift | Soft `QVariantAnimation` lift (~260ms OutCubic) — painted plate + margins |
 | No clip | Lift/shadow paint inside reserved `lift_room`/`shadow_room` (Qt clips paint outside the widget) |
@@ -86,8 +223,8 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 
 | Piece | Role |
 |--------|------|
-| Bottom `AssetsPageNav` | **Packages** · **Config** · **Texture / Mesh** · **KUID** + Mesh-style scrub |
-| Top `AssetsSubNav` | Same capsule / scrub, **no Home/Theme** — **Texture** \| **Mesh Ops** |
+| Split (later) | Home **Texture / Mesh** card owns Texture·Mesh Ops; Assets keeps Packages·Config·KUID |
+| Top `AssetsSubNav` | Still on page for legacy assets→texmesh path; **hidden** in `texmesh` suite (bottom nav is enough) |
 | `_PageSlideHost` | Horizontal slide when switching Texture ↔ Mesh Ops |
 | Sidebar | Fade swap actions on page / sub-page change |
 | Pill sync | Never `set_page(animate=False)` onto same page — was killing slide mid-flight |
@@ -254,7 +391,7 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 |------|------|
 | `ui/assets/studio.py` | Hub — frost sidebar + stack + bottom nav |
 | `ui/assets/sidebar.py` | Native page actions only |
-| `ui/assets/nav.py` | Bottom: **Packages** \| **Config** \| **Texture / Mesh** \| **KUID** · Top: **Texture** \| **Mesh Ops** |
+| `ui/assets/nav.py` | Suite nav: Assets **Packages**\|**Config**\|**KUID** · TexMesh **Texture**\|**Mesh Ops** |
 | `ui/assets/kuid.py` | Normalize + hex/hash UI helpers |
 | `io/lm.py` | Parse/write `*.lm.txt` |
 | `io/texture.py` | `format_texture_txt` / `write_texture_txt` (+ existing check) |
@@ -402,7 +539,7 @@ Camera / grid / sun / IBL / a.* / Face Orientation all share that basis. FBX Ass
 
 Mode-independent jank (shading switch does nothing) was mostly CPU overlays, not Lit:
 - **Sun sphere rebuilt every paint** (Sun mode default ON) → now unit-mesh cache + numpy place.
-- **Mat outline** rebuilt ≤80k edges every paint → cached, capped 12k, skipped while `_cam_busy`.
+- **Mat outline** edge list cached (cap 12k) and kept on a VBO. Draws while the camera moves — the old `_cam_busy` skip hid the orange frame until the view settled and hitched that frame.
 - **Frost** `grabFramebuffer` + `view.update()` + `processEvents` → removed; skip grab while orbiting.
 - a.* gizmos: one batched line draw; line-prog locs cached; grid cached.
 - No lighting LOD on orbit (that caused bright-while-drag / dark-on-release). CPU skips only (frost/outline).
@@ -442,7 +579,7 @@ Pages: Tuner · Simulation · Parameters. HOME card · `lib/engine_tuner/run.bat
 | **Attachments** | Right dock = detail only (Parent / Location Z-up / Rotation). **List on left Scene tab** |
 | **Meshes** | Right dock = material detail only. **List on left Scene tab** (switches with Editor tab) |
 
-Left Scene list follows Editor tab (a.* ↔ meshes). Spinboxes: **no mouse-wheel** — type or arrow buttons only.
+Left Scene list follows Editor tab (a.* ↔ meshes). Inputs, sliders, and dropdowns: **no mouse-wheel** (the dock still scrolls). Dock width **480** (was 340; still capped so ≥40% of the viewport stays clear). Numeric fields stay short; text fields fill the column.
 
 | Source | a.* read | a.* write | material write |
 |--------|----------|-----------|----------------|
