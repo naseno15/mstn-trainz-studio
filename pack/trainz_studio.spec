@@ -22,6 +22,8 @@ a = Analysis(
     ],
     datas=[
         (os.path.join(_ROOT, 'assets'), os.path.join('trainz_studio', 'assets')),
+        # Intel Open Image Denoise (Bake Denoise page) — exe + DLLs
+        (os.path.join(_ROOT, 'vendor', 'oidn'), os.path.join('trainz_studio', 'vendor', 'oidn')),
     ],
     hiddenimports=[
         'OpenGL',
@@ -31,6 +33,7 @@ a = Analysis(
         'numpy',
         'PIL',
         'PIL.Image',
+        'cv2',
         'PySide6',
         'PySide6.QtCore',
         'PySide6.QtGui',
@@ -47,6 +50,10 @@ a = Analysis(
         'trainz_studio.ui.engine',
         'trainz_studio.ui.engine.studio',
         'trainz_studio.ui.engine.throttle_panel',
+        'trainz_studio.ui.assets.param_page',
+        'trainz_studio.ui.assets.denoise_page',
+        'trainz_studio.io.bake_denoise',
+        'trainz_studio.io.param_map_edit',
         'trainz_studio.render.view3d',
         'trainz_studio.io.loaders',
         'trainz_studio.io.assimp_dll',
