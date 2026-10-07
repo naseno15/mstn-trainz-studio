@@ -143,8 +143,10 @@ STRINGS: dict[str, str] = {
     'Clear override': 'ล้างการแทนที่',
     'Clear queue': 'ล้างคิว',
     'Clear texture precache': 'ล้างแคช texture',
+    'Click for status log': 'คลิกเพื่อดูบันทึกสถานะทั้งหมด',
     'Click to fly · Edit on Editor page': 'คลิกเพื่อบินไป · แก้ไขที่หน้า Editor',
     'Click to select. On Editor page, right dock edits the selection.': 'คลิกเพื่อเลือก ที่หน้า Editor ด็อกด้านขวาจะแก้ไขรายการที่เลือก',
+    'Close': 'ปิด',
     'Clips': 'คลิป',
     'Clone': 'โคลน',
     'Clone จาก': 'Clone จาก',
@@ -173,6 +175,7 @@ STRINGS: dict[str, str] = {
     'Delete files': 'ลบไฟล์',
     'Dims': 'มิติ',
     'Distance m': 'ระยะ m',
+    'Done': 'เสร็จแล้ว',
     'Double Sided': 'สองด้าน',
     'Drop .kin · scrub only (no bone matrices)': 'วางไฟล์ .kin · ใช้เลื่อนดูเท่านั้น (ไม่มี bone matrix)',
     'Drop an image → preview': 'วางรูปภาพ → พรีวิว',
@@ -187,6 +190,8 @@ STRINGS: dict[str, str] = {
     'Drop or Open mesh file(s)': 'วางหรือเปิดไฟล์ mesh',
     'Drop PBR maps → table groups albedo/normal/parameter sets. Dims · channels · size · VE39 auto-scan (like Packages Finder). Double-click Set to select the whole trio.': 'วางแผนที่ PBR → ตารางจะจัดกลุ่มชุด albedo/normal/parameter แสดงมิติ · channel · ขนาด · สแกน VE39 อัตโนมัติ (เหมือน Packages Finder) ดับเบิลคลิก Set เพื่อเลือกครบทั้งสามไฟล์',
     'Drop WAV / audio / video here': 'วางไฟล์ WAV / เสียง / วิดีโอที่นี่',
+    'Dropped': 'วางไฟล์แล้ว',
+    'Dropped files': 'วางหลายไฟล์แล้ว',
     'Edit': 'แก้ไข',
     'Edit config.chump as text (ChumpLib-style), save binary, or pack / export config.txt.': 'แก้ไข config.chump เป็นข้อความ (สไตล์ ChumpLib) บันทึกเป็นไบนารี หรือ pack / export config.txt',
     'Editor': 'Editor',
@@ -455,6 +460,7 @@ STRINGS: dict[str, str] = {
     'R — restore framing after load': 'R — คืนมุมกล้องหลังโหลด',
     'Ray-traced bake into sidecars under baked_lamps/ (does not overwrite sources). Enable lamps in the list first (checkbox Glow + cast).': 'Bake แบบ ray-traced ลงไฟล์ sidecar ใต้ baked_lamps/ (ไม่เขียนทับต้นฉบับ) เปิดใช้โคมไฟในรายการก่อน (ช่อง Glow + cast)',
     'Ready': 'พร้อม',
+    'Recent status messages — click the footer anytime': 'ข้อความสถานะล่าสุด — คลิกที่แถบด้านล่างได้ตลอด',
     'Recover unsaved work?': 'กู้คืนงานที่ยังไม่ได้บันทึกหรือไม่?',
     'Redo': 'ทำซ้ำ',
     'Refresh': 'รีเฟรช',
@@ -570,6 +576,7 @@ STRINGS: dict[str, str] = {
     'Staged mesh missing:\n': 'ไม่พบ mesh ที่เตรียมไว้:\n',
     'Starting…': 'กำลังเริ่ม…',
     'Status': 'สถานะ',
+    'Status log': 'บันทึกสถานะ',
     'Still running — wait or restart Assets.': 'ยังทำงานอยู่ — รอหรือรีสตาร์ท Assets',
     'Stop': 'หยุด',
     'Sun mode': 'โหมด Sun',
@@ -702,4 +709,23 @@ GLOSSARY: dict[str, str] = {
     've39.ui.fix_title': 'แก้ VE39',
     've39.ui.scan_action': 'สแกน VE39',
     've39.ui.fix_action': 'แก้ VE39…',
+    'rules.tip': (
+        'กฎตรวจสอบ Trainz แบบท้องถิ่นสำหรับ texture และ mesh (VE37 power-of-2, VE39 สีเดียว, '
+        'VE65 ขาด texture.txt, VE68 ขนาด alpha, VE81 LOD, VE15/201 attachment และอื่นๆ) '
+        'ไม่ได้แทน Content Manager — ตรวจจากไฟล์และแก้แบบปลอดภัยเท่านั้น'
+    ),
+    'rules.mesh.tip': (
+        'กฎ mesh / LOD / material: ชื่อ .m.pbrmetal, ตาราง .lm.txt, '
+        'poly สูงโดยไม่มี LOD, mesh ที่ไม่ได้ใช้, attachment เทียบ mesh-table, '
+        'bogey ของ traincar (VE201/212)'
+    ),
+    'rules.ui.title': 'กฎ VE',
+    'rules.ui.fix_title': 'แก้กฎ VE',
+    'rules.fix.confirm': (
+        'ใช้การแก้แบบปลอดภัยกับ {n} รายการหรือไม่?\n'
+        'สร้าง .bak ข้างเคียงเมื่อจำเป็น แล้วแก้ VE39 / PoT / ขาด texture.txt / '
+        'ขนาด alpha / ชื่อ material'
+    ),
+    'rules.ui.scan_action': 'สแกนกฎ',
+    'rules.ui.fix_action': 'แก้ตามกฎ…',
 }

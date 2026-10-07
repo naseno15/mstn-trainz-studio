@@ -143,8 +143,10 @@ STRINGS: dict[str, str] = {
     'Clear override': 'Hapus override',
     'Clear queue': 'Kosongkan antrean',
     'Clear texture precache': 'Hapus precache tekstur',
+    'Click for status log': 'Klik untuk melihat log status',
     'Click to fly · Edit on Editor page': 'Klik untuk terbang · Edit di halaman Editor',
     'Click to select. On Editor page, right dock edits the selection.': 'Klik untuk memilih. Di halaman Editor, dock kanan mengedit pilihan.',
+    'Close': 'Tutup',
     'Clips': 'Klip',
     'Clone': 'Klon',
     'Clone จาก': 'Klon dari',
@@ -173,6 +175,7 @@ STRINGS: dict[str, str] = {
     'Delete files': 'Hapus file',
     'Dims': 'Dimensi',
     'Distance m': 'Jarak m',
+    'Done': 'Selesai',
     'Double Sided': 'Dua Sisi',
     'Drop .kin · scrub only (no bone matrices)': 'Letakkan .kin · hanya scrub (tanpa matriks bone)',
     'Drop an image → preview': 'Letakkan gambar → pratinjau',
@@ -187,6 +190,8 @@ STRINGS: dict[str, str] = {
     'Drop or Open mesh file(s)': 'Letakkan atau Buka file mesh',
     'Drop PBR maps → table groups albedo/normal/parameter sets. Dims · channels · size · VE39 auto-scan (like Packages Finder). Double-click Set to select the whole trio.': 'Letakkan peta PBR → tabel mengelompokkan set albedo/normal/parameter. Dimensi · channel · ukuran · pindai otomatis VE39 (seperti Packages Finder). Klik dua kali Set untuk memilih ketiga file.',
     'Drop WAV / audio / video here': 'Letakkan WAV / audio / video di sini',
+    'Dropped': 'Dijatuhkan',
+    'Dropped files': 'File dijatuhkan',
     'Edit': 'Sunting',
     'Edit config.chump as text (ChumpLib-style), save binary, or pack / export config.txt.': 'Edit config.chump sebagai teks (gaya ChumpLib), simpan biner, atau pack / ekspor config.txt.',
     'Editor': 'Editor',
@@ -455,6 +460,7 @@ STRINGS: dict[str, str] = {
     'R — restore framing after load': 'R — pulihkan framing setelah memuat',
     'Ray-traced bake into sidecars under baked_lamps/ (does not overwrite sources). Enable lamps in the list first (checkbox Glow + cast).': 'Bake ray-traced ke sidecar di bawah baked_lamps/ (tidak menimpa sumber). Aktifkan lampu di daftar dulu (checkbox Glow + cast).',
     'Ready': 'Siap',
+    'Recent status messages — click the footer anytime': 'Pesan status terbaru — klik footer kapan saja',
     'Recover unsaved work?': 'Pulihkan pekerjaan yang belum disimpan?',
     'Redo': 'Ulangi',
     'Refresh': 'Segarkan',
@@ -570,6 +576,7 @@ STRINGS: dict[str, str] = {
     'Staged mesh missing:\n': 'Mesh bertahap hilang:\n',
     'Starting…': 'Memulai…',
     'Status': 'Status',
+    'Status log': 'Log status',
     'Still running — wait or restart Assets.': 'Masih berjalan — tunggu atau mulai ulang Assets.',
     'Stop': 'Berhenti',
     'Sun mode': 'Mode Sun',
@@ -702,4 +709,23 @@ GLOSSARY: dict[str, str] = {
     've39.ui.fix_title': 'Perbaikan VE39',
     've39.ui.scan_action': 'Pindai VE39',
     've39.ui.fix_action': 'Perbaiki VE39…',
+    'rules.tip': (
+        'Aturan validasi Trainz lokal untuk tekstur dan mesh (VE37 power-of-2, VE39 solid, '
+        'VE65 texture.txt hilang, VE68 ukuran alpha, VE81 LOD, VE15/201 attachment, dll). '
+        'Bukan pengganti Content Manager — hanya cek file lokal dan perbaikan aman.'
+    ),
+    'rules.mesh.tip': (
+        'Aturan mesh / LOD / material: nama .m.pbrmetal, tabel .lm.txt, '
+        'high-poly tanpa LOD, mesh tak terpakai, attachment vs mesh-table, '
+        'bogey traincar (VE201/212).'
+    ),
+    'rules.ui.title': 'Aturan VE',
+    'rules.ui.fix_title': 'Perbaiki aturan VE',
+    'rules.fix.confirm': (
+        'Terapkan perbaikan aman untuk {n} path?\n'
+        'Membuat .bak sibling jika perlu, lalu memperbaiki VE39 / PoT / texture.txt hilang / '
+        'ukuran alpha / nama material.'
+    ),
+    'rules.ui.scan_action': 'Pindai aturan',
+    'rules.ui.fix_action': 'Perbaiki aturan…',
 }

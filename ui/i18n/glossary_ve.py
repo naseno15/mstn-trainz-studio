@@ -32,4 +32,24 @@ GLOSSARY: dict[str, str] = {
     "ve39.ui.fix_title": "VE39 fix",
     "ve39.ui.scan_action": "VE39 scan",
     "ve39.ui.fix_action": "VE39 fix…",
+    # Multi-VE mesh/texture rules pack
+    "rules.tip": (
+        "Local Trainz validation rules for textures and meshes (VE37 power-of-2, VE39 solid, "
+        "VE65 missing texture.txt, VE68 alpha size, VE81 LOD, VE15/201 attachments, and more). "
+        "Does not replace Content Manager — file-local checks and safe auto-fixes only."
+    ),
+    "rules.mesh.tip": (
+        "Mesh / LOD / material rules: material .m.pbrmetal names, .lm.txt LOD tables, "
+        "high-poly without LOD, unused meshes, attachment points vs config mesh-table, "
+        "traincar bogeys (VE201/212)."
+    ),
+    "rules.ui.title": "VE Rules",
+    "rules.ui.fix_title": "VE Rules fix",
+    "rules.fix.confirm": (
+        "Apply safe auto-fixes for {n} path(s)?\n"
+        "Creates sibling .bak once where needed, then fixes VE39 / PoT / missing "
+        "texture.txt / alpha size / material names."
+    ),
+    "rules.ui.scan_action": "Rules scan",
+    "rules.ui.fix_action": "Rules fix…",
 }

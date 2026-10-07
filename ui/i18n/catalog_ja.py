@@ -143,11 +143,13 @@ STRINGS: dict[str, str] = {
     'Clear override': 'オーバーライドをクリア',
     'Clear queue': 'キューをクリア',
     'Clear texture precache': 'テクスチャのプリキャッシュをクリア',
+    'Click for status log': 'クリックでステータスログを表示',
     'Click to fly · Edit on Editor page': 'クリックで移動 · Editor ページで編集',
     'Click to select. On Editor page, right dock edits the selection.': 'クリックで選択。Editor ページでは右ドックが選択項目を編集します。',
     'Clips': 'クリップ',
     'Clone': '複製',
     'Clone จาก': '複製元',
+    'Close': '閉じる',
     'Close (Esc)': '閉じる (Esc)',
     'Collapse / expand left sidebar  ([)': '左サイドバーを折りたたむ / 展開  ([)',
     'Collapse / expand right Editor  (])': '右 Editor を折りたたむ / 展開  (])',
@@ -173,6 +175,7 @@ STRINGS: dict[str, str] = {
     'Delete files': 'ファイルを削除',
     'Dims': 'サイズ',
     'Distance m': '距離 m',
+    'Done': '完了',
     'Double Sided': '両面',
     'Drop .kin · scrub only (no bone matrices)': '.kin をドロップ · スクラブのみ (ボーンマトリクスなし)',
     'Drop an image → preview': '画像をドロップ → プレビュー',
@@ -187,6 +190,8 @@ STRINGS: dict[str, str] = {
     'Drop or Open mesh file(s)': 'メッシュファイルをドロップまたは開く',
     'Drop PBR maps → table groups albedo/normal/parameter sets. Dims · channels · size · VE39 auto-scan (like Packages Finder). Double-click Set to select the whole trio.': 'PBR マップをドロップ → テーブルがアルベド/ノーマル/パラメーターのセットをグループ化します。寸法 · チャンネル · サイズ · VE39 自動スキャン (Packages Finder と同様)。Set をダブルクリックで 3 点セットを選択。',
     'Drop WAV / audio / video here': 'WAV / オーディオ / ビデオをここにドロップ',
+    'Dropped': 'ドロップしました',
+    'Dropped files': 'ファイルをドロップしました',
     'Edit': '編集',
     'Edit config.chump as text (ChumpLib-style), save binary, or pack / export config.txt.': 'config.chump をテキストとして編集 (ChumpLib 形式)、バイナリで保存、または config.txt をパック / エクスポートします。',
     'Editor': 'Editor',
@@ -455,6 +460,7 @@ STRINGS: dict[str, str] = {
     'R — restore framing after load': 'R — 読み込み後のフレーミングを復元',
     'Ray-traced bake into sidecars under baked_lamps/ (does not overwrite sources). Enable lamps in the list first (checkbox Glow + cast).': 'baked_lamps/ 配下のサイドカーにレイトレースでベイク (元ファイルは上書きしません)。先にリストでランプを有効にしてください (Glow + cast チェックボックス)。',
     'Ready': '準備完了',
+    'Recent status messages — click the footer anytime': '最近のステータス — フッターをクリックすると一覧表示',
     'Recover unsaved work?': '未保存の作業を復元しますか？',
     'Redo': 'やり直し',
     'Refresh': '更新',
@@ -570,6 +576,7 @@ STRINGS: dict[str, str] = {
     'Staged mesh missing:\n': 'ステージング済みメッシュがありません:\n',
     'Starting…': '開始中…',
     'Status': 'ステータス',
+    'Status log': 'ステータスログ',
     'Still running — wait or restart Assets.': '実行中です — 待つか Assets を再起動してください。',
     'Stop': '停止',
     'Sun mode': 'Sun モード',
@@ -702,4 +709,23 @@ GLOSSARY: dict[str, str] = {
     've39.ui.fix_title': 'VE39 修正',
     've39.ui.scan_action': 'VE39 スキャン',
     've39.ui.fix_action': 'VE39 修正…',
+    'rules.tip': (
+        'テクスチャ／メッシュ向けのローカル Trainz 検証ルール（VE37 2の累乗、VE39 単色、'
+        'VE65 texture.txt 欠落、VE68 アルファサイズ、VE81 LOD、VE15/201 アタッチメントなど）。'
+        'Content Manager の代替ではありません — ファイル単位の検査と安全な自動修正のみ。'
+    ),
+    'rules.mesh.tip': (
+        'メッシュ／LOD／マテリアル規則：.m.pbrmetal 名、.lm.txt LOD、'
+        'LOD なしのハイポリ、未使用メッシュ、config mesh-table とのアタッチメント照合、'
+        'traincar ボギー（VE201/212）。'
+    ),
+    'rules.ui.title': 'VE ルール',
+    'rules.ui.fix_title': 'VE ルール修正',
+    'rules.fix.confirm': (
+        '{n} 件に安全な自動修正を適用しますか？\n'
+        '必要なら隣に .bak を作り、VE39 / PoT / 欠落 texture.txt / '
+        'アルファサイズ / マテリアル名を修正します。'
+    ),
+    'rules.ui.scan_action': 'ルールスキャン',
+    'rules.ui.fix_action': 'ルール修正…',
 }
