@@ -68,7 +68,7 @@ Right-click a texture row:
 - **Editor** keeps 3D visible and opens a dock: Attachments · Meshes · Save (Studio-owned write)
 - Theme switch applies on `QApplication` (does **not** freeze the GL viewer)
 - Drop a mesh → determinate progress overlay (stage % + processEvents)
-- Boot uses in-window glass overlay (Starting → Building → Ready) — no separate splash window
+- Boot uses in-window glass overlay (Starting → Building → Ready) — no separate splash window; title bar / frost drag stay usable while warming; MeshView is created before first show so Windows does not recreate the HWND
 
 ## Layout (EXE-ready later — do not freeze yet)
 

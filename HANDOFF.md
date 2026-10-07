@@ -1,6 +1,29 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-08 (Asia/Bangkok) — Packages Finder edited mark + config Save
+**Last updated:** 2026-10-08 (Asia/Bangkok) — Texture & Mesh Lods tools rename + editor docks
+
+### Texture & Mesh Lods tools — nav + full-height editor docks (2026-10-08)
+
+| Piece | Role |
+|--------|------|
+| Suite name | **Texture & Mesh Lods tools** (Home card · View menu · sidebar brand) |
+| Bottom nav | **Mesh Lods · Texture Params** \| Home \| **Texture Editor · Texture Denoiser** (two-line; tall 88 + Home 48 + gap 22) |
+| Other bars | Engine / Assets / Sounds stay height **72** · Home gap **16**; Mesh Studio shares tall Home treatment |
+| Page ids | unchanged (`meshops` / `texture` / `parameter` / `denoise`) — labels + order only |
+| Texture Editor / Texture Denoiser | Controls leave the mid page → full-height right dock (`editorDock`, Mesh Editor frost inset) |
+| Right dock stack | 0 Texture Params · 1 Mesh Lods · 2 Texture Editor · 3 Texture Denoiser — open on every texmesh page |
+
+### Boot — move during frost + no close/reopen on mesh GL warm (2026-10-08)
+
+| Piece | Role |
+|--------|------|
+| Root cause (flash) | First `QOpenGLWidget` parented into an already-shown Win32 HWND recreates that platform window → looks like the app closed and reopened during warm |
+| Fix (flash) | `MainWindow.prewarm_mesh_gl()` before `showMaximized()` — Mesh chrome + `MeshView` while hidden; Finder preview GL still idle after overlay (shares context) |
+| Root cause (no drag) | Overlay card children ate clicks; Qt `startSystemMove` no-ops on maximized frameless Win HWND |
+| Fix (drag) | `begin_frameless_move` → Win32 `WM_NCLBUTTONDOWN`/`HTCAPTION`; card `WA_TransparentForMouseEvents`; title bar kept above frost each stage |
+| Root cause (not max) | Early HWND from GL prewarm / failed drag left window restored after frost |
+| Fix (max) | `setWindowState(Maximized)` on first show + `showMaximized()` again after `_hide_overlay` |
+| Boot order | `go_home` → `prewarm_mesh_gl` → `showMaximized` → frost → `warmup_hub_studios` → remmaximize |
 
 ### Packages Finder — Edited mark + config Save (2026-10-08)
 
@@ -33,14 +56,13 @@
 
 | Piece | Role |
 |--------|------|
-| Bottom nav (texmesh) | **Texture · Parameter · Denoise · Mesh Ops** |
+| Bottom nav (texmesh) | see **Texture & Mesh Lods tools** section above (was Texture · Parameter · Denoise · Mesh Ops) |
 | `io/param_map_edit.py` | m.pbrmetal RGBA ops · fill/offset/scale/B·C/mean/invert/overlay/paint |
-| `ui/assets/param_page.py` | Parameter page · paint mode · Save overwrite (+ `.bak` once) |
+| `ui/assets/param_page.py` | Texture Editor canvas · `tools_panel` mounts in right dock · Save overwrite (+ `.bak` once) |
 | `io/bake_denoise.py` | OIDN RTLightmap → OpenCV NLM (+ guided/bilateral) · black UV lock |
-| `ui/assets/denoise_page.py` | Bake Denoise page · preview in memory · Save overwrite |
+| `ui/assets/denoise_page.py` | Texture Denoiser preview · `tools_panel` in right dock · Save overwrite |
 | `vendor/oidn/bin` | Intel Open Image Denoise 2.5.1 Windows binaries (~75 MB) |
 | Dep | `opencv-contrib-python-headless` (ximgproc; bilateral fallback if missing) |
-| Right dock | Still Texture Params/Maps + Mesh Ops only — Parameter/Denoise self-contained |
 | Maps tab | Mild Pillow denoise unchanged (albedo/normal polish) |
 
 ### Frost backdrop shadows — wider fade (2026-10-07)
@@ -84,8 +106,9 @@ Also: `_sample_ok` rejected tiled UVs outside ±32 and dropped that chunk (int V
 |--------|------|
 | `util/preload.py` | Background import of Editor/Sounds/Engine/Assets while MainWindow builds |
 | Boot | Still **full** `warmup_hub_studios` before HOME clickable — no deferred studio warm |
+| Mesh GL | `prewarm_mesh_gl` **before** first show (HWND flash fix — see 2026-10-08) |
 | Cut | No 2nd theme/logo warm · one frost grab (skip on low-end) · throttle `processEvents` · one i18n snapshot |
-| Assets GL | `warm_fast_preview_infra` idle after overlay hide (QOpenGLWidget no longer under frost) |
+| Assets GL | `warm_fast_preview_infra` idle after overlay hide (shares MeshView context; no 2nd HWND recreate) |
 | Hub morph | `hub_reveal_ms` ~640–720ms (0 = skip on low-end) |
 | View3D | Cam timer sleeps when hidden; **16ms while visible** (33ms idle was steppy) |
 | Panel slide | `animate_geometry` on_tick every frame on normal PCs (32ms throttle = low-end only) |
