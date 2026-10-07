@@ -128,7 +128,7 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 | Assets sidebars | Rules scan/fix still there (same engine) |
 | Out of scope | Script compile (197/220), DLC featured, CM dependency DB |
 
-**Last updated note:** v0.3.1 full onefile (HDRI+fonts+Assimp) still current ship tag  
+**Last updated note:** v0.3.2 full onefile release still current ship tag  
 **Owner chat:** continue from this handoff  
 **Root:** `c:\trs22\trainz_studio\`  
 **Backup (pre-rename):** `c:\trs22\backups\26-10-05\mesh_studio-pre-trainz-studio\`  
