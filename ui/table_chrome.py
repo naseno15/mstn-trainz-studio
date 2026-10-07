@@ -43,20 +43,44 @@ def _row_fills(widget: QObject | None) -> tuple[QColor, QColor]:
     from .theme import palette
 
     p = palette(_theme_mode(widget))
-    sel = QColor(p.selection)
+    # Stronger wash than p.selection (0.18α reads as hollow orange rim on dark glass).
     if p.mode == "dark":
+        sel = QColor(255, 90, 31, 72)
         hover = QColor(255, 255, 255, 28)
     else:
+        sel = QColor(255, 90, 31, 56)
         hover = QColor(0, 0, 0, 22)
     return sel, hover
 
 
+def _view_column_count(view: QAbstractItemView) -> int:
+    """Column span for a full-row pill — never call model.columnCount.
+
+    PySide6 traps: table models reject ``columnCount(parent)`` as private;
+    ``QAbstractListModel`` rejects the no-arg form. Header count (or 1 for
+    lists) is what we paint against anyway.
+    """
+    for name in ("horizontalHeader", "header"):
+        getter = getattr(view, name, None)
+        if not callable(getter):
+            continue
+        try:
+            h = getter()
+        except Exception:
+            continue
+        if h is None or not hasattr(h, "count"):
+            continue
+        try:
+            n = int(h.count())
+        except Exception:
+            continue
+        if n >= 1:
+            return n
+    return 1
+
+
 def _row_rect(view: QAbstractItemView, index: QModelIndex) -> QRect:
-    model = index.model()
-    if model is None:
-        return view.visualRect(index)
-    parent = index.parent()
-    cols = max(1, model.columnCount(parent))
+    cols = _view_column_count(view)
     left = view.visualRect(index.sibling(index.row(), 0))
     right = view.visualRect(index.sibling(index.row(), cols - 1))
     if not left.isValid():
@@ -125,12 +149,18 @@ class RoundedRowDelegate(QStyledItemDelegate):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(sel_c if selected else hover_c)
                 painter.drawRoundedRect(QRectF(row), ROW_RADIUS, ROW_RADIUS)
-                if hovered and not selected:
+                # Soft rim — selected = warm edge; hover = hairline only.
+                if selected:
+                    rim = QColor(255, 90, 31, 160)
+                elif hovered:
                     rim = (
                         QColor(255, 255, 255, 40)
                         if _theme_mode(self._view) == "dark"
                         else QColor(0, 0, 0, 28)
                     )
+                else:
+                    rim = None
+                if rim is not None:
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.setPen(rim)
                     painter.drawRoundedRect(
