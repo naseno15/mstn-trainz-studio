@@ -1,4 +1,4 @@
-"""HOME hub — glassmorphism studio picker (Mesh / Sounds / Engine / Assets)."""
+"""HOME hub — glassmorphism studio picker (Mesh / Sounds / Engine / Assets / TexMesh)."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -370,11 +370,12 @@ class HomeStudioCard(HomeGlassFrame):
         )
         self._lift_anim: QVariantAnimation | None = None
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedWidth(200)
+        # 5-up row still has side air on ≥1280; keep titles (Texture / Mesh) unclipped.
+        self.setFixedWidth(220)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(*self._base_margins)
-        lay.setSpacing(8)
+        lay.setSpacing(10)
         lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         badge = HomeIconBadge(icon_name, dark=dark)
@@ -446,6 +447,18 @@ class HomeStudioCard(HomeGlassFrame):
             self.set_lift(target)
             self._apply_lift_amount(target)
             return
+        # Low-end: snap lift — QVariantAnimation×5 cards was HOME hover stutter.
+        try:
+            from ..util.hw import prefer_instant_panels
+
+            if prefer_instant_panels():
+                self.set_lift(target)
+                self._apply_lift_amount(target)
+                self._hover = target > 0.0
+                self.update()
+                return
+        except Exception:
+            pass
         anim = QVariantAnimation(self)
         anim.setDuration(self._LIFT_MS)
         anim.setStartValue(start)
@@ -631,6 +644,7 @@ class HomePage(QFrame):
         on_sounds: Callable[[], None],
         on_engine: Callable[[], None],
         on_assets: Callable[[], None],
+        on_texmesh: Callable[[], None],
         on_drop: Callable[[list[Path]], None],
         theme_mode: str = "dark",
         parent: QWidget | None = None,
@@ -656,7 +670,7 @@ class HomePage(QFrame):
         self._home_logo = logo
 
         self._brand_src = "MSTN Trainz Studio"
-        self._sub_src = "Meshes · sounds · engine · assets"
+        self._sub_src = "Meshes · sounds · engine · assets · maps"
         self._copy_src = "Copyright MSTN Production"
 
         brand = QLabel(self._brand_src)
@@ -678,8 +692,8 @@ class HomePage(QFrame):
         card_host.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         card_host.setAutoFillBackground(False)
         row = QHBoxLayout(card_host)
-        row.setContentsMargins(16, 18, 16, 20)
-        row.setSpacing(14)
+        row.setContentsMargins(16, 20, 16, 22)
+        row.setSpacing(16)
         row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cards = (
             (
@@ -702,9 +716,15 @@ class HomePage(QFrame):
             ),
             (
                 "Assets Tools",
-                "CDP · texture · KUID",
+                "CDP · config · KUID",
                 "inventory_2",
                 on_assets,
+            ),
+            (
+                "Texture / Mesh",
+                "Maps · LM · materials",
+                "texture",
+                on_texmesh,
             ),
         )
         self._studio_cards: list[HomeStudioCard] = []
@@ -833,6 +853,7 @@ def build_home_page(
     on_sounds: Callable[[], None],
     on_engine: Callable[[], None],
     on_assets: Callable[[], None],
+    on_texmesh: Callable[[], None],
     on_drop: Callable[[list[Path]], None],
     theme_mode: str = "dark",
 ) -> HomePage:
@@ -842,6 +863,7 @@ def build_home_page(
         on_sounds=on_sounds,
         on_engine=on_engine,
         on_assets=on_assets,
+        on_texmesh=on_texmesh,
         on_drop=on_drop,
         theme_mode=theme_mode,
     )

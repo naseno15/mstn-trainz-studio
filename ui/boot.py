@@ -47,6 +47,11 @@ def main(argv: list[str] | None = None) -> int:
     # Every QPushButton / QToolButton: soft hover bubble + emboss (+ glass tip when set)
     install_button_hover_chrome(app)
 
+    # Overlap heavy hub imports with MainWindow import + ctor.
+    from ..util.preload import join_hub_module_preload, start_hub_module_preload
+
+    start_hub_module_preload()
+
     try:
         # Heavy MainWindow AFTER QApplication exists (Qt already warm).
         from .app import (
@@ -81,13 +86,14 @@ def main(argv: list[str] | None = None) -> int:
 
     initials = [Path(a) for a in argv[1:] if a and not str(a).startswith("-")]
 
-    # One continuous boot: cover → warm under frost → reveal HOME (no QTimer gap).
+    from ..util.hw import prefer_light_boot_frost
+
+    # Cover → warm under frost → reveal HOME. Studios still fully warm before click.
     win.go_home()
     win.showMaximized()
     win.raise_()
     win.activateWindow()
     win._layout_viewer_pane()
-    # Cover first paint immediately (dark) so HOME never flashes bare.
     win._overlay.set_brand("Trainz Studio")
     win._overlay.set_stage("Starting…", 12)
     win._overlay.set_frost(None)
@@ -96,27 +102,32 @@ def main(argv: list[str] | None = None) -> int:
     win._overlay.raise_()
     app.processEvents()
 
-    # Blur real HOME under the card (centralWidget grab skips overlay sibling).
-    win._overlay.set_frost(win._capture_overlay_frost())
-    win._overlay.set_stage("Warming Mesh Studio…", 45)
-    win._overlay.update()
+    # One frost grab max — low-end skips (grab+blur was a big boot tax).
+    if not prefer_light_boot_frost():
+        win._overlay.set_frost(win._capture_overlay_frost())
+        app.processEvents()
+
+    win._overlay.set_stage("Warming studios…", 35)
     app.processEvents()
+
+    # Finish background imports before building widget trees.
+    join_hub_module_preload(timeout=12.0)
+
+    _last_pe = [0.0]
 
     def _boot_stage(text: str, pct: int) -> None:
         win._overlay.set_stage(text, pct)
-        win._overlay.update()
-        app.processEvents()
+        # Throttle processEvents — every stage was re-entering the event loop hard.
+        import time
 
-    # Precache all hub studios under frost — HOME clicks then only swap + reveal.
+        now = time.monotonic()
+        if now - _last_pe[0] >= 0.05 or pct >= 100:
+            _last_pe[0] = now
+            app.processEvents()
+
     win.warmup_hub_studios(on_stage=_boot_stage)
     win._layout_viewer_pane()
-    # Theme toggle assets: both QSS/QPalette + logos already warm; re-touch after
-    # hub trees exist so the first Theme click only swaps cached blobs.
-    _boot_stage("Preloading themes…", 96)
-    warm_theme_cache()
-    warm_logo_cache()
-    # Refresh frost once chrome exists (still HOME under cover).
-    win._overlay.set_frost(win._capture_overlay_frost())
+    # Theme/logo already warm before MainWindow — no second rebuild here.
     win._overlay.set_stage("Ready", 100)
     app.processEvents()
     win._hide_overlay()
