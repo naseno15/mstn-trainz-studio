@@ -1,10 +1,10 @@
-# Pack / ship (PyInstaller onedir)
+# Pack / ship (PyInstaller onefile)
 
 ```
 trainz_studio/
   pack/
     entry.py              # freeze entry
-    trainz_studio.spec    # Analysis / EXE / COLLECT
+    trainz_studio.spec    # Analysis / EXE
     build.bat             # one-click from Windows
     README.md
 ```
@@ -20,16 +20,16 @@ pack\build.bat
 Output:
 
 ```
-trainz_studio\dist\MSTN_TrainzStudio\MSTN_TrainzStudio.exe
+trainz_studio\dist\MSTN_TrainzStudio.exe
 ```
 
-onedir layout (fast start vs onefile). `assets/` + Assimp DLL are bundled under `_internal\trainz_studio\`.
+onefile layout. Fonts + logo + Assimp DLL are bundled; Poly Haven HDRIs are **not** (re-fetch with `python -m trainz_studio.scripts.fetch_hdris`).
 
 ## Notes
 
 - CuPy / CUDA bake is **not** frozen (multi‑GB). Use source + `cupy-cuda12x` for GPU lamp bake; the exe uses the threaded CPU bake path sized by `util/hw.py`.
 - Runtime auto-tunes: BLAS threads, texture/bake workers, ABOVE_NORMAL process priority, desktop OpenGL.
-- Never commit `dist/` / `build/` into the repo.
+- Never commit `dist/` / `build/` into the repo. Ship the exe via GitHub Releases.
 
 ## Windows shell (Open / Preview pane)
 
