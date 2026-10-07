@@ -27,7 +27,12 @@ from PySide6.QtWidgets import (
 
 from ..io.texture import check_texture_txt, material_family, texture_stem
 from .code_edit import CodeEdit
-from .frost import FrostGlassFrame, make_frost_pixmap, prepare_frost_scroll  # re-export for callers
+from .frost import (  # re-export for callers
+    FROST_CONTENT_MARGINS,
+    FrostGlassFrame,
+    make_frost_pixmap,
+    prepare_frost_scroll,
+)
 
 __all__ = ["EditorWorkspace", "FrostGlassFrame", "make_frost_pixmap"]
 
@@ -744,8 +749,8 @@ class EditorWorkspace(FrostGlassFrame):
         sub.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
         lay = QVBoxLayout(self)
-        # Same inset as the left sidebar so the frost radius stays visible.
-        lay.setContentsMargins(18, 16, 18, 18)
+        # Same inset as the left sidebar so the frost shadow can finish fading.
+        lay.setContentsMargins(*FROST_CONTENT_MARGINS)
         lay.setSpacing(10)
         lay.addWidget(title)
         lay.addWidget(sub)

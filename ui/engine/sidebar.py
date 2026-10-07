@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..frost import FrostGlassFrame
+from ..frost import FROST_CONTENT_MARGINS, FrostGlassFrame
 from ..smooth_scroll import enable_smooth_scroll_area
 from ..theme import app_font
 from .pressure import to_bar, to_kpa
@@ -122,8 +122,8 @@ class EngineSidebar(FrostGlassFrame):
         self._theme = "dark"
 
         outer = QVBoxLayout(self)
-        # inset for shadow ring painted inside FrostGlassFrame (same as Mesh)
-        outer.setContentsMargins(18, 16, 18, 18)
+        # inset for soft shadow ring painted inside FrostGlassFrame (same as Mesh)
+        outer.setContentsMargins(*FROST_CONTENT_MARGINS)
         outer.setSpacing(10)
 
         # header — logo + Engine Tuner (Mesh sidebar style)

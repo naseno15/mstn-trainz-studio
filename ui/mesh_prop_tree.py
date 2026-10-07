@@ -177,11 +177,35 @@ def _int_spin(*, lo: int = 0, hi: int = 255) -> QSpinBox:
     sp.setRange(lo, hi)
     # Four channels share one row — arrows would force the dock wide again.
     sp.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-    sp.setAlignment(Qt.AlignmentFlag.AlignRight)
+    sp.setAlignment(Qt.AlignmentFlag.AlignCenter)
     sp.setFixedHeight(_FIELD_H)
     sp.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     sp.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    sp.setObjectName("rgbaChannel")
     return sp
+
+
+class _RgbaChannel(QWidget):
+    """Letter sits beside the box. The spin text is the number only."""
+
+    def __init__(self, letter: str, spin: QSpinBox) -> None:
+        super().__init__()
+        self.tag = QLabel(letter)
+        self.tag.setObjectName("mutedTip")
+        self.tag.setFixedSize(16, _FIELD_H)
+        self.tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tag.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tag.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lay.addWidget(self.tag)
+        lay.addWidget(spin, 1)
+        self.setFixedHeight(_FIELD_H)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(40, _FIELD_H)
 
 
 def _section(title: str) -> QLabel:
@@ -225,26 +249,13 @@ def _field_row(label: str, widget: QWidget, *, stretch: bool = True) -> QWidget:
     return row
 
 
-def _axis_row(labels: tuple[str, ...], spins: list[QDoubleSpinBox]) -> QWidget:
-    row = QWidget()
-    lay = QHBoxLayout(row)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(4)
-    for lab, sp in zip(labels, spins):
-        name = QLabel(lab)
-        name.setObjectName("mutedTip")
-        lay.addWidget(name)
-        lay.addWidget(sp)
-    lay.addStretch(1)
-    return row
-
-
 class ColorRow(QWidget):
     changed = Signal()
 
     def __init__(self, label: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._spins = [_int_spin() for _ in range(4)]
+        self._channels = [_RgbaChannel(name, sp) for name, sp in zip("RGBA", self._spins)]
         for sp in self._spins:
             sp.valueChanged.connect(self._on_edit)
         self._swatch = QPushButton()
@@ -259,12 +270,16 @@ class ColorRow(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
         lay.addWidget(_form_label(label))
-        for name, sp in zip("RGBA", self._spins):
-            sp.setPrefix(f"{name} ")
-            lay.addWidget(sp, 1)
+        for ch in self._channels:
+            lay.addWidget(ch, 1)
         lay.addWidget(self._swatch)
         self._block = False
         self.set_rgba01((0.8, 0.8, 0.8, 1.0))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        # ponytail: four real channel mins plus the Noto label exceed the 360
+        # meshes cap. The dock stretches this row; the hint only stops the window growing.
+        return QSize(_label_w() + 88, _FIELD_H)
 
     def _on_edit(self, *_a) -> None:
         if self._block:
@@ -610,8 +625,8 @@ class AttachmentDetail(QWidget):
         self.name_edit = QLineEdit()
         self.parent_edit = QLineEdit()
         self.parent_edit.setPlaceholderText("(none)")
-        self.loc = [_float_spin() for _ in range(3)]
-        self.rot = [_float_spin() for _ in range(4)]
+        self.loc = [_float_spin(expand=True) for _ in range(3)]
+        self.rot = [_float_spin(expand=True) for _ in range(4)]
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -621,14 +636,13 @@ class AttachmentDetail(QWidget):
         lay.addWidget(_field_row("Parent", self.parent_edit))
 
         lay.addWidget(_section("Location"))
-        lay.addWidget(_axis_row(("X", "Y", "Z"), self.loc))
-        for sp in self.loc:
+        for lab, sp in zip(("X", "Y", "Z"), self.loc):
+            lay.addWidget(_field_row(lab, sp))
             sp.valueChanged.connect(self._emit)
 
         lay.addWidget(_section("Rotation"))
-        lay.addWidget(_axis_row(("X", "Y"), self.rot[:2]))
-        lay.addWidget(_axis_row(("Z", "W"), self.rot[2:]))
-        for sp in self.rot:
+        for lab, sp in zip(("X", "Y", "Z", "W"), self.rot):
+            lay.addWidget(_field_row(lab, sp))
             sp.valueChanged.connect(self._emit)
 
         self.name_edit.editingFinished.connect(self._emit)
@@ -640,7 +654,14 @@ class AttachmentDetail(QWidget):
         self.changed.emit()
 
     def clear(self) -> None:
+        """No attachment selected — blank the fields. Stale text looked like a real a.*."""
+        self._block = True
         self._index = -1
+        self.name_edit.clear()
+        self.parent_edit.clear()
+        for sp in (*self.loc, *self.rot):
+            sp.setValue(0.0)
+        self._block = False
         self.setEnabled(False)
 
     def load(self, index: int, rec: AttRecord) -> None:

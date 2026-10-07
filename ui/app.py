@@ -106,6 +106,7 @@ from ..render.env import ENVIRONMENTS, env_keys
 from ..render.hdri import list_hdri_assets
 from .code_edit import apply_code_edit_theme
 from .frost import (
+    FROST_CONTENT_MARGINS,
     FrostGlassFrame,
     make_frost_pixmap,
     paint_glass_chip,
@@ -2681,8 +2682,8 @@ class MainWindow(QMainWindow):
         side.setMinimumWidth(0)
         side.setMaximumWidth(SIDE_PANEL_W + 40)
         outer = QVBoxLayout(side)
-        # inset for shadow ring painted inside FrostGlassFrame
-        outer.setContentsMargins(18, 16, 18, 18)
+        # inset for soft shadow ring painted inside FrostGlassFrame
+        outer.setContentsMargins(*FROST_CONTENT_MARGINS)
         outer.setSpacing(10)
 
         # Pinned: logo + tab strip + Open/Folder. Scroll body = Mesh Info + tab page
@@ -5320,9 +5321,21 @@ class MainWindow(QMainWindow):
         import numpy as np
 
         page = self.editor.attachments_page
-        if self._tzmf_bytes is not None:
-            page.set_attachments(parse_attachment_records(self._tzmf_bytes))
+        # Right-hand fields follow the scene list. A tzMF byte scan can hit a
+        # stray ``a.`` inside geometry; that must not fill Name when the list is empty.
+        scene_names = {a.name for a in self._scene.attachments if a.name}
+        if not scene_names:
+            page.clear()
             return
+        if self._tzmf_bytes is not None:
+            recs = [
+                r
+                for r in parse_attachment_records(self._tzmf_bytes)
+                if r.name in scene_names
+            ]
+            if recs:
+                page.set_attachments(recs)
+                return
         # Scene is already Trainz Z-up
         recs: list[AttRecord] = []
         for a in self._scene.attachments:

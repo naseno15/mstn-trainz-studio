@@ -32,7 +32,7 @@ from ...lib.engine_tuner.autotune import (
 )
 from ...lib.engine_tuner.config_io import EngineConfig
 
-from ..frost import FrostGlassFrame
+from ..frost import FROST_CONTENT_MARGINS, FrostGlassFrame
 from ..smooth_scroll import enable_smooth_scroll_area
 
 # Auto Tune body scroll — heavier coast = longer glide (“หน่วง”)
@@ -209,8 +209,8 @@ class AutotunePanel(FrostGlassFrame):
         foot.addWidget(apply_btn, 1)
 
         lay = QVBoxLayout(self)
-        # same inset as Engine left sidebar (frost shadow ring)
-        lay.setContentsMargins(18, 16, 18, 18)
+        # same inset as Engine left sidebar (frost soft shadow room)
+        lay.setContentsMargins(*FROST_CONTENT_MARGINS)
         lay.setSpacing(10)
         lay.addWidget(title)
         lay.addWidget(tip)
