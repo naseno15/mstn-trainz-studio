@@ -30,10 +30,10 @@ _LOGO_CACHE: QPixmap | None = None
 _PAGE_TITLES = {
     "packages": "Packages",
     "config": "Config",
-    "texture": "Texture",
-    "parameter": "Parameter",
-    "denoise": "Denoise",
-    "meshops": "Mesh Ops",
+    "texture": "Texture Params",
+    "parameter": "Texture Editor",
+    "denoise": "Texture Denoiser",
+    "meshops": "Mesh Lods",
     "kuid": "KUID",
 }
 
@@ -265,7 +265,7 @@ class AssetsSidebar(FrostGlassFrame):
         self.set_frost(None, dark=self._theme != "light")
 
     def set_brand(self, title: str) -> None:
-        """Sidebar masthead — Assets Tools vs Texture / Mesh Tools."""
+        """Sidebar masthead — Assets Tools vs Texture & Mesh Lods tools."""
         self._brand.setProperty("mstn_i18n_src", title)
         try:
             from ..i18n import t
@@ -374,10 +374,10 @@ class AssetsSidebar(FrostGlassFrame):
         blurbs = {
             "packages": "Queue — ลากโฟลเดอร์ asset หรือ .cdp · Pack ≤500 / ≤800 / max 1 GB",
             "config": "Edit config.chump · pack/export config.txt · VE rules on asset folder.",
-            "texture": "Texture rules (VE37/39/65…) · .texture.txt · Resize → _prep/.",
-            "parameter": "m.pbrmetal Parameter · R/G/B/A = Emissive/Rough/AO/Metal · paint · Save overwrite.",
-            "denoise": "Bake AO/lightmap denoise · OIDN + OpenCV · preview then Save overwrite.",
-            "meshops": "Mesh/LOD/material rules · .lm.txt · .m.pbrmetal / .m.onetex.",
+            "texture": "Texture Params · VE37/39/65… · .texture.txt · Resize → _prep/.",
+            "parameter": "Texture Editor · m.pbrmetal R/G/B/A · paint · Save overwrite.",
+            "denoise": "Texture Denoiser · OIDN + OpenCV · preview then Save overwrite.",
+            "meshops": "Mesh Lods · material rules · .lm.txt · .m.pbrmetal / .m.onetex.",
             "kuid": "Normalize · hex · hash-XX folder (chump buckets).",
         }
         blurb = blurbs.get(self._page, "")
@@ -408,7 +408,7 @@ class AssetsSidebar(FrostGlassFrame):
             btn.setProperty("mstn_i18n_src", label)
             if accent:
                 btn.setObjectName("accentBtn")
-            btn.setMinimumHeight(36)
+            # No fixed/min height — accentBtn padding owns size (fixed 36 clipped text).
             src_tip = ve39_src.get(action)
             if src_tip:
                 # glass tip only — setToolTip here would re-enable native Qt tip

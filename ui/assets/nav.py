@@ -12,6 +12,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..float_chrome import (
+    FLOAT_NAV_HEIGHT_TALL,
+    HOME_GAP_TALL,
+    NAV_ICON_SIDE_TALL,
     bind_page_well,
     bind_split_wells,
     hit_page_cluster,
@@ -226,12 +229,13 @@ class _ScrubPillNav(QFrame):
 
 
 class AssetsPageNav(_ScrubPillNav):
-    """Home center | suite pages — Assets (pack) or Texture / Mesh Tools."""
+    """Home center | suite pages — Assets or Texture & Mesh Lods tools."""
 
     home_clicked = Signal()
     theme_clicked = Signal()  # unused — MainWindow Theme menu owns appearance
 
     # suite → (pages, labels, widths)
+    # texmesh order: Mesh Lods · Texture Params | Home | Texture Editor · Texture Denoiser
     SUITE_PAGES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...]]] = {
         "assets": (
             ("packages", "config", "kuid"),
@@ -239,9 +243,15 @@ class AssetsPageNav(_ScrubPillNav):
             (92, 92, 92),
         ),
         "texmesh": (
-            ("texture", "parameter", "denoise", "meshops"),
-            ("Texture", "Parameter", "Denoise", "Mesh Ops"),
-            (88, 96, 88, 92),
+            ("meshops", "texture", "parameter", "denoise"),
+            # Two-line labels — long names were clipping inside the pill.
+            (
+                "Mesh\nLods",
+                "Texture\nParams",
+                "Texture\nEditor",
+                "Texture\nDenoiser",
+            ),
+            (88, 92, 92, 108),
         ),
     }
     # Back-compat aliases used by older checks / callers.
@@ -268,24 +278,33 @@ class AssetsPageNav(_ScrubPillNav):
         lay = QHBoxLayout(self)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
+        tall = self._suite == "texmesh"
+        if tall:
+            # Two-line labels — taller capsule + bigger Home (other suites stay 72).
+            self.setFixedHeight(FLOAT_NAV_HEIGHT_TALL)
         for i, (page, label, width) in enumerate(zip(pages, labels, widths)):
             b = QPushButton(label)
             b.setObjectName("navBtn")
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setFixedWidth(width)
+            if "\n" in label:
+                b.setMinimumHeight(44)
             b.setAutoExclusive(True)
             self._group.addButton(b, i)
             b.installEventFilter(self)
             self._nav_btns.append(b)
         self._nav_btns[0].setChecked(True)
 
-        self.home_btn = make_home_button(self)
+        self.home_btn = make_home_button(
+            self, side=NAV_ICON_SIDE_TALL if tall else None
+        )
         self.home_btn.clicked.connect(self.home_clicked.emit)
         left, right = mount_center_icon_nav(
             lay,
             home_btn=self.home_btn,
             page_btns=self._nav_btns,
+            home_gap=HOME_GAP_TALL if tall else None,
         )
         bind_split_wells(
             self,
@@ -332,17 +351,22 @@ class AssetsPageNav(_ScrubPillNav):
 
 
 class AssetsSubNav(_ScrubPillNav):
-    """Top bar — Texture | Parameter | Denoise | Mesh Ops (no Home/Theme)."""
+    """Top bar — Mesh Lods | Texture Params | Texture Editor | Texture Denoiser."""
 
-    PAGES = ("texture", "parameter", "denoise", "meshops")
-    LABELS = ("Texture", "Parameter", "Denoise", "Mesh Ops")
-    WIDTHS = (88, 96, 88, 92)
+    PAGES = ("meshops", "texture", "parameter", "denoise")
+    LABELS = (
+        "Mesh\nLods",
+        "Texture\nParams",
+        "Texture\nEditor",
+        "Texture\nDenoiser",
+    )
+    WIDTHS = (88, 92, 92, 108)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._pages = self.PAGES
-        self._page = "texture"
-        self._committed = "texture"
+        self._page = "meshops"
+        self._committed = "meshops"
 
         lay = QHBoxLayout(self)
         self._group = QButtonGroup(self)
@@ -353,6 +377,8 @@ class AssetsSubNav(_ScrubPillNav):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setFixedWidth(width)
+            if "\n" in label:
+                b.setMinimumHeight(44)
             b.setAutoExclusive(True)
             self._group.addButton(b, i)
             b.installEventFilter(self)
