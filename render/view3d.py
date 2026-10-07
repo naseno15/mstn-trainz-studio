@@ -3729,8 +3729,8 @@ class MeshView(QOpenGLWidget):
             if self._att_dragging and self._edit_att_index >= 0 and not alt:
                 self._drag_edit_attachment(dx, dy, event.modifiers())
                 return
-            # Natural orbit: drag right → yaw left; drag up → look up
-            self._yaw_vel += -dx * 0.045
+            # Natural orbit: content follows drag (yaw was inverted vs look-at X).
+            self._yaw_vel += dx * 0.045
             self._pitch_vel += dy * 0.045
             self._yaw_vel = float(np.clip(self._yaw_vel, -8.0, 8.0))
             self._pitch_vel = float(np.clip(self._pitch_vel, -8.0, 8.0))
