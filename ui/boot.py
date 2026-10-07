@@ -88,8 +88,16 @@ def main(argv: list[str] | None = None) -> int:
 
     from ..util.hw import prefer_light_boot_frost
 
+    from PySide6.QtCore import Qt
+
     # Cover → warm under frost → reveal HOME. Studios still fully warm before click.
     win.go_home()
+    # MeshView must exist before first show — otherwise Windows recreates the HWND
+    # when the first QOpenGLWidget lands (looks like close + reopen mid-warm).
+    win.prewarm_mesh_gl()
+    # GL prewarm can create the HWND at default size — force maximized on first show
+    # and again after warm (drag / compositor can leave it restored).
+    win.setWindowState(Qt.WindowState.WindowMaximized)
     win.showMaximized()
     win.raise_()
     win.activateWindow()
@@ -100,7 +108,11 @@ def main(argv: list[str] | None = None) -> int:
     win._overlay.setGeometry(win.rect())
     win._overlay.show()
     win._overlay.raise_()
+    # Title bar above frost: drag / traffic lights while studios warm.
+    win._raise_overlay_chrome()
     app.processEvents()
+    if not win.isMaximized():
+        win.showMaximized()
 
     # One frost grab max — low-end skips (grab+blur was a big boot tax).
     if not prefer_light_boot_frost():
@@ -117,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
 
     def _boot_stage(text: str, pct: int) -> None:
         win._overlay.set_stage(text, pct)
+        # Keep title bar above frost — processEvents / resize can bury it.
+        win._raise_overlay_chrome()
         # Throttle processEvents — every stage was re-entering the event loop hard.
         import time
 
@@ -131,6 +145,9 @@ def main(argv: list[str] | None = None) -> int:
     win._overlay.set_stage("Ready", 100)
     app.processEvents()
     win._hide_overlay()
+    # Boot must end maximized — frameless drag / early HWND create can leave restored.
+    win.showMaximized()
+    win.setWindowState(win.windowState() | Qt.WindowState.WindowMaximized)
 
     if initials:
         from ..audio.classify import partition_paths

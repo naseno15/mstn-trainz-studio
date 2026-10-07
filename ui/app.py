@@ -139,6 +139,7 @@ from .title_chrome import (
     EDGE_GRIP,
     TITLE_CONTENT_INSET,
     FloatTitleBar,
+    begin_frameless_move,
     edge_at,
     install_frameless,
 )
@@ -1281,6 +1282,10 @@ class LoadingOverlay(QWidget):
         card_lay.addWidget(self.stage)
         root.addWidget(card)
         self._card = card
+        # Card is display-only — clicks must reach this overlay for window drag.
+        card.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        for child in card.findChildren(QWidget):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
     def set_brand(self, text: str) -> None:
         self.brand.setText(text)
@@ -1331,6 +1336,15 @@ class LoadingOverlay(QWidget):
         if self.parentWidget() is not None:
             self.setGeometry(self.parentWidget().rect())
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        # Boot frost covers the whole window — allow drag so the user can
+        # arrange monitors before studios finish warming.
+        if event.button() == Qt.MouseButton.LeftButton:
+            if begin_frameless_move(self.window()):
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
 
 class BottomNav(QFrame):
     """Floating capsule: pages L/R · Home center (Theme is top-bar menu)."""
@@ -1340,6 +1354,9 @@ class BottomNav(QFrame):
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         from .float_chrome import (
+            FLOAT_NAV_HEIGHT_TALL,
+            HOME_GAP_TALL,
+            NAV_ICON_SIDE_TALL,
             bind_split_wells,
             hit_page_cluster,
             make_home_button,
@@ -1348,7 +1365,9 @@ class BottomNav(QFrame):
             prepare_float_nav,
         )
 
-        prepare_float_nav(self)
+        # Mesh Studio + Texture/Mesh share the tall capsule (big Home + wider gap).
+        # Engine / Assets / Sounds keep the normal 72 height.
+        prepare_float_nav(self, height=FLOAT_NAV_HEIGHT_TALL)
         self._paint_float = paint_float_nav
         self._hit_page = hit_page_cluster
         self._pill = AccentPill(self, radius=14.0)
@@ -1390,7 +1409,7 @@ class BottomNav(QFrame):
         self.settings_btn.setToolTip("Settings")
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.home_btn = make_home_button(self)
+        self.home_btn = make_home_button(self, side=NAV_ICON_SIDE_TALL)
         self.theme_btn = None  # Theme lives in top FloatTitleBar → Theme menu
 
         # Order is the split: Preview+Meshes | Home | Attachs+Settings.
@@ -1419,6 +1438,7 @@ class BottomNav(QFrame):
             lay,
             home_btn=self.home_btn,
             page_btns=self._nav_btns,
+            home_gap=HOME_GAP_TALL,
         )
         self._left_btns = left
         self._right_btns = right
@@ -2398,12 +2418,29 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def prewarm_mesh_gl(self) -> None:
+        """Build Mesh chrome + MeshView while the top-level window is still hidden.
+
+        On Windows, the first QOpenGLWidget parented into an already-shown HWND
+        recreates that platform window — looks like the app closed and reopened.
+        Creating MeshView before showMaximized keeps the HWND stable; later
+        Finder preview GL shares the context (AA_ShareOpenGLContexts).
+        """
+        self._boot_batch = True
+        try:
+            warm_logo_cache()
+            self.ensure_studio_chrome()
+            self._ensure_gl()
+        finally:
+            self._boot_batch = False
+
     def warmup_hub_studios(self, *, on_stage=None) -> None:
         """Precache Mesh / Sounds / Engine / Assets under the boot frost.
 
         ponytail: build once at boot so HOME card clicks only swap the stack —
         no first-click hitch from EditorWorkspace / Sounds / Engine imports.
-        GL fast-preview warms idle after overlay hide (not under frost).
+        Mesh GL is prewarmed before first show (see prewarm_mesh_gl).
+        Finder GL still warms idle after overlay hide.
         """
         self._boot_batch = True
         try:
@@ -2411,6 +2448,10 @@ class MainWindow(QMainWindow):
                 on_stage("Warming Mesh Studio…", 40)
             warm_logo_cache()
             self.ensure_studio_chrome()
+            # MeshView should already exist from prewarm_mesh_gl; keep as safety net
+            # when boot is invoked without the hidden prewarm path.
+            if self.view is None:
+                self._ensure_gl()
             if on_stage is not None:
                 on_stage("Warming Sounds Studio…", 60)
             self._ensure_sounds_host()
@@ -3263,7 +3304,7 @@ class MainWindow(QMainWindow):
         self._apply_studio_chrome()
         self._layout_viewer_pane()  # hub must fill pane or HOME cards sit top-left
         self._status.showMessage(
-            "MSTN Trainz Studio — Mesh · Sounds · Engine · Assets · Texture / Mesh"
+            "MSTN Trainz Studio — Mesh · Sounds · Engine · Assets · Texture & Mesh Lods"
         )
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if not snap.isNull():
@@ -3449,7 +3490,7 @@ class MainWindow(QMainWindow):
             )
 
     def enter_texmesh_studio(self) -> None:
-        """Texture / Mesh Tools — maps + LM / materials (same host, texmesh suite)."""
+        """Texture & Mesh Lods tools — maps + LM / materials (same host, texmesh suite)."""
         leaving_home = self._studio_mode == "home"
         snap = self._grab_hub_snapshot() if leaving_home else QPixmap()
         self._ensure_assets_host()
@@ -3463,13 +3504,13 @@ class MainWindow(QMainWindow):
         if self.pbr_hud is not None:
             self.pbr_hud.hide()
         self._apply_studio_chrome()
-        self._status.showMessage("Texture / Mesh Tools")
+        self._status.showMessage("Texture & Mesh Lods tools")
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if leaving_home and not snap.isNull():
             self._play_hub_transition(
                 snap,
                 direction=self._hub_transition_dir(leaving_home=True, dest="texmesh"),
-                label="Texture / Mesh Tools",
+                label="Texture & Mesh Lods tools",
             )
 
     def _status_from_sounds(self, msg: str) -> None:
@@ -5626,9 +5667,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_overlay") and self._overlay.isVisible():
             self._overlay.setGeometry(self.rect())
             self._overlay.raise_()
-            bar = getattr(self, "_title_bar", None)
-            if bar is not None:
-                bar.raise_()
+            self._raise_overlay_chrome()
         reveal = getattr(self, "_hub_reveal", None)
         if reveal is not None and reveal.isVisible():
             host = self._hub_reveal_host()
@@ -5644,6 +5683,12 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._reposition_title_bar)
 
     # ── overlay / busy / GL ──────────────────────────────────
+
+    def _raise_overlay_chrome(self) -> None:
+        """Keep title bar above frost — drag + traffic lights during boot/load."""
+        bar = getattr(self, "_title_bar", None)
+        if bar is not None:
+            bar.raise_()
 
     def _capture_overlay_frost(self) -> QPixmap:
         """Blur central UI (overlay is a MainWindow child — not in this grab)."""
@@ -5679,6 +5724,7 @@ class MainWindow(QMainWindow):
             self._overlay.setGraphicsEffect(None)
         self._overlay.show()
         self._overlay.raise_()
+        self._raise_overlay_chrome()
         if instant:
             self._overlay.update()
         else:
@@ -5719,8 +5765,16 @@ class MainWindow(QMainWindow):
     def _ensure_gl(self) -> bool:
         if self.view is not None:
             return True
-        self._overlay.set_stage("Creating 3D view…", 96)
-        QApplication.processEvents()
+        # Prewarm path runs while hidden / under _boot_batch — no stage spam.
+        show_stage = (
+            self.isVisible()
+            and hasattr(self, "_overlay")
+            and self._overlay.isVisible()
+            and not getattr(self, "_boot_batch", False)
+        )
+        if show_stage:
+            self._overlay.set_stage("Creating 3D view…", 96)
+            QApplication.processEvents()
         try:
             from ..render.view3d import MeshView
 
@@ -5753,7 +5807,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(120, self._refresh_side_frost)
             return True
         except Exception as e:
-            QMessageBox.warning(self, "OpenGL", f"3D view unavailable:\n{e}")
+            if self.isVisible():
+                QMessageBox.warning(self, "OpenGL", f"3D view unavailable:\n{e}")
             self._status.showMessage("OpenGL failed")
             return False
 
@@ -6298,7 +6353,7 @@ class MainWindow(QMainWindow):
         assets_act = QAction("Assets Tools", self)
         assets_act.triggered.connect(self.enter_assets_studio)
         v.addAction(assets_act)
-        texmesh_act = QAction("Texture / Mesh Tools", self)
+        texmesh_act = QAction("Texture & Mesh Lods tools", self)
         texmesh_act.triggered.connect(self.enter_texmesh_studio)
         v.addAction(texmesh_act)
         self._view_menu = v
