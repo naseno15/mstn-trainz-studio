@@ -40,6 +40,8 @@ class SubMesh:
     parameter_map: str = ""
     material_type: str = ""
     warnings: List[str] = field(default_factory=list)
+    # Byte offset where this chunk's material block starts (0 gap in tzMF).
+    tail_off: int = -1
 
 
 @dataclass
@@ -150,7 +152,10 @@ def _sample_ok(data: bytes, offset: int, count: int, stride: int, vfmt: VertexFo
                 return False
         if vfmt.uv_offset >= 0:
             u, v = struct.unpack_from("<2f", data, base + vfmt.uv_offset)
-            if not (math.isfinite(u) and math.isfinite(v) and -32 <= u <= 32 and -32 <= v <= 32):
+            # Tiled Trainz UVs go well past ±1 (int meshes ~±50). A ±32 clamp
+            # dropped the whole chunk, then every later material sat on the
+            # wrong geometry. 1e5 still rejects garbage bit patterns.
+            if not (math.isfinite(u) and math.isfinite(v) and abs(u) < 1e5 and abs(v) < 1e5):
                 return False
     xs = [p[0] for p in positions]
     ys = [p[1] for p in positions]
@@ -439,6 +444,7 @@ def parse_trainzmesh(path: str, data: Optional[bytes] = None) -> TrainzMesh:
             continue
         seen.append((start, end))
         mesh.name = f"mesh_{len(submeshes)}"
+        mesh.tail_off = end
         submeshes.append(mesh)
         if limit and len(submeshes) >= limit:
             break

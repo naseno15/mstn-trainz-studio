@@ -48,9 +48,10 @@ class MeshPart:
     parameter_ref: str = ""
     material_type: str = ""
     mesh_key: str = ""  # owning file name when multiple meshes in one preview
-    # Trainz mesh-meta ``two-sided`` / MATL TwoSided — default True so cabin
-    # interiors keep previous no-cull preview until meta says otherwise.
-    two_sided: bool = True
+    # Trainz mesh-meta ``two-sided`` — default False; only on when mesh.txt says so.
+    two_sided: bool = False
+    # tzMF: file offset of the material block that follows this chunk (-1 = none).
+    chunk_tail: int = -1
 
 
 @dataclass

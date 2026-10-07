@@ -372,13 +372,15 @@ def load_trainzmesh(path: Path, progress=None, *, preview_fast: bool = False) ->
     _p("Parsing trainzmesh…", 15)
     # Reuse bytes — avoid a second multi-MB disk read inside the parser.
     mesh = parse_trainzmesh(str(path), data=raw)
-    from .tzmf_edit import parse_materials
+    from .tzmf_edit import materials_by_tail, parse_materials
 
     mat_blocks = [] if preview_fast else parse_materials(raw)
+    mats_at = materials_by_tail(mat_blocks)
     n_sub = max(len(mesh.submeshes), 1)
     parts: list[MeshPart] = []
     for i, sub in enumerate(mesh.submeshes):
-        mat = mat_blocks[i] if i < len(mat_blocks) else None
+        tail = int(getattr(sub, "tail_off", -1))
+        mat = mats_at.get(tail)
         part_name = mat.name if mat is not None else (sub.name or f"mesh_{i}")
         _p(f"Submesh {i + 1}/{n_sub}: {part_name}…", 20 + int(55 * i / n_sub))
         # Keep Trainz Z-up — viewport / axes / Face Orientation match PAY viewer
@@ -401,6 +403,7 @@ def load_trainzmesh(path: Path, progress=None, *, preview_fast: bool = False) ->
                     indices=np.asarray(sub.indices, dtype=np.uint32),
                     normals=nrm,
                     uvs=uvs,
+                    chunk_tail=tail,
                 )
             )
             continue
@@ -448,6 +451,7 @@ def load_trainzmesh(path: Path, progress=None, *, preview_fast: bool = False) ->
                 parameter_path=parameter,
                 parameter_ref=parameter_ref,
                 material_type=mat_type,
+                chunk_tail=tail,
             )
         )
     if preview_fast:

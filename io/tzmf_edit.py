@@ -183,6 +183,15 @@ class AttRecord:
         return zup_quat_to_yup_orient(qx, qy, qz, qw)
 
 
+def materials_by_tail(mats: list[MatBlock]) -> dict[int, MatBlock]:
+    """Map chunk-tail offset → material. The block starts at the geometry tail (gap 0).
+
+    List index is not chunk index: unnamed chunks sit between named ones, so
+    ``mats[i]`` is often the next piece of geometry.
+    """
+    return {int(m.type_off): m for m in mats}
+
+
 def parse_materials(data: bytes | bytearray) -> list[MatBlock]:
     """Locate MeshEditor-style material blocks by type + ``*.m.*`` name."""
     out: list[MatBlock] = []
