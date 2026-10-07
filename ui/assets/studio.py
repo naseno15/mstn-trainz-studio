@@ -85,6 +85,15 @@ from ...io.texture import (
     write_texture_txt,
 )
 from ...io.ve39 import fix_ve39, scan_ve39
+from ...io.ve_rules import (
+    catalog_image,
+    fix_reports,
+    format_findings,
+    format_report as format_ve_report,
+    scan_mesh_folder,
+    scan_paths,
+    scan_texture_folder,
+)
 from ..code_edit import CodeEdit, apply_code_edit_theme
 from ..frost import (
     FrostGlassFrame,
@@ -103,10 +112,10 @@ from ..motion import (
     stop_slide,
 )
 
-# Texture / Mesh right props column — wider than Packages viewer rail.
-_RIGHT_DOCK_MIN = 480
-_RIGHT_DOCK_MAX = 780
-_RIGHT_DOCK_DEFAULT = 600
+# Texture / Mesh right props column — Maps viewer needs room for channels.
+_RIGHT_DOCK_MIN = 560
+_RIGHT_DOCK_MAX = 920
+_RIGHT_DOCK_DEFAULT = 700
 _TEX_ROW_H = 64  # badge + title + subtitle — 52 clipped the second line
 # Longer + InOutCubic + frozen page paint = silk (setSizes every frame was janky).
 _DOCK_ANIM_MS = 560
@@ -117,6 +126,7 @@ from .kuid import count_kuids, describe_kuid, normalize_list
 from .nav import AccentPill, AssetsPageNav, AssetsSubNav
 from .packages import PackagesPage
 from .sidebar import AssetsSidebar
+from .tex_map_panel import TexMapSidePanel
 
 
 class _PageSlideHost(QWidget):
@@ -364,10 +374,10 @@ class _TexNameCell(QWidget):
 
 
 class _TexPrepWorker(QThread):
-    """Resize / VE39 scan+fix / catalog (probe+VE39) off the UI thread."""
+    """Resize / VE rules scan+fix / catalog off the UI thread."""
 
     line = Signal(str)
-    catalog_row = Signal(object)  # dict: path + probe + ve39
+    catalog_row = Signal(object)  # dict: path + probe + multi-VE status
     finished_counts = Signal(int, int)
 
     def __init__(self, kind: str, paths: list[Path], opts: dict, parent=None) -> None:
@@ -389,44 +399,27 @@ class _TexPrepWorker(QThread):
                 else:
                     fail += 1
                     self.line.emit(f"FAIL  {path.name}  {msg}")
-        elif self._kind == "catalog":
+        elif self._kind in ("catalog", "rules_scan"):
             for path in self._paths:
                 if self.isInterruptionRequested():
                     break
-                probe = probe_image(path)
-                ve = scan_ve39(path)
-                status = "—"
-                if probe.error and not (probe.width and probe.height):
+                row = catalog_image(path)
+                status = str(row.get("status", "—"))
+                findings = row.get("findings") or []
+                if status == "ERR" or (row.get("error") and status == "—"):
                     fail += 1
-                    status = "ERR"
-                    self.line.emit(f"ERR  {path.name}  {probe.error}")
-                elif ve.get("error"):
-                    fail += 1
-                    status = "ERR"
-                    self.line.emit(f"ERR  {path.name}  {ve['error']}")
-                elif ve.get("uniform"):
+                    self.line.emit(f"ERR  {path.name}  {row.get('error') or status}")
+                elif findings:
                     ok += 1
-                    status = f"VE39 {ve.get('color_hex', '')}".strip()
                     self.line.emit(
-                        f"UNIFORM  {path.name}  {ve.get('size', '')}  {ve.get('color_hex', '')}"
+                        f"HIT  {path.name}  {status}\n{format_findings(findings)}"
                     )
                 else:
-                    status = "OK"
                     self.line.emit(
-                        f"ok  {path.name}  {probe.dims}  {probe.channel_label}  "
-                        f"{format_bytes(probe.file_bytes)}"
+                        f"ok  {path.name}  {row.get('dims', '')}  "
+                        f"{row.get('channels', '')}  {format_bytes(int(row.get('bytes') or 0))}"
                     )
-                self.catalog_row.emit(
-                    {
-                        "path": path,
-                        "dims": probe.dims,
-                        "channels": probe.channel_label,
-                        "bytes": probe.file_bytes,
-                        "status": status,
-                        "uniform": bool(ve.get("uniform")),
-                        "error": probe.error or ve.get("error") or "",
-                    }
-                )
+                self.catalog_row.emit(row)
         elif self._kind == "ve39_scan":
             for path in self._paths:
                 if self.isInterruptionRequested():
@@ -443,6 +436,18 @@ class _TexPrepWorker(QThread):
                     )
                 else:
                     self.line.emit(f"ok  {path.name}  {row['size']}  not uniform")
+        elif self._kind == "rules_fix":
+            reports = scan_paths(self._paths)
+            for finding, good, msg in fix_reports(reports, bak=bool(self._opts.get("bak", True))):
+                if self.isInterruptionRequested():
+                    break
+                tag = f"VE{finding.code}" if finding.code else "MAT"
+                if good:
+                    ok += 1
+                    self.line.emit(f"FIXED  {tag}  {finding.path.name}  {msg}")
+                else:
+                    fail += 1
+                    self.line.emit(f"FAIL  {tag}  {finding.path.name}  {msg}")
         else:  # ve39_fix
             for path in self._paths:
                 if self.isInterruptionRequested():
@@ -820,6 +825,7 @@ class AssetsStudioHost(QWidget):
         self._theme = theme_mode if theme_mode in ("dark", "light") else "dark"
         self._page = "packages"
         self._sub_page = "texture"
+        self._suite = "assets"  # assets | texmesh — Home cards share one host
         self._chump_path: Path | None = None
         self._build()
 
@@ -830,7 +836,13 @@ class AssetsStudioHost(QWidget):
         dark = self._theme != "light"
         self.setPalette(qpalette_for(self._theme))
         self.sidebar.set_theme(self._theme)
-        self._nav.set_theme(self._theme)
+        for nav in (
+            getattr(self, "_nav_assets", None),
+            getattr(self, "_nav_texmesh", None),
+            getattr(self, "_nav", None),
+        ):
+            if nav is not None and hasattr(nav, "set_theme"):
+                nav.set_theme(self._theme)
         if hasattr(self, "_sub_nav"):
             self._sub_nav.set_theme(self._theme)
         for panel in self.findChildren(FrostGlassFrame):
@@ -896,12 +908,22 @@ class AssetsStudioHost(QWidget):
 
         nav_wrap = QHBoxLayout()
         nav_wrap.addStretch(1)
-        self._nav = AssetsPageNav()
-        self._nav.page_changed.connect(self._on_page)
-        self._nav.home_clicked.connect(self._on_home)
-        self._nav.theme_clicked.connect(self._theme_clicked)
-        self._nav.set_theme(self._theme)
-        nav_wrap.addWidget(self._nav)
+        # Two suite navs — Assets (Packages·Config·KUID) vs Texture / Mesh Tools.
+        self._nav_stack = QStackedWidget()
+        self._nav_stack.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
+        )
+        self._nav_assets = AssetsPageNav(suite="assets")
+        self._nav_texmesh = AssetsPageNav(suite="texmesh")
+        for nav in (self._nav_assets, self._nav_texmesh):
+            nav.page_changed.connect(self._on_page)
+            nav.home_clicked.connect(self._on_home)
+            nav.theme_clicked.connect(self._theme_clicked)
+            nav.set_theme(self._theme)
+        self._nav_stack.addWidget(self._nav_assets)
+        self._nav_stack.addWidget(self._nav_texmesh)
+        self._nav = self._nav_assets
+        nav_wrap.addWidget(self._nav_stack)
         nav_wrap.addStretch(1)
         mid.addLayout(nav_wrap)
 
@@ -937,7 +959,42 @@ class AssetsStudioHost(QWidget):
         return self.packages_page
 
     def show_packages(self) -> None:
+        self.set_suite("assets")
         self._on_page("packages")
+
+    def set_suite(self, suite: str) -> None:
+        """Home entry: ``assets`` (pack/config/KUID) or ``texmesh`` (Texture·Mesh Ops)."""
+        suite = "texmesh" if suite == "texmesh" else "assets"
+        same = suite == getattr(self, "_suite", "assets")
+        self._suite = suite
+        stack = getattr(self, "_nav_stack", None)
+        if suite == "texmesh":
+            self._nav = self._nav_texmesh
+            if stack is not None:
+                stack.setCurrentIndex(1)
+            sub = getattr(self, "_sub_nav", None)
+            if sub is not None:
+                sub.hide()  # bottom nav is Texture | Mesh Ops
+            self.sidebar.set_brand("Texture / Mesh Tools")
+            if not same or self._page != "texmesh":
+                self._on_page("texture")
+            else:
+                self._nav.set_page(self._sub_page, emit=False, animate=False)
+        else:
+            self._nav = self._nav_assets
+            if stack is not None:
+                stack.setCurrentIndex(0)
+            sub = getattr(self, "_sub_nav", None)
+            if sub is not None:
+                sub.show()  # only visible while stack is on texmesh (won't be)
+            self.sidebar.set_brand("Assets Tools")
+            if not same or self._page == "texmesh":
+                self._on_page("packages")
+            else:
+                self._nav.set_page(self._page, emit=False, animate=False)
+
+    def _suite_label(self) -> str:
+        return "Texture / Mesh Tools" if self._suite == "texmesh" else "Assets Tools"
 
     def _build_config_page(self) -> QWidget:
         page = QWidget()
@@ -999,7 +1056,7 @@ class AssetsStudioHost(QWidget):
         pl.addWidget(self._title("Texture.txt"))
         tip = QLabel(
             "Drop PBR maps onto the table — groups albedo/normal/parameter. "
-            "Dims · channels · size · VE39 auto-scan. "
+            "Dims · channels · size · VE rules auto-scan (37/39/65…). "
             "Double-click a row to select the whole set."
         )
         tip.setObjectName("mutedTip")
@@ -1123,7 +1180,7 @@ class AssetsStudioHost(QWidget):
         # Lazy import — SideTabStrip lives in app.py (avoid circular at module load).
         from ..app import SideTabStrip
 
-        self._tex_side_tabs = SideTabStrip(("Texture Params", "Resize → _prep"))
+        self._tex_side_tabs = SideTabStrip(("Params", "Maps", "Resize"))
         self._tex_side_tabs.index_changed.connect(self._tex_on_side_tab)
         pr.addWidget(self._tex_side_tabs)
 
@@ -1163,7 +1220,13 @@ class AssetsStudioHost(QWidget):
         pbl.addWidget(self._lm_field("Compression", self.tex_compress))
         self._tex_side_stack.addWidget(params_page)
 
-        # ── tab 1: Batch Resize → _prep/ ──────────────────────
+        # ── tab 1: Maps Viewer / Editor ───────────────────────
+        self._tex_map_panel = TexMapSidePanel()
+        self._tex_map_panel.status.connect(self._msg)
+        self._tex_map_panel.saved.connect(self._tex_map_saved)
+        self._tex_side_stack.addWidget(self._tex_map_panel)
+
+        # ── tab 2: Batch Resize → _prep/ ──────────────────────
         prep_page = QWidget()
         prep_page.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
@@ -1180,7 +1243,7 @@ class AssetsStudioHost(QWidget):
             "Scales images from the list into a sibling _prep/ folder "
             "(keeps originals). Map type picks the filter; format / PoT / "
             "flip-green apply when you run Resize → _prep…. "
-            "VE39 scan/fix are separate and always available."
+            "Rules scan/fix cover VE37/39/65… — VE39-only buttons still available."
         )
         prep_tip.setObjectName("mutedTip")
         prep_tip.setWordWrap(True)
@@ -1283,8 +1346,10 @@ class AssetsStudioHost(QWidget):
             if page is not None and page.graphicsEffect() is not None:
                 page.setGraphicsEffect(None)
         stack.setCurrentIndex(idx)
-        titles = ("Texture Params", "Batch Resize → _prep/")
+        titles = ("Texture Params", "Maps Viewer / Editor", "Batch Resize → _prep/")
         self._tex_props_title.setText(titles[max(0, min(idx, len(titles) - 1))])
+        if idx == 1:
+            self._tex_sync_map_panel()
         self._tex_sync_side_scroll()
         QTimer.singleShot(0, self._tex_sync_side_scroll)
 
@@ -1528,13 +1593,28 @@ class AssetsStudioHost(QWidget):
         self.lm_render = self._lm_spin(lo=0.0, hi=1.0, value=0.0)
         self.lm_att = self._lm_spin(lo=0.0, hi=1.0, value=0.06)
 
-        pr.addWidget(self._lm_field("offset", self.lm_offset))
-        pr.addWidget(self._lm_field("calcPoint", self.lm_calc))
-        pr.addWidget(self._lm_field("multiplier", self.lm_mult))
-        pr.addWidget(self._lm_field("animCutOff", self.lm_anim))
-        pr.addWidget(self._lm_field("renderCutOff", self.lm_render))
-        pr.addWidget(self._lm_field("attachCutOff", self.lm_att))
-        pr.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setObjectName("sideScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        body = QWidget()
+        body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(10)
+        bl.setAlignment(Qt.AlignmentFlag.AlignTop)
+        bl.addWidget(self._lm_field("offset", self.lm_offset))
+        bl.addWidget(self._lm_field("calcPoint", self.lm_calc))
+        bl.addWidget(self._lm_field("multiplier", self.lm_mult))
+        bl.addWidget(self._lm_field("animCutOff", self.lm_anim))
+        bl.addWidget(self._lm_field("renderCutOff", self.lm_render))
+        bl.addWidget(self._lm_field("attachCutOff", self.lm_att))
+        bl.addStretch(1)
+        scroll.setWidget(body)
+        enable_smooth_scroll_area(scroll)
+        pr.addWidget(scroll, 1)
         self._right_dock.addWidget(props)  # index 1 — Mesh Ops
         return page
 
@@ -1720,6 +1800,8 @@ class AssetsStudioHost(QWidget):
         if page in ("texture", "meshops"):
             self._sub_page = page
             page = "texmesh"
+        elif page == "texmesh":
+            page = "texmesh"
         idx = {
             "packages": 0,
             "config": 1,
@@ -1736,11 +1818,18 @@ class AssetsStudioHost(QWidget):
             clear_button_hover_chrome()
             self._freeze_page_paint(True)
         self._stack.setCurrentIndex(idx)
-        # Pill slide — no-op if scrub already committed this page
-        self._nav.set_page(page, emit=False, animate=True)
+        # Pill slide — suite nav speaks texture/meshops or packages/config/kuid
+        if self._suite == "texmesh":
+            self._nav.set_page(self._sub_page, emit=False, animate=True)
+        else:
+            pill = page if page in ("packages", "config", "kuid") else "packages"
+            self._nav.set_page(pill, emit=False, animate=True)
 
         if page == "texmesh":
-            self._sub_nav.set_page(self._sub_page, emit=False, animate=(prev == "texmesh"))
+            if self._suite != "texmesh":
+                self._sub_nav.set_page(
+                    self._sub_page, emit=False, animate=(prev == "texmesh")
+                )
             self._sub_slide.set_index(
                 0 if self._sub_page == "texture" else 1,
                 animate=(prev == "texmesh"),
@@ -1758,13 +1847,13 @@ class AssetsStudioHost(QWidget):
         def _after_dock() -> None:
             if page == "texmesh":
                 self.sidebar.set_page(self._sub_page, animate=entering_tex)
-                if entering_tex:
+                if entering_tex and self._suite != "texmesh":
                     self._reveal_sub_nav()
             else:
                 self.sidebar.set_page(page, animate=leaving_tex or changed)
 
         self._sync_right_dock(animate=changed, after=_after_dock)
-        msg = f"Assets Tools — {label}"
+        msg = f"{self._suite_label()} — {label}"
         self.path_lab.setText(msg)
         self.status.emit(msg)
 
@@ -1775,8 +1864,10 @@ class AssetsStudioHost(QWidget):
         self._sub_slide.set_index(0 if page == "texture" else 1, animate=True)
         self.sidebar.set_page(page, animate=True)
         self._sync_right_dock()
+        if self._suite == "texmesh":
+            self._nav.set_page(page, emit=False, animate=True)
         label = "Texture" if page == "texture" else "Mesh Ops"
-        msg = f"Assets Tools — {label}"
+        msg = f"{self._suite_label()} — {label}"
         self.path_lab.setText(msg)
         self.status.emit(msg)
 
@@ -1796,14 +1887,19 @@ class AssetsStudioHost(QWidget):
             "tex_save": self._tex_save,
             "tex_save_all": self._tex_save_all,
             "tex_resize": self._tex_resize,
+            "tex_rules_scan": self._tex_rules_scan,
+            "tex_rules_fix": self._tex_rules_fix,
             "tex_ve39_scan": self._tex_ve39_scan,
             "tex_ve39_fix": self._tex_ve39_fix,
             "open_texture": self._check_texture_file,
             "scan_folder": self._scan_texture_folder,
+            "cfg_rules_scan": self._cfg_rules_scan,
             "lm_add": lambda: self._lm_add_row(1.0, "mesh.im"),
             "lm_remove": self._lm_remove_row,
             "lm_load": self._lm_load,
             "lm_save": self._lm_save,
+            "lm_rules_scan": self._lm_rules_scan,
+            "lm_rules_fix": self._lm_rules_fix,
             "lm_mat_scan": self._lm_mat_scan_selected,
             "lm_mat_fix": self._lm_mat_fix_selected,
             "normalize_kuids": self._normalize_kuids,
@@ -2054,6 +2150,7 @@ class AssetsStudioHost(QWidget):
         self.tex_primary.blockSignals(False)
         self._tex_apply_hints_from_stem(images[0].stem)
         self._tex_refresh_preview()
+        self._tex_sync_map_panel(images[0])
         need = [
             p
             for p in self._tex_paths
@@ -2157,7 +2254,24 @@ class AssetsStudioHost(QWidget):
         self.tex_primary.blockSignals(False)
         self._tex_apply_hints_from_stem(path.stem)
         self._tex_refresh_preview()
+        self._tex_sync_map_panel(path)
         self._msg(f"Primary ← {path.name}")
+
+    def _tex_sync_map_panel(self, path: Path | None = None) -> None:
+        panel = getattr(self, "_tex_map_panel", None)
+        if panel is None:
+            return
+        if path is None:
+            rows = sorted({idx.row() for idx in self.tex_list.selectedIndexes()})
+            path = self._tex_row_path(rows[0]) if rows else None
+        panel.set_from_selection(list(self._tex_paths), path)
+
+    def _tex_map_saved(self, path: object) -> None:
+        """Refresh catalog row after Maps editor Save."""
+        if not isinstance(path, Path):
+            return
+        self._tex_catalog([path], announce=False)
+        self._msg(f"Map saved ← {path.name}")
 
     def _tex_list_dbl(self, row: int, col: int) -> None:
         """Double-click any column → select whole PBR family."""
@@ -2185,6 +2299,7 @@ class AssetsStudioHost(QWidget):
             self.tex_primary.blockSignals(False)
             self._tex_apply_hints_from_stem(path.stem)
             self._tex_refresh_preview()
+            self._tex_sync_map_panel(path)
         self._msg(f"Set ← {fam}")
 
     def _tex_catalog(self, paths: list[Path], *, announce: bool = False) -> None:
@@ -2246,17 +2361,17 @@ class AssetsStudioHost(QWidget):
             if st:
                 text = str(payload.get("status", "—"))
                 st.setText(text)
-                if text.startswith("VE39") or text == "ERR":
-                    st.setForeground(QColor("#ff453a"))
-                elif text == "OK":
+                if text == "OK":
                     st.setForeground(QColor("#30d158"))
+                elif text == "ERR" or text.startswith("VE"):
+                    st.setForeground(QColor("#ff453a"))
             break
 
     def _tex_catalog_done(self, ok: int, fail: int, *, announce: bool = True) -> None:
-        # catalog: ok count = uniform VE39 hits
-        self._msg(f"Texture catalog — VE39 hits {ok}, errors {fail}")
+        # catalog: ok count = files with VE hits
+        self._msg(f"Texture catalog — VE hits {ok}, errors {fail}")
         if announce:
-            self.tex_log.appendPlainText(f"\n— catalog done: VE39={ok} err={fail} —")
+            self.tex_log.appendPlainText(f"\n— catalog done: hits={ok} err={fail} —")
 
     def _tex_apply_keys(self, keys: dict[str, str]) -> None:
         self.tex_primary.blockSignals(True)
@@ -2430,6 +2545,53 @@ class AssetsStudioHost(QWidget):
             return
         self._tex_start_prep("resize", paths, self._prep_opts_resize())
 
+    def _tex_rules_scan(self) -> None:
+        paths = self._tex_list_image_paths()
+        if not paths:
+            from ..i18n import g, t
+
+            QMessageBox.warning(
+                self, g("rules.ui.title"), t("Drop images into the list first.")
+            )
+            return
+        self._tex_catalog(paths, announce=True)
+
+    def _tex_rules_fix(self) -> None:
+        paths = self._tex_list_image_paths()
+        if not paths:
+            from ..i18n import g, t
+
+            QMessageBox.warning(
+                self, g("rules.ui.title"), t("Drop images into the list first.")
+            )
+            return
+        from ..i18n import g
+
+        reply = QMessageBox.question(
+            self,
+            g("rules.ui.fix_title"),
+            g("rules.fix.confirm", n=len(paths)),
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        def _after_fix(ok: int, fail: int) -> None:
+            self._msg(f"Rules fix — {ok} ok, {fail} fail")
+            self.tex_log.appendPlainText(f"\n— rules fix done: {ok} ok, {fail} fail —")
+            self._tex_catalog(paths, announce=False)
+
+        if self._prep_busy():
+            QMessageBox.information(
+                self, "Rules", "Still running — wait or restart Assets."
+            )
+            return
+        self.tex_log.setPlainText(f"rules_fix — {len(paths)} file(s)…\n")
+        worker = _TexPrepWorker("rules_fix", paths, {"bak": True}, self)
+        self._tex_prep_worker = worker
+        worker.line.connect(self._tex_prep_line)
+        worker.finished_counts.connect(_after_fix)
+        worker.start()
+
     def _tex_ve39_scan(self) -> None:
         paths = self._tex_list_image_paths()
         if not paths:
@@ -2491,18 +2653,88 @@ class AssetsStudioHost(QWidget):
 
     def _scan_texture_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(
-            self, "Scan folder for .texture.txt", str(self._tex_source_dir or Path.home())
+            self,
+            "Scan folder for texture VE rules",
+            str(self._tex_source_dir or Path.home()),
         )
         if not path:
             return
-        reports = scan_folder(Path(path))
-        if not reports:
-            self.tex_log.setPlainText("(no .texture / .texture.txt found)")
+        folder = Path(path)
+        ve_reports = scan_texture_folder(folder)
+        legacy = scan_folder(folder)
+        chunks: list[str] = []
+        if ve_reports:
+            chunks.append(
+                "\n\n".join(format_ve_report(r) for r in ve_reports if r.findings)
+                or "(no VE hits on images/texture.txt)"
+            )
+        if legacy:
+            chunks.append("\n\n".join(format_report(r) for r in legacy))
+        if not chunks:
+            self.tex_log.setPlainText("(no textures found)")
             self._msg("Texture scan — empty")
             return
-        self.tex_log.setPlainText("\n\n".join(format_report(r) for r in reports))
-        bad = sum(1 for r in reports if not r.ok)
-        self._msg(f"Scanned {len(reports)} — {bad} with errors")
+        self.tex_log.setPlainText("\n\n".join(chunks))
+        bad = sum(1 for r in ve_reports if r.error_count)
+        self._msg(f"Rules scan — {len(ve_reports)} file(s), {bad} with errors")
+        # drop images into the list for Status column
+        images = [
+            p
+            for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+        ]
+        if images:
+            self._tex_add_from_paths(images)
+            self._tex_catalog(images, announce=False)
+
+    def ve_context_paths(self) -> list[Path]:
+        """Paths for app-wide Tools → VE Rules (textures, meshes, config folder)."""
+        out: list[Path] = []
+        out.extend(self._tex_list_image_paths())
+        out.extend(self._lm_source_paths(selected_only=False))
+        if self._chump_path is not None:
+            out.append(self._chump_path.parent)
+            cfg = self._chump_path.parent / "config.txt"
+            if cfg.is_file():
+                out.append(cfg)
+        if self._tex_source_dir is not None:
+            out.append(self._tex_source_dir)
+        # dedupe
+        seen: set[str] = set()
+        uniq: list[Path] = []
+        for p in out:
+            try:
+                key = str(p.resolve())
+            except OSError:
+                key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(p)
+        return uniq
+
+    def _show_ve_report_dialog(self, title: str, reports: list) -> None:
+        from ..ve_dialog import show_ve_reports
+
+        show_ve_reports(self, reports, title=title)
+
+    def _cfg_rules_scan(self) -> None:
+        """Scan an asset folder: config + mesh + texture VE rules."""
+        from ...io.ve_rules import scan_asset_folder
+
+        start = (
+            self._chump_path.parent if self._chump_path is not None else Path.home()
+        )
+        path = QFileDialog.getExistingDirectory(
+            self, "Scan asset folder for VE rules", str(start)
+        )
+        if not path:
+            return
+        folder = Path(path)
+        reports = scan_asset_folder(folder)
+        self._show_ve_report_dialog(f"VE Rules — {folder.name}", reports)
+        hits = sum(1 for r in reports if r.findings)
+        self._msg(f"Rules scan — {hits} report(s) with findings in {folder.name}")
 
     # ── LM ───────────────────────────────────────────────────
 
@@ -2664,6 +2896,71 @@ class AssetsStudioHost(QWidget):
         if notes:
             self._lm_log_append("\n— " + " · ".join(notes) + " —")
         self._msg(f"Material rename — {ok} ok, {fail} fail")
+
+    def _lm_rules_scan(self) -> None:
+        paths = self._lm_source_paths(selected_only=True)
+        if not paths:
+            paths = self._lm_source_paths(selected_only=False)
+        # also include any .lm.txt loaded / beside meshes
+        extras: list[Path] = []
+        for p in paths:
+            lm = p.with_suffix(".lm.txt")
+            if lm.is_file():
+                extras.append(lm)
+            cfg = p.parent / "config.txt"
+            if cfg.is_file() and cfg not in extras:
+                extras.append(cfg)
+        if not paths and not extras:
+            QMessageBox.information(
+                self, "Rules", "Drop .fbx / .trainzmesh / .im onto the table first."
+            )
+            return
+        # Prefer whole-folder scan when all meshes share a parent
+        parents = {p.parent for p in paths} if paths else set()
+        if len(parents) == 1:
+            folder = next(iter(parents))
+            reports = scan_mesh_folder(folder)
+            reports.extend(scan_texture_folder(folder))
+        else:
+            reports = scan_paths(paths + extras)
+        body = "\n\n".join(
+            format_ve_report(r) for r in reports if r.findings
+        ) or "(no VE issues)"
+        self._lm_log_set(body)
+        self._show_ve_report_dialog("Mesh / LOD VE Rules", reports)
+        hits = sum(1 for r in reports if r.findings)
+        self._msg(f"Mesh rules — {hits} report(s) with findings")
+
+    def _lm_rules_fix(self) -> None:
+        paths = self._lm_source_paths(selected_only=True)
+        if not paths:
+            paths = self._lm_source_paths(selected_only=False)
+        if not paths:
+            QMessageBox.information(
+                self, "Rules", "Drop .fbx / .trainzmesh onto the table first."
+            )
+            return
+        from ..i18n import g
+
+        reply = QMessageBox.question(
+            self,
+            g("rules.ui.fix_title"),
+            g("rules.fix.confirm", n=len(paths)),
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        reports = scan_paths(paths)
+        results = fix_reports(reports, bak=True)
+        lines = [
+            f"{'FIXED' if ok else 'FAIL'}  VE{f.code if f.code else 'MAT'}  "
+            f"{f.path.name}  {msg}"
+            for f, ok, msg in results
+        ]
+        self._lm_log_set("\n".join(lines) if lines else "(nothing fixable)")
+        # re-scan materials after renames
+        self._lm_scan_materials(paths, offer_fix=False)
+        ok_n = sum(1 for _, ok, _ in results if ok)
+        self._msg(f"Mesh rules fix — {ok_n} ok, {len(results) - ok_n} fail")
 
     def _lm_mat_scan_selected(self) -> None:
         paths = self._lm_source_paths(selected_only=True)

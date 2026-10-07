@@ -226,27 +226,49 @@ class _ScrubPillNav(QFrame):
 
 
 class AssetsPageNav(_ScrubPillNav):
-    """Home center | Packages · Config · Texture / Mesh · KUID — Theme is top menu."""
+    """Home center | suite pages — Assets (pack) or Texture / Mesh Tools."""
 
     home_clicked = Signal()
     theme_clicked = Signal()  # unused — MainWindow Theme menu owns appearance
 
-    PAGES = ("packages", "config", "texmesh", "kuid")
-    LABELS = ("Packages", "Config", "Texture / Mesh", "KUID")
-    WIDTHS = (92, 92, 128, 92)
+    # suite → (pages, labels, widths)
+    SUITE_PAGES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...]]] = {
+        "assets": (
+            ("packages", "config", "kuid"),
+            ("Packages", "Config", "KUID"),
+            (92, 92, 92),
+        ),
+        "texmesh": (
+            ("texture", "meshops"),
+            ("Texture", "Mesh Ops"),
+            (108, 108),
+        ),
+    }
+    # Back-compat aliases used by older checks / callers.
+    PAGES = SUITE_PAGES["assets"][0]
+    LABELS = SUITE_PAGES["assets"][1]
+    WIDTHS = SUITE_PAGES["assets"][2]
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        suite: str = "assets",
+    ) -> None:
         super().__init__(parent)
-        self._pages = self.PAGES
-        self._page = "packages"
-        self._committed = "packages"
+        self._suite = suite if suite in self.SUITE_PAGES else "assets"
+        pages, labels, widths = self.SUITE_PAGES[self._suite]
+        self.PAGES = pages
+        self.LABELS = labels
+        self.WIDTHS = widths
+        self._pages = pages
+        self._page = pages[0]
+        self._committed = pages[0]
 
         lay = QHBoxLayout(self)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
-        for i, (page, label, width) in enumerate(
-            zip(self.PAGES, self.LABELS, self.WIDTHS)
-        ):
+        for i, (page, label, width) in enumerate(zip(pages, labels, widths)):
             b = QPushButton(label)
             b.setObjectName("navBtn")
             b.setCheckable(True)
@@ -279,10 +301,10 @@ class AssetsPageNav(_ScrubPillNav):
         QTimer.singleShot(0, lambda: self._sync_pill(False))
 
     def _normalize_page(self, page: str) -> str:
-        if page in ("texture", "meshops"):
-            page = "texmesh"
-        if page not in self.PAGES:
+        if self._suite == "assets" and page in ("texture", "meshops", "texmesh"):
             return "packages"
+        if page not in self._pages:
+            return self._pages[0]
         return page
 
     def _stack_pill(self) -> None:

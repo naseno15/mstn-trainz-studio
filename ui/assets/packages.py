@@ -1917,8 +1917,21 @@ class PackagesPage(QWidget):
             return None
         return e
 
+    def warm_fast_preview_infra(self) -> None:
+        """Precache Finder solid-preview GL + loaders with Assets Tools boot warm.
+
+        ponytail: first mesh click then only stages/parses — no cold MeshView import.
+        """
+        try:
+            from ...io.loaders import load_any  # noqa: F401
+        except Exception:
+            pass
+        self._ensure_fast_preview_gl_host()
+        if self._mesh_preview is not None:
+            self._mesh_preview.set_active(False)
+
     def _show_mesh_pick_card(self, e: FinderEntry) -> None:
-        """Instant card + start warm (stage+parse) so double-click is snappy."""
+        """Instant card + warm (stage+parse); opens solid preview when ready."""
         name = e.path.name if e.path is not None else Path(e.rel).name
         size = e.size if e.size >= 0 else 0
         if e.path is not None and e.path.is_file():
@@ -1941,7 +1954,7 @@ class PackagesPage(QWidget):
             else ""
         )
         if warm_ready:
-            status = "warm ready — ดับเบิลคลิกได้เลย"
+            status = "warm ready"
         elif suf == ".im":
             status = "ใช้ Open in Mesh Studio"
         else:
@@ -1958,11 +1971,14 @@ class PackagesPage(QWidget):
         self.btn_mesh_studio.setVisible(True)
         self.btn_engine_tuner.setVisible(False)
         self.btn_save_text.setEnabled(False)
+        if warm_ready:
+            self._show_warm_preview(self._mesh_req, self._warm_path, self._warm_scene)
+            return
         if suf != ".im":
             self._start_warm_fast_preview(e)
 
     def _start_warm_fast_preview(self, e: FinderEntry) -> None:
-        """Background: stage mesh-only + parse solid scene before user double-clicks."""
+        """Background: stage mesh-only + parse solid scene; GL host warms in parallel."""
         key = self._mesh_entry_key(e)
         if (
             self._warm_key == key
@@ -1984,6 +2000,8 @@ class PackagesPage(QWidget):
         self._warm_path = None
         self._mesh_req += 1
         req = self._mesh_req
+        # GL construct overlaps stage/parse — apply_scene is then hitch-free
+        QTimer.singleShot(0, self._ensure_fast_preview_gl_host)
 
         def after_path(path: Path, r: int = req, k: str = key) -> None:
             if r != self._mesh_req or self._warm_key != k:
@@ -2045,18 +2063,16 @@ class PackagesPage(QWidget):
             self._warm_scene = scene
             self._warm_path = Path(path_s)
             name = self._warm_path.name
-            self.preview_lab.setText(
-                f"{name} · warm ready — ดับเบิลคลิก / Fast preview"
-            )
+            self.preview_lab.setText(f"{name} · warm ready")
             self.preview_meta.setText(
                 f"{name}\n{_file_kind_label(name)}\n"
                 f"{scene.vertex_count:,}v · {scene.face_count:,}f\n\n"
-                f"warm ready — ดับเบิลคลิกได้เลย (solid, ไม่ texture / ไม่จุด)"
+                f"warm ready (solid, ไม่ texture / ไม่จุด)"
             )
-            # create GL widget idle so first show isn't a cold hitch
-            QTimer.singleShot(0, self._ensure_fast_preview_gl_host)
-            if self._show_when_warm_ready == k:
-                self._show_when_warm_ready = None
+            self._show_when_warm_ready = None
+            # still on this mesh → open solid preview immediately
+            cur = self._mesh_entry_from_selection()
+            if cur is not None and self._mesh_entry_key(cur) == k:
                 self._show_warm_preview(r, self._warm_path, scene)
 
         def on_err(msg: str, r: int = req, k: str = key) -> None:
@@ -2078,7 +2094,20 @@ class PackagesPage(QWidget):
             return
         self._mesh_placeholder.hide()
         self._mesh_preview = _PreviewSurface(None, self._mesh_host, preview_fast=True)
+        self._mesh_preview.set_active(False)
         self._mesh_host_lay.addWidget(self._mesh_preview, 1)
+
+    def _drop_mesh_warm(self) -> None:
+        """Invalidate in-flight Finder mesh warm (non-mesh preview selected)."""
+        self._mesh_req += 1
+        self._show_when_warm_ready = None
+        self._cancel_warm_worker()
+        self._cancel_mesh_stage_worker()
+        self._warm_key = None
+        self._warm_path = None
+        self._warm_scene = None
+        if self._mesh_preview is not None:
+            self._mesh_preview.set_active(False)
 
     def _start_fast_mesh_preview(self) -> None:
         e = self._mesh_entry_from_selection()
@@ -2338,9 +2367,11 @@ class PackagesPage(QWidget):
                 if self._is_mesh_name(name):
                     self._show_mesh_pick_card(e)
                     return
+                self._drop_mesh_warm()
                 data = e.path.read_bytes()
                 self._preview_src = ("disk", str(e.path), name)
             elif e.rel == "__config__" and self._chump is not None:
+                self._drop_mesh_warm()
                 data = asset_config_text(self._chump, e.kuid).encode("utf-8")
                 name = "config.txt"
                 self._preview_src = ("cdp", f"{e.kuid}/__config__", name)
@@ -2349,6 +2380,7 @@ class PackagesPage(QWidget):
                 if self._is_mesh_name(name):
                     self._show_mesh_pick_card(e)
                     return
+                self._drop_mesh_warm()
                 data = read_file_bytes(self._chump, e.kuid, e.rel)
                 self._preview_src = ("cdp", f"{e.kuid}/{e.rel}", name)
             else:

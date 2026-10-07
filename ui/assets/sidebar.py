@@ -43,12 +43,15 @@ _ACTIONS: dict[str, list[tuple[str, str, bool]]] = {
         ("Save config.chump…", "save_chump", False),
         ("Open config.txt → chump…", "txt_to_chump", False),
         ("Export to config.txt…", "export_config_txt", False),
+        ("Rules scan (folder)…", "cfg_rules_scan", True),
     ],
     "texture": [
         ("New from image…", "tex_from_image", False),
         ("Save .texture.txt…", "tex_save", False),
         ("Save all…", "tex_save_all", True),
         ("Resize → _prep…", "tex_resize", True),
+        ("Rules scan", "tex_rules_scan", True),
+        ("Rules fix…", "tex_rules_fix", True),
         ("VE39 scan", "tex_ve39_scan", False),
         ("VE39 fix…", "tex_ve39_fix", False),
         ("Check file…", "open_texture", False),
@@ -57,6 +60,8 @@ _ACTIONS: dict[str, list[tuple[str, str, bool]]] = {
     "meshops": [
         ("Add mesh row", "lm_add", False),
         ("Remove selected", "lm_remove", False),
+        ("Rules scan", "lm_rules_scan", True),
+        ("Rules fix…", "lm_rules_fix", True),
         ("Scan materials", "lm_mat_scan", False),
         ("Fix material names…", "lm_mat_fix", True),
         ("Load .lm.txt…", "lm_load", False),
@@ -154,6 +159,8 @@ class AssetsSidebar(FrostGlassFrame):
         brand.setObjectName("brandTitle")
         brand.setFont(app_font(15, QFont.Weight.Bold))
         brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand.setProperty("mstn_i18n_src", "Assets Tools")
+        self._brand = brand
         lp.addWidget(brand)
         outer.addWidget(logo_plate)
 
@@ -241,6 +248,16 @@ class AssetsSidebar(FrostGlassFrame):
         self._theme = mode if mode in ("dark", "light") else "dark"
         self._logo.setPixmap(_logo_pixmap(108, mode=self._theme))
         self.set_frost(None, dark=self._theme != "light")
+
+    def set_brand(self, title: str) -> None:
+        """Sidebar masthead — Assets Tools vs Texture / Mesh Tools."""
+        self._brand.setProperty("mstn_i18n_src", title)
+        try:
+            from ..i18n import t
+
+            self._brand.setText(t(title))
+        except Exception:
+            self._brand.setText(title)
 
     def set_page(self, page: str, *, animate: bool = True) -> None:
         if page not in _PAGE_TITLES:
@@ -341,16 +358,17 @@ class AssetsSidebar(FrostGlassFrame):
 
         blurbs = {
             "packages": "Queue — ลากโฟลเดอร์ asset หรือ .cdp · Pack ≤500 / ≤800 / max 1 GB",
-            "config": "Edit config.chump · pack/export config.txt.",
-            "texture": "Texture / Mesh → .texture.txt + Batch Resize → _prep/ · VE39.",
-            "meshops": "Texture / Mesh → LM LOD + material .m.pbrmetal / .m.onetex check.",
+            "config": "Edit config.chump · pack/export config.txt · VE rules on asset folder.",
+            "texture": "Texture rules (VE37/39/65…) · .texture.txt · Resize → _prep/.",
+            "meshops": "Mesh/LOD/material rules · .lm.txt · .m.pbrmetal / .m.onetex.",
             "kuid": "Normalize · hex · hash-XX folder (chump buckets).",
         }
         blurb = blurbs.get(self._page, "")
         self._blurb.setText(t(blurb) if blurb else "")
-        # Rich VE39 explanation on the texture page blurb tip
         if self._page == "texture":
-            self._blurb.setToolTip(g("ve39.tip"))
+            self._blurb.setToolTip(g("rules.tip"))
+        elif self._page == "meshops":
+            self._blurb.setToolTip(g("rules.mesh.tip"))
         else:
             self._blurb.setToolTip("")
         self._clear_actions()

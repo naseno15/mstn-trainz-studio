@@ -1,4 +1,4 @@
-"""Assets Tools — packages · texture/mesh · KUID (Studio hub page)."""
+"""Assets Tools + Texture / Mesh Tools (shared host, suite switch)."""
 
 from .studio import AssetsStudioHost, build_assets_studio
 
