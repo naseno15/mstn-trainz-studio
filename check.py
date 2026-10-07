@@ -987,7 +987,7 @@ def test_theme_no_qwidget_blanket() -> None:
     assert "QTableWidget::item:selected" in css or "item:selected" in css
     # light sheet must retint panel edge (was hardcoded dark)
     light_css = stylesheet(palette("light"))
-    assert "rgba(255, 255, 255, 0.82)" in light_css
+    assert palette("light").glass in light_css
     assert "QLabel {" in light_css
     # shell / GL hosts follow palette bg (was hardcoded #000 → mixed light UI)
     assert "QWidget#glHost" in light_css
