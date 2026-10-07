@@ -3,23 +3,29 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QEvent, QObject
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, Signal, QEvent, QObject, QSize
+from PySide6.QtGui import QColor, QFontMetrics
 from PySide6.QtWidgets import (
+    QAbstractSlider,
+    QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollBar,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
+
+from .icons import apply_icon, glyph, icon_font
 
 from ..io.tzmf_edit import (
     AttRecord,
@@ -39,12 +45,21 @@ _MAT_TYPES = (
 
 
 class _NoWheelFilter(QObject):
-    """Block wheel on spinboxes so scrolling the dock doesn't nudge values."""
+    """Wheel never changes editor inputs or dropdowns.
+
+    Object filters run after the dock's scroll filter, so a tall page still
+    scrolls. When the page cannot scroll, this eats the wheel instead of
+    stepping a spin, combo, or slider.
+    """
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if event.type() == QEvent.Type.Wheel and isinstance(
-            obj, (QSpinBox, QDoubleSpinBox)
-        ):
+        et = event.type()
+        if et == QEvent.Type.ChildAdded:
+            child = event.child()
+            if isinstance(child, QWidget):
+                guard_inputs(child)
+            return False
+        if et == QEvent.Type.Wheel and _wheel_changes_value(obj):
             event.ignore()
             return True
         return False
@@ -53,45 +68,174 @@ class _NoWheelFilter(QObject):
 _NO_WHEEL = _NoWheelFilter()
 
 
-def _float_spin(*, decimals: int = 6, lo: float = -1e6, hi: float = 1e6) -> QDoubleSpinBox:
-    sp = QDoubleSpinBox()
+def _wheel_changes_value(obj: object) -> bool:
+    if isinstance(obj, QScrollBar):
+        return False
+    if isinstance(obj, (QAbstractSpinBox, QComboBox, QAbstractSlider)):
+        return True
+    if isinstance(obj, QLineEdit):
+        parent = obj.parentWidget()
+        return isinstance(parent, (QAbstractSpinBox, QComboBox))
+    return False
+
+
+def guard_inputs(root: QWidget) -> None:
+    """Install the wheel block on this widget and everything under it."""
+    pending = [root]
+    while pending:
+        widget = pending.pop()
+        if widget.property("_mstnNoWheel"):
+            continue
+        widget.setProperty("_mstnNoWheel", True)
+        widget.installEventFilter(_NO_WHEEL)
+        if isinstance(widget, (QAbstractSpinBox, QComboBox)) or (
+            isinstance(widget, QAbstractSlider) and not isinstance(widget, QScrollBar)
+        ):
+            widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        pending.extend(
+            widget.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        )
+
+
+# One control height for the right Editor so rows share a baseline.
+_FIELD_H = 36
+_LABEL_SAMPLES = (
+    "txEnvIrradiance",
+    "Material Color",
+    "specPower",
+    "Vertices",
+    "Double Sided",
+)
+
+
+def _label_w() -> int:
+    """Widest form label, measured once so every value column starts together.
+
+    ponytail: width freezes at first Editor open. A later language switch with
+    longer labels clips until restart. Upgrade: recompute on language_changed.
+    """
+    app = QApplication.instance()
+    font = app.font() if app is not None else QLabel().font()
+    fm = QFontMetrics(font)
+    return max(fm.horizontalAdvance(s) for s in _LABEL_SAMPLES) + 12
+
+
+def _uniform(widget: QWidget) -> QWidget:
+    widget.setFixedHeight(_FIELD_H)
+    widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    return widget
+
+
+class _FillDouble(QDoubleSpinBox):
+    """specPower. Hint stays narrow; the value column stretches it to the text fields."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(72, _FIELD_H)
+
+
+class _FieldCombo(QComboBox):
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(72, _FIELD_H)
+
+
+def _float_spin(
+    *,
+    decimals: int = 6,
+    lo: float = -1e6,
+    hi: float = 1e6,
+    width: int = 76,
+    expand: bool = False,
+) -> QDoubleSpinBox:
+    sp = _FillDouble() if expand else QDoubleSpinBox()
     sp.setDecimals(decimals)
     sp.setRange(lo, hi)
     sp.setSingleStep(0.01)
-    # arrows OK for click; wheel blocked
     sp.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.UpDownArrows)
+    sp.setAlignment(Qt.AlignmentFlag.AlignRight)
+    sp.setFixedHeight(_FIELD_H)
     sp.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-    sp.installEventFilter(_NO_WHEEL)
+    if expand:
+        sp.setMinimumWidth(72)
+        sp.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    else:
+        sp.setFixedWidth(width)
     return sp
 
 
+class _EvenSpin(QSpinBox):
+    """RGBA channel. Hint stays narrow; the row stretch makes the four equal."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(24, _FIELD_H)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(56, _FIELD_H)
+
+
 def _int_spin(*, lo: int = 0, hi: int = 255) -> QSpinBox:
-    sp = QSpinBox()
+    sp = _EvenSpin()
     sp.setRange(lo, hi)
-    sp.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
+    # Four channels share one row — arrows would force the dock wide again.
+    sp.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+    sp.setAlignment(Qt.AlignmentFlag.AlignRight)
+    sp.setFixedHeight(_FIELD_H)
+    sp.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     sp.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-    sp.installEventFilter(_NO_WHEEL)
     return sp
 
 
 def _section(title: str) -> QLabel:
     lab = QLabel(title)
-    lab.setStyleSheet("font-weight: 600;")
+    lab.setStyleSheet("font-weight: 600; padding-top: 8px;")
     return lab
 
 
-def _typed_row(label: str, widget: QWidget, type_name: str = "float") -> QWidget:
+def _form_label(text: str) -> QLabel:
+    lab = QLabel(text)
+    lab.setObjectName("mutedTip")
+    lab.setFixedWidth(_label_w())
+    lab.setFixedHeight(_FIELD_H)
+    lab.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    return lab
+
+
+def _action_gap() -> QWidget:
+    """Empty slot the same size as a row icon, so fields without one still align."""
+    gap = QWidget()
+    gap.setFixedSize(_FIELD_H, _FIELD_H)
+    return gap
+
+
+def _field_row(label: str, widget: QWidget, *, stretch: bool = True) -> QWidget:
+    """Label | control | icon slot. Stretching controls share one width."""
     row = QWidget()
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(6)
-    lab = QLabel(f"{label}:")
-    lab.setMinimumWidth(72)
-    tip = QLabel(f"({type_name})")
-    tip.setObjectName("mutedTip")
-    lay.addWidget(lab)
-    lay.addWidget(widget, 1)
-    lay.addWidget(tip)
+    lay.setSpacing(8)
+    lay.addWidget(_form_label(label))
+    _uniform(widget)
+    if stretch:
+        widget.setMinimumWidth(48)
+        widget.setMaximumWidth(16777215)
+        lay.addWidget(widget, 1)
+        lay.addWidget(_action_gap())
+    else:
+        lay.addWidget(widget, 0)
+        lay.addStretch(1)
+    return row
+
+
+def _axis_row(labels: tuple[str, ...], spins: list[QDoubleSpinBox]) -> QWidget:
+    row = QWidget()
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(4)
+    for lab, sp in zip(labels, spins):
+        name = QLabel(lab)
+        name.setObjectName("mutedTip")
+        lay.addWidget(name)
+        lay.addWidget(sp)
+    lay.addStretch(1)
     return row
 
 
@@ -104,16 +248,21 @@ class ColorRow(QWidget):
         for sp in self._spins:
             sp.valueChanged.connect(self._on_edit)
         self._swatch = QPushButton()
-        self._swatch.setFixedSize(22, 22)
+        self._swatch.setObjectName("colorSwatch")
+        self._swatch.setFont(icon_font(18))
+        self._swatch.setText(glyph("palette"))
+        self._swatch.setFixedSize(_FIELD_H, _FIELD_H)
+        self._swatch.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._swatch.setToolTip("Pick color")
         self._swatch.clicked.connect(self._pick)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-        lay.addWidget(QLabel(label))
-        for sp in self._spins:
-            lay.addWidget(sp)
+        lay.setSpacing(8)
+        lay.addWidget(_form_label(label))
+        for name, sp in zip("RGBA", self._spins):
+            sp.setPrefix(f"{name} ")
+            lay.addWidget(sp, 1)
         lay.addWidget(self._swatch)
-        lay.addStretch(1)
         self._block = False
         self.set_rgba01((0.8, 0.8, 0.8, 1.0))
 
@@ -125,8 +274,15 @@ class ColorRow(QWidget):
 
     def _paint_swatch(self) -> None:
         r, g, b, _a = (sp.value() for sp in self._spins)
+        # Palette glyph stays readable on the swatch (white metal vs black emissive).
+        ink = "#1a1a1a" if (0.2126 * r + 0.7152 * g + 0.0722 * b) > 150 else "#f4f4f5"
         self._swatch.setStyleSheet(
-            f"background: rgb({r},{g},{b}); border:1px solid #666;"
+            "QPushButton {"
+            f"background: rgb({r},{g},{b}); color: {ink};"
+            "border: 1px solid rgba(255,255,255,0.28);"
+            "border-radius: 8px; padding: 0;"
+            'font-family: "Material Icons"; font-size: 18px;'
+            "}"
         )
 
     def _pick(self) -> None:
@@ -162,21 +318,36 @@ class TextureSlotRow(QWidget):
     def __init__(self, key: str, value: str = "", *, readonly: bool = False, parent=None) -> None:
         super().__init__(parent)
         self.key = key
-        self._edit = QLineEdit(value)
+        self._edit = _uniform(QLineEdit(value))
         self._edit.setReadOnly(readonly)
-        self._btn = QPushButton("…")
-        self._btn.setFixedWidth(28)
-        self._btn.setEnabled(not readonly)
+        self._edit.setMinimumWidth(48)
+        if readonly:
+            # $pbr-env* slots are studio maps — a lock, not a dead ellipsis button.
+            self._btn = QLabel(glyph("lock"))
+            self._btn.setObjectName("mutedTip")
+            self._btn.setFont(icon_font(18))
+            self._btn.setFixedSize(_FIELD_H, _FIELD_H)
+            self._btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._btn.setToolTip("Built-in environment map")
+            self._btn.setProperty("mi_name", "lock")
+        else:
+            self._btn = QPushButton()
+            apply_icon(
+                self._btn,
+                "folder_open",
+                tip="Browse texture file",
+                kind="icon",
+                size=18,
+                square=_FIELD_H,
+            )
+            self._btn.clicked.connect(self._browse)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-        lab = QLabel(key)
-        lab.setMinimumWidth(110)
-        lay.addWidget(lab)
+        lay.setSpacing(8)
+        lay.addWidget(_form_label(key))
         lay.addWidget(self._edit, 1)
         lay.addWidget(self._btn)
         self._edit.editingFinished.connect(self._emit)
-        self._btn.clicked.connect(self._browse)
 
     def _emit(self) -> None:
         self.changed.emit(self.key, self._edit.text().strip())
@@ -216,40 +387,48 @@ class MeshDetail(QWidget):
         self._slot_keys: list[str] = []
 
         self.name_edit = QLineEdit()
-        self.type_combo = QComboBox()
+        self.type_combo = _FieldCombo()
         self.type_combo.addItems(list(_MAT_TYPES))
         self.double_sided = QCheckBox("Double Sided")
-        self.vfmt = QLabel("—")
-        self.vfmt.setObjectName("mutedTip")
-        self.vfmt.setWordWrap(True)
+        self.double_sided.setFixedHeight(_FIELD_H)
+        self.vfmt = QLineEdit()
+        self.vfmt.setReadOnly(True)
+        self.vfmt.setPlaceholderText("—")
+        self.vfmt.setToolTip("Vertex format (read-only)")
 
         self.mat_color = ColorRow("Material Color")
         self.emis = ColorRow("matEmissive")
         self.spec = ColorRow("matSpecular")
-        self.spec_power = _float_spin()
+        self.spec_power = _float_spin(expand=True)
 
         self._tex_host = QVBoxLayout()
         self._tex_rows: dict[str, TextureSlotRow] = {}
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        lay.setSpacing(8)
 
-        form = QFormLayout()
-        form.addRow("Name", self.name_edit)
-        form.addRow("Material Type", self.type_combo)
-        lay.addLayout(form)
-        lay.addWidget(self.double_sided)
-        lay.addWidget(QLabel("Vertex Format"))
-        lay.addWidget(self.vfmt)
+        lay.addWidget(_field_row("Name", self.name_edit))
+        lay.addWidget(_field_row("Type", self.type_combo))
+        self.type_combo.setToolTip("Material Type")
+        ds = QWidget()
+        ds_lay = QHBoxLayout(ds)
+        ds_lay.setContentsMargins(0, 0, 0, 0)
+        ds_lay.setSpacing(8)
+        ds_lay.addWidget(_form_label(""))
+        ds_lay.addWidget(self.double_sided, 1)
+        ds_lay.addWidget(_action_gap())
+        lay.addWidget(ds)
+        lay.addWidget(_field_row("Vertices", self.vfmt))
 
-        lay.addWidget(_section("Texture Data"))
+        lay.addWidget(_section("Textures"))
         lay.addLayout(self._tex_host)
 
-        lay.addWidget(_section("Color Data"))
+        lay.addWidget(_section("Color"))
         for w in (self.mat_color, self.emis, self.spec):
             lay.addWidget(w)
-        lay.addWidget(_typed_row("specPower", self.spec_power, "float"))
+        lay.addWidget(_field_row("specPower", self.spec_power))
+        guard_inputs(self)
 
         self.name_edit.editingFinished.connect(self._emit)
         self.type_combo.currentIndexChanged.connect(self._emit)
@@ -266,14 +445,15 @@ class MeshDetail(QWidget):
     def _on_two(self, on: bool) -> None:
         if self._block or self._index < 0:
             return
+        # Preview-only flag. Do not emit material changed — that rewrites
+        # the tzMF buffer and reloads the viewport (hang + camera reset).
         self.two_sided_changed.emit(on)
-        self.changed.emit()
 
     def clear(self) -> None:
         self._index = -1
         self.setEnabled(False)
 
-    def load(self, index: int, mat: MatBlock, *, two_sided: bool = True) -> None:
+    def load(self, index: int, mat: MatBlock, *, two_sided: bool = False) -> None:
         self._block = True
         self._index = index
         self.setEnabled(True)
@@ -340,14 +520,9 @@ class MeshesPage(QWidget):
         self.detail = MeshDetail()
         self.detail.setEnabled(False)
 
-        tip = QLabel("Select a mesh on the left · edit here · Save writes .trainzmesh")
-        tip.setObjectName("mutedTip")
-        tip.setWordWrap(True)
-
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 4, 0, 4)
-        lay.setSpacing(8)
-        lay.addWidget(tip)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(4)
         lay.addWidget(self.detail)
         lay.addStretch(1)
 
@@ -383,7 +558,7 @@ class MeshesPage(QWidget):
             return
         mat = self._mats[row]
         self.detail.load(
-            row, mat, two_sided=bool(self._two_sided.get(mat.name, True))
+            row, mat, two_sided=bool(self._two_sided.get(mat.name, False))
         )
         self.material_selected.emit(row)
 
@@ -409,6 +584,20 @@ class MeshesPage(QWidget):
         self._two_sided[name] = on
         self.two_sided_changed.emit(idx, on, name)
 
+    def note_two_sided(self, names: list[str], on: bool) -> None:
+        """Remember flags from a batch apply. Does not emit (caller updates preview)."""
+        keys = {(n or "").strip().lower() for n in names if (n or "").strip()}
+        for name in names:
+            key = (name or "").strip()
+            if key:
+                self._two_sided[key] = on
+        cur = (self.detail.name_edit.text() or "").strip().lower()
+        if not cur or cur not in keys:
+            return
+        self.detail._block = True
+        self.detail.double_sided.setChecked(on)
+        self.detail._block = False
+
 
 class AttachmentDetail(QWidget):
     changed = Signal()
@@ -426,24 +615,24 @@ class AttachmentDetail(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        lay.setSpacing(4)
 
-        form = QFormLayout()
-        form.addRow("Name", self.name_edit)
-        form.addRow("Parent", self.parent_edit)
-        lay.addLayout(form)
+        lay.addWidget(_field_row("Name", self.name_edit))
+        lay.addWidget(_field_row("Parent", self.parent_edit))
 
         lay.addWidget(_section("Location"))
-        for lab, sp in zip(("X", "Y", "Z"), self.loc):
-            lay.addWidget(_typed_row(lab, sp, "float"))
+        lay.addWidget(_axis_row(("X", "Y", "Z"), self.loc))
+        for sp in self.loc:
             sp.valueChanged.connect(self._emit)
 
         lay.addWidget(_section("Rotation"))
-        for lab, sp in zip(("X", "Y", "Z", "W"), self.rot):
-            lay.addWidget(_typed_row(lab, sp, "float"))
+        lay.addWidget(_axis_row(("X", "Y"), self.rot[:2]))
+        lay.addWidget(_axis_row(("Z", "W"), self.rot[2:]))
+        for sp in self.rot:
             sp.valueChanged.connect(self._emit)
 
         self.name_edit.editingFinished.connect(self._emit)
+        guard_inputs(self)
 
     def _emit(self, *_a) -> None:
         if self._block or self._index < 0:
@@ -538,8 +727,8 @@ class AttachmentsPage(QWidget):
         row1.addStretch(1)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 4, 0, 4)
-        lay.setSpacing(8)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(4)
         lay.addWidget(self.tip)
         lay.addWidget(self.detail)
         lay.addLayout(row1)

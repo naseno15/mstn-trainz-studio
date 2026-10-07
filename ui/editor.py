@@ -275,7 +275,7 @@ class TextureTxtEditor(QWidget):
         self._status.setText("")
         self._clear_props()
         self._clear_material_preview()
-        self.set_two_sided_context(None, "", True, tip="")
+        self.set_two_sided_context(None, "", False, tip="")
         self._hint.setText(
             "Open a mesh — textures from its folder appear here for edit."
         )
@@ -636,7 +636,10 @@ def find_config_txt(mesh_path: Path | None, mesh_folder: Path | None = None) -> 
 
 
 class EditorWorkspace(FrostGlassFrame):
-    """Studio Editor dock: Attachments | Meshes (+ binary Save, no external app)."""
+    """Studio Editor dock: material or attachment fields (+ binary Save).
+
+    Meshes / Attachs live on the bottom nav (left and right of Home), not as tabs here.
+    """
 
     att_apply = Signal()
     att_add = Signal()
@@ -686,16 +689,16 @@ class EditorWorkspace(FrostGlassFrame):
         self.att_save_btn = self.attachments_page.save_btn
         self.att_save_as_btn = self.attachments_page.save_as_btn
 
-        from .app import SideTabStrip
-
-        self.tab_strip = SideTabStrip(("Attachments", "Meshes"))
         self.tabs = QStackedWidget()
         self.tabs.setObjectName("editorTabStack")
+        self.tabs.setFrameShape(QFrame.Shape.NoFrame)
+        self.tabs.setAutoFillBackground(False)
+        self.tabs.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         for page in (self.attachments_page, self.meshes_page):
+            page.setAutoFillBackground(False)
+            page.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             page.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
             self.tabs.addWidget(page)
-        self.tab_strip.index_changed.connect(self._on_tab)
-
         scroll = QScrollArea()
         scroll.setObjectName("editorScroll")
         scroll.setWidgetResizable(True)
@@ -711,9 +714,10 @@ class EditorWorkspace(FrostGlassFrame):
         body_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
         body_lay.addWidget(self.tabs)
         scroll.setWidget(body)
-        prepare_frost_scroll(scroll)
+        from .smooth_scroll import enable_smooth_scroll_area
+
+        enable_smooth_scroll_area(scroll)
         self._scroll = scroll
-        self.tab_strip.index_changed.connect(self._sync_scroll_body)
 
         from .icons import apply_icon
 
@@ -731,19 +735,20 @@ class EditorWorkspace(FrostGlassFrame):
         apply_icon(self.save_as_btn, "save_as", tip="Save As…", kind="icon", size=20, square=36)
         self.save_as_btn.clicked.connect(self.att_save_as.emit)
 
-        title = QLabel("Editor")
+        title = QLabel("Attachs Editor")
         title.setStyleSheet("font-weight: 600; font-size: 14px;")
+        self._title = title
         sub = QLabel("Pick on the left · edit here · Save")
         sub.setObjectName("mutedTip")
         sub.setWordWrap(True)
         sub.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 14, 16, 16)
-        lay.setSpacing(8)
+        # Same inset as the left sidebar so the frost radius stays visible.
+        lay.setContentsMargins(18, 16, 18, 18)
+        lay.setSpacing(10)
         lay.addWidget(title)
         lay.addWidget(sub)
-        lay.addWidget(self.tab_strip)
         lay.addWidget(scroll, 1)
         save_row = QHBoxLayout()
         save_row.addWidget(self.save_btn)
@@ -759,13 +764,25 @@ class EditorWorkspace(FrostGlassFrame):
         self.attachments_page.attachment_changed.connect(self.attachment_tree_changed)
         self.meshes_page.material_changed.connect(self.material_changed)
         self.meshes_page.two_sided_changed.connect(self.two_sided_changed)
+        from .mesh_prop_tree import guard_inputs
+
+        guard_inputs(self)
+        guard_inputs(self.texture)
         QTimer.singleShot(0, self._sync_scroll_body)
 
-    def _on_tab(self, index: int) -> None:
+    def _set_mode(self, index: int) -> None:
+        index = 1 if int(index) == 1 else 0
+        changed = self.tabs.currentIndex() != index
         self.tabs.setCurrentIndex(index)
+        meshes = index == 1
+        self._title.setText("Meshes Editor" if meshes else "Attachs Editor")
         self._sync_scroll_body()
-        mode = "meshes" if index == 1 else "attachments"
-        self.editor_mode_changed.emit(mode)
+        if changed:
+            self.editor_mode_changed.emit("meshes" if meshes else "attachments")
+
+    def _on_tab(self, index: int) -> None:
+        """Compat for anything that still pokes the old tab index."""
+        self._set_mode(index)
 
     def current_mode(self) -> str:
         return "meshes" if self.tabs.currentIndex() == 1 else "attachments"
@@ -802,7 +819,7 @@ class EditorWorkspace(FrostGlassFrame):
         self.show_meshes_tab()
 
     def show_meshes_tab(self) -> None:
-        self.tab_strip.set_index(1, animate=True, emit=True)  # → _on_tab
+        self._set_mode(1)
 
     def show_attachments_tab(self) -> None:
-        self.tab_strip.set_index(0, animate=True, emit=True)  # → _on_tab
+        self._set_mode(0)

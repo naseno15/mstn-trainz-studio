@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QFont,
+    QFontMetrics,
     QImage,
     QLinearGradient,
     QMouseEvent,
@@ -54,7 +55,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QStackedWidget,
-    QStatusBar,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -153,7 +153,7 @@ FIXTURES = HERE / "fixtures"
 ASSETS = HERE / "assets"
 LOGO_WHITE = ASSETS / "mstn_logo_white.png"
 MESH_EXTS = {".fbx", ".im", ".trainzmesh"}
-EDITOR_DOCK_W = 500
+EDITOR_DOCK_W = 480
 EDITOR_DOCK_MS = 220  # overlay slide — viewport stays put (crop, not resize)
 SIDE_PANEL_W = 420
 SIDE_PANEL_MARGIN = 10
@@ -509,10 +509,30 @@ class LoadWorker(QThread):
             )
             self.progress.emit(
                 f"Handing off · {len(decoded)} textures ready",
-                99,
+                100,
             )
             self.ok.emit(out, decoded)
         except Exception as e:
+            self.err.emit(str(e))
+
+
+class VeScanWorker(QThread):
+    """App-wide VE Rules scan off the UI thread (any studio)."""
+
+    done = Signal(object, object)  # list[VeReport], summary dict
+    err = Signal(str)
+
+    def __init__(self, paths: list[Path], parent=None) -> None:
+        super().__init__(parent)
+        self._paths = [Path(p) for p in paths]
+
+    def run(self) -> None:
+        try:
+            from ..io.ve_rules import scan_paths, summarize_reports
+
+            reports = scan_paths(self._paths)
+            self.done.emit(reports, summarize_reports(reports))
+        except Exception as e:  # noqa: BLE001
             self.err.emit(str(e))
 
 
@@ -1314,7 +1334,7 @@ class LoadingOverlay(QWidget):
 class BottomNav(QFrame):
     """Floating capsule: pages L/R · Home center (Theme is top-bar menu)."""
 
-    page_changed = Signal(str)  # preview | editor | settings
+    page_changed = Signal(str)  # preview | meshes | attachs | settings
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -1350,10 +1370,18 @@ class BottomNav(QFrame):
         self.preview_btn.setChecked(True)
         self.preview_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.editor_btn = QPushButton("Editor")
-        self.editor_btn.setObjectName("navBtn")
-        self.editor_btn.setCheckable(True)
-        self.editor_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Editor modes flank Home: Meshes on the left, Attachs on the right.
+        self.meshes_btn = QPushButton("Meshes Editor")
+        self.meshes_btn.setObjectName("navBtn")
+        self.meshes_btn.setCheckable(True)
+        self.meshes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.meshes_btn.setToolTip("Materials, textures, and colors")
+
+        self.attachs_btn = QPushButton("Attachs Editor")
+        self.attachs_btn.setObjectName("navBtn")
+        self.attachs_btn.setCheckable(True)
+        self.attachs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.attachs_btn.setToolTip("Attachment points (a.*)")
 
         self.settings_btn = QPushButton("Settings")
         self.settings_btn.setObjectName("navBtn")
@@ -1364,14 +1392,26 @@ class BottomNav(QFrame):
         self.home_btn = make_home_button(self)
         self.theme_btn = None  # Theme lives in top FloatTitleBar → Theme menu
 
-        self._nav_btns = (self.preview_btn, self.editor_btn, self.settings_btn)
-        self._pages = ("preview", "editor", "settings")
+        # Order is the split: Preview+Meshes | Home | Attachs+Settings.
+        self._nav_btns = (
+            self.preview_btn,
+            self.meshes_btn,
+            self.attachs_btn,
+            self.settings_btn,
+        )
+        self._pages = ("preview", "meshes", "attachs", "settings")
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
+        measure = self.meshes_btn.font()
+        measure.setWeight(QFont.Weight.DemiBold)
+        fm = QFontMetrics(measure)
+        # navBtn padding is 18+18; lock one width so the scrub pill never reflows.
+        nav_w = max(fm.horizontalAdvance(b.text()) for b in self._nav_btns) + 48
+        nav_w = max(nav_w, 108)
         for i, b in enumerate(self._nav_btns):
             self._group.addButton(b, i)
             b.setAutoExclusive(True)
-            b.setFixedWidth(108)  # lock layout so scrub never reflows
+            b.setFixedWidth(nav_w)
             b.installEventFilter(self)
 
         left, right = mount_center_icon_nav(
@@ -1379,6 +1419,8 @@ class BottomNav(QFrame):
             home_btn=self.home_btn,
             page_btns=self._nav_btns,
         )
+        self._left_btns = left
+        self._right_btns = right
         bind_split_wells(
             self,
             home_btn=self.home_btn,
@@ -1718,7 +1760,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MSTN Trainz Studio")
         self.resize(1280, 780)
         self.setAcceptDrops(True)
-        self._studio_mode = "home"  # home | mesh | sounds | engine | assets
+        self._studio_mode = "home"  # home | mesh | sounds | engine | assets | texmesh
         self._chrome_ready = False  # Mesh Editor/sidebar/settings/chrome
         self._sounds_ready = False
         self._engine_ready = False
@@ -1729,6 +1771,8 @@ class MainWindow(QMainWindow):
         self._mesh_path: Path | None = None
         self._mesh_paths: list[Path] = []
         self._hidden_mesh_keys: set[str] = set()
+        self._mesh_hl: tuple[str, frozenset[str]] | None = None
+        self._suppress_mesh_hl = 0
         self.view = None
         self.editor = None  # type: ignore[assignment]
         self._sounds_host = None
@@ -1741,6 +1785,7 @@ class MainWindow(QMainWindow):
         self._im_doc = None  # lib.im_editor.core.ImDocument when kind==im
         self._tzmf_bytes: bytearray | None = None  # live .trainzmesh edit buffer
         self._tzmf_dirty = False
+        self._two_sided_pending: dict[str, bool] = {}
         self._tzmf_mats_cache: list = []
         self._editor_populated_key: str = ""
         self._history = UndoStack()
@@ -1845,7 +1890,24 @@ class MainWindow(QMainWindow):
         self.scene_mesh_list = QListWidget()
         self.scene_mesh_list.setUniformItemSizes(True)
         _enable_side_table_scroll(self.scene_mesh_list)
+        self.scene_mesh_list.setToolTip(
+            "Tick rows, then Apply Double Sided. Click a name to edit it on the right."
+        )
         self.scene_mesh_list.hide()
+        self._mesh_ds_bar = QWidget()
+        ds_lay = QVBoxLayout(self._mesh_ds_bar)
+        ds_lay.setContentsMargins(0, 2, 0, 0)
+        ds_lay.setSpacing(4)
+        self._mesh_ds_all = QCheckBox("Select all")
+        self._mesh_ds_all.setToolTip("Tick every mesh in this list")
+        self._mesh_ds_apply = QPushButton("Apply Double Sided (0)")
+        self._mesh_ds_apply.setEnabled(False)
+        self._mesh_ds_apply.setToolTip(
+            "Turn Double Sided on for every ticked mesh. Preview updates now; camera stays."
+        )
+        ds_lay.addWidget(self._mesh_ds_all)
+        ds_lay.addWidget(self._mesh_ds_apply)
+        self._mesh_ds_bar.hide()
         self._scene_list_mode = "atts"  # atts | meshes
         self._face_orient_cb = QCheckBox("Face Orientation")
         self._face_orient_cb.setChecked(False)
@@ -2040,6 +2102,7 @@ class MainWindow(QMainWindow):
             on_sounds=self.enter_sounds_studio,
             on_engine=self.enter_engine_tuner,
             on_assets=self.enter_assets_studio,
+            on_texmesh=self.enter_texmesh_studio,
             on_drop=self._handle_dropped_paths,
             theme_mode=self._theme_mode,
         )
@@ -2077,6 +2140,8 @@ class MainWindow(QMainWindow):
         center_lay.addWidget(self._viewer_pane, 1)
 
         self._editor_dock_open = False
+        self._page = "preview"
+        self._editor_mode = "meshes"
         self._side_open = True
         self._settings_open = False
         self._side_edge_btn = None
@@ -2095,11 +2160,35 @@ class MainWindow(QMainWindow):
         # Initial geometry so HOME is centered before first resize/showEvent.
         self._layout_viewer_pane()
 
-        self._status = QStatusBar()
+        from .status_toast import (
+            StudioStatusBar,
+            ToastHost,
+            show_save_toast,
+            show_status_log_dialog,
+        )
+
+        self._status = StudioStatusBar(self)
         self.setStatusBar(self._status)
+        self._toasts = ToastHost(self)
+        self._status.log_open_requested.connect(self._open_status_log)
+        self._status.save_noticed.connect(self._on_save_noticed)
+        self._status.progress_noticed.connect(self._on_progress_noticed)
+        self._status.progress_cleared.connect(self._on_progress_cleared)
+        self._ve_last_reports: list = []
+        self._ve_worker: VeScanWorker | None = None
+        self._ve_btn = QPushButton("VE")
+        self._ve_btn.setObjectName("statusVeBtn")
+        self._ve_btn.setFlat(True)
+        self._ve_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ve_btn.setToolTip("VE Rules — click to open last scan (Tools → VE Rules)")
+        self._ve_btn.clicked.connect(self._ve_show_last)
+        self._status.addPermanentWidget(self._ve_btn)
         foot = QLabel("Copyright MSTN Production")
         foot.setObjectName("mutedTip")
         self._status.addPermanentWidget(foot)
+        # keep helpers bound for type checkers / hot paths
+        self._show_save_toast = show_save_toast
+        self._show_status_log_dialog = show_status_log_dialog
 
     def ensure_studio_chrome(self) -> None:
         """Build Mesh Editor / sidebar / settings / nav — once, after HOME paints."""
@@ -2191,11 +2280,15 @@ class MainWindow(QMainWindow):
         # Chrome may assemble after a HOME theme toggle — sync glass/frost tint.
         self._retint_glass_chips()
         self._retint_frost_panels()
-        from .i18n import snapshot_and_apply
+        # Boot batch: one snapshot_and_apply at end of warmup_hub_studios.
+        if not getattr(self, "_boot_batch", False):
+            from .i18n import snapshot_and_apply
 
-        snapshot_and_apply(self)
+            snapshot_and_apply(self)
         QTimer.singleShot(0, self._layout_side_panel)
-        QTimer.singleShot(80, self._refresh_side_frost)
+        # Frost grab after first real GL frame — skip during boot batch.
+        if not getattr(self, "_boot_batch", False):
+            QTimer.singleShot(80, self._refresh_side_frost)
         QTimer.singleShot(0, self._probe_cuda_bake)
         QTimer.singleShot(0, self._strip_sidebar_tab_focus)
 
@@ -2211,6 +2304,15 @@ class MainWindow(QMainWindow):
             theme_mode=self._theme_mode,
         )
         host.status.connect(self._status_from_sounds)
+        _imp = host.import_paths
+
+        def _import_and_ve(paths: list[Path]) -> None:
+            _imp(paths)
+            QTimer.singleShot(
+                0, lambda ps=list(paths): self._ve_scan_auto([Path(p) for p in ps])
+            )
+
+        host.import_paths = _import_and_ve  # type: ignore[method-assign]
         old = self._hub.widget(HUB_SOUNDS)
         self._hub.removeWidget(old)
         self._hub.insertWidget(HUB_SOUNDS, host)
@@ -2218,9 +2320,10 @@ class MainWindow(QMainWindow):
             old.deleteLater()
         self._sounds_host = host
         self._sounds_hub_ph = None
-        from .i18n import snapshot_and_apply
+        if not getattr(self, "_boot_batch", False):
+            from .i18n import snapshot_and_apply
 
-        snapshot_and_apply(host)
+            snapshot_and_apply(host)
 
     def _ensure_engine_host(self) -> None:
         if self._engine_ready:
@@ -2234,6 +2337,17 @@ class MainWindow(QMainWindow):
             theme_mode=self._theme_mode,
         )
         host.status.connect(self._status_from_sounds)
+        _open = host.open_file
+
+        def _open_and_ve() -> bool:
+            ok = _open()
+            if ok:
+                sp = getattr(getattr(host, "cfg", None), "source_path", None)
+                if sp:
+                    QTimer.singleShot(0, lambda p=Path(sp): self._ve_scan_auto([p]))
+            return ok
+
+        host.open_file = _open_and_ve  # type: ignore[method-assign]
         old = self._hub.widget(HUB_ENGINE)
         self._hub.removeWidget(old)
         self._hub.insertWidget(HUB_ENGINE, host)
@@ -2241,9 +2355,10 @@ class MainWindow(QMainWindow):
             old.deleteLater()
         self._engine_host = host
         self._engine_hub_ph = None
-        from .i18n import snapshot_and_apply
+        if not getattr(self, "_boot_batch", False):
+            from .i18n import snapshot_and_apply
 
-        snapshot_and_apply(host)
+            snapshot_and_apply(host)
 
     def _ensure_assets_host(self) -> None:
         if self._assets_ready:
@@ -2266,29 +2381,51 @@ class MainWindow(QMainWindow):
             old.deleteLater()
         self._assets_host = host
         self._assets_hub_ph = None
-        from .i18n import snapshot_and_apply
+        if not getattr(self, "_boot_batch", False):
+            from .i18n import snapshot_and_apply
 
-        snapshot_and_apply(host)
+            snapshot_and_apply(host)
+            self._idle_warm_assets_preview()
+
+    def _idle_warm_assets_preview(self) -> None:
+        """Finder GL surface — after HOME is up (creating QOpenGLWidget at boot stalls)."""
+        host = getattr(self, "_assets_host", None)
+        if host is None:
+            return
+        try:
+            host.packages_page.warm_fast_preview_infra()
+        except Exception:
+            pass
 
     def warmup_hub_studios(self, *, on_stage=None) -> None:
         """Precache Mesh / Sounds / Engine / Assets under the boot frost.
 
         ponytail: build once at boot so HOME card clicks only swap the stack —
         no first-click hitch from EditorWorkspace / Sounds / Engine imports.
+        GL fast-preview warms idle after overlay hide (not under frost).
         """
-        if on_stage is not None:
-            on_stage("Warming Mesh Studio…", 40)
-        warm_logo_cache()
-        self.ensure_studio_chrome()
-        if on_stage is not None:
-            on_stage("Warming Sounds Studio…", 60)
-        self._ensure_sounds_host()
-        if on_stage is not None:
-            on_stage("Warming Engine Tuner…", 78)
-        self._ensure_engine_host()
-        if on_stage is not None:
-            on_stage("Warming Assets Tools…", 92)
-        self._ensure_assets_host()
+        self._boot_batch = True
+        try:
+            if on_stage is not None:
+                on_stage("Warming Mesh Studio…", 40)
+            warm_logo_cache()
+            self.ensure_studio_chrome()
+            if on_stage is not None:
+                on_stage("Warming Sounds Studio…", 60)
+            self._ensure_sounds_host()
+            if on_stage is not None:
+                on_stage("Warming Engine Tuner…", 78)
+            self._ensure_engine_host()
+            if on_stage is not None:
+                on_stage("Warming Assets Tools…", 92)
+            self._ensure_assets_host()
+        finally:
+            self._boot_batch = False
+        from .i18n import snapshot_and_apply
+
+        snapshot_and_apply(self)
+        # Assets Finder GL after HOME is interactive — studios themselves are warm.
+        QTimer.singleShot(0, self._idle_warm_assets_preview)
 
     def hubs_are_warm(self) -> bool:
         return bool(
@@ -2447,6 +2584,72 @@ class MainWindow(QMainWindow):
     def _on_mesh_head_select(self, *_args) -> None:
         key = self._selected_mesh_table_key()
         self._fill_mesh_detail(key or None)
+        self._set_mesh_hl("file", self._mesh_table_selected_keys(), frame=True)
+
+    def _mesh_hl_blocked(self) -> bool:
+        return int(getattr(self, "_suppress_mesh_hl", 0)) > 0
+
+    def _mesh_table_selected_keys(self) -> set[str]:
+        keys: set[str] = set()
+        table = getattr(self, "mesh_list", None)
+        if table is None:
+            return keys
+        sel = table.selectionModel()
+        if sel is None:
+            return keys
+        for idx in sel.selectedRows(_MESH_COL_NAME):
+            it = table.item(idx.row(), _MESH_COL_NAME)
+            if it is None:
+                continue
+            key = str(it.data(Qt.ItemDataRole.UserRole) or it.text() or "")
+            if key:
+                keys.add(key)
+        return keys
+
+    def _mesh_part_name_at(self, row: int) -> str:
+        lst = getattr(self, "scene_mesh_list", None)
+        if lst is not None and 0 <= row < lst.count():
+            item = lst.item(row)
+            if item is not None and item.text():
+                return item.text()
+        page = getattr(self.editor, "meshes_page", None) if self.editor is not None else None
+        names = page.material_names() if page is not None else []
+        if 0 <= row < len(names) and names[row]:
+            return str(names[row])
+        if 0 <= row < len(self._scene.parts) and self._scene.parts[row].name:
+            return str(self._scene.parts[row].name)
+        return ""
+
+    def _set_mesh_hl(self, kind: str, values: set[str], *, frame: bool) -> None:
+        """Remember a mesh pick so Mat rebuilds don't drop the outline."""
+        if self._mesh_hl_blocked():
+            return
+        clean = {v for v in values if v}
+        if not clean:
+            self._mesh_hl = None
+            if self.view is not None:
+                self.view.set_part_highlight(None)
+            return
+        self._mesh_hl = (kind, frozenset(clean))
+        self._apply_mesh_hl(frame=frame)
+
+    def _apply_mesh_hl(self, *, frame: bool, quiet: bool = False) -> None:
+        if self.view is None or not self._mesh_hl:
+            return
+        kind, values = self._mesh_hl
+        if kind == "part":
+            n = self.view.set_part_highlight(set(values), frame=frame)
+        else:
+            n = self.view.set_mat_highlight(set(), set(values), frame=frame)
+        if quiet:
+            return
+        label = ", ".join(sorted(values))
+        if n <= 0:
+            self._status.showMessage(f"Mesh highlight: no geometry for {label}")
+        else:
+            self._status.showMessage(
+                f"Mesh highlight: {label} · {n} part(s) · glowing outline"
+            )
 
     def _on_mesh_table_item_changed(self, item: QTableWidgetItem) -> None:
         if item is None or item.column() != _MESH_COL_SHOW:
@@ -2604,6 +2807,7 @@ class MainWindow(QMainWindow):
         att_lay.addWidget(self._scene_cap_tip)
         att_lay.addWidget(self.att_list)
         att_lay.addWidget(self.scene_mesh_list)
+        att_lay.addWidget(self._mesh_ds_bar)
 
         self._scene_editor_note = QLabel("")
         _compact_tip(self._scene_editor_note)
@@ -2852,7 +3056,7 @@ class MainWindow(QMainWindow):
 
         self._settings_fps = QCheckBox("Show frame stats (F3)")
         self._settings_fps.setChecked(self._show_fps)
-        self._settings_fps.setToolTip("Toggle green FPS / ms / frame # HUD (F3)")
+        self._settings_fps.setToolTip("Toggle the glass frame-stats HUD (F3)")
         self._settings_fps.toggled.connect(lambda on: self._set_view_flag("_show_fps", on))
         lay.addWidget(self._settings_fps)
 
@@ -2984,19 +3188,21 @@ class MainWindow(QMainWindow):
             return QPixmap()
 
     def _hub_transition_dir(self, *, leaving_home: bool, dest: str) -> str:
-        """Directional wipe — Mesh← Sounds↑ Engine→ Assets↓ (reverse home)."""
+        """Directional wipe — Mesh← Sounds↑ Engine→ Assets↓ TexMesh↘ (reverse home)."""
         if leaving_home:
             return {
                 "mesh": HUB_DIR_LEFT,
                 "sounds": HUB_DIR_UP,
                 "engine": HUB_DIR_RIGHT,
                 "assets": HUB_DIR_DOWN,
+                "texmesh": HUB_DIR_DOWN,
             }.get(dest, HUB_DIR_LEFT)
         return {
             "mesh": HUB_DIR_RIGHT,
             "sounds": HUB_DIR_DOWN,
             "engine": HUB_DIR_LEFT,
             "assets": HUB_DIR_UP,
+            "texmesh": HUB_DIR_UP,
         }.get(dest, HUB_DIR_RIGHT)
 
     def _play_hub_transition(
@@ -3020,8 +3226,12 @@ class MainWindow(QMainWindow):
         if host is not None:
             tl = host.mapTo(self, QPoint(0, 0))
             ov.setGeometry(QRect(tl, host.size()))
+        from ..util.hw import hub_reveal_ms
+
+        ms = hub_reveal_ms(warm=self.hubs_are_warm())
+        if ms <= 0:
+            return
         pal = palette(self._theme_mode)
-        ms = 720 if self.hubs_are_warm() else 780
         ov.play(
             from_pm,
             direction=direction,
@@ -3037,7 +3247,7 @@ class MainWindow(QMainWindow):
         leaving = self._studio_mode
         snap = (
             self._grab_hub_snapshot()
-            if leaving in ("mesh", "sounds", "engine", "assets")
+            if leaving in ("mesh", "sounds", "engine", "assets", "texmesh")
             else QPixmap()
         )
         direction = self._hub_transition_dir(leaving_home=False, dest=leaving)
@@ -3052,7 +3262,7 @@ class MainWindow(QMainWindow):
         self._apply_studio_chrome()
         self._layout_viewer_pane()  # hub must fill pane or HOME cards sit top-left
         self._status.showMessage(
-            "MSTN Trainz Studio — choose Mesh, Sounds, Engine, or Assets"
+            "MSTN Trainz Studio — Mesh · Sounds · Engine · Assets · Texture / Mesh"
         )
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if not snap.isNull():
@@ -3218,6 +3428,7 @@ class MainWindow(QMainWindow):
         leaving_home = self._studio_mode == "home"
         snap = self._grab_hub_snapshot() if leaving_home else QPixmap()
         self._ensure_assets_host()
+        self._assets_host.set_suite("assets")
         self._studio_mode = "assets"
         if self._chrome_ready:
             self._set_editor_dock(False, animated=False)
@@ -3236,10 +3447,71 @@ class MainWindow(QMainWindow):
                 label="Assets Tools",
             )
 
+    def enter_texmesh_studio(self) -> None:
+        """Texture / Mesh Tools — maps + LM / materials (same host, texmesh suite)."""
+        leaving_home = self._studio_mode == "home"
+        snap = self._grab_hub_snapshot() if leaving_home else QPixmap()
+        self._ensure_assets_host()
+        self._assets_host.set_suite("texmesh")
+        self._studio_mode = "texmesh"
+        if self._chrome_ready:
+            self._set_editor_dock(False, animated=False)
+            self._set_settings_overlay(False, animated=False)
+        self._hub.setCurrentIndex(HUB_ASSETS)
+        self._stack.setCurrentIndex(STACK_HUB)
+        if self.pbr_hud is not None:
+            self.pbr_hud.hide()
+        self._apply_studio_chrome()
+        self._status.showMessage("Texture / Mesh Tools")
+        QTimer.singleShot(0, self._reposition_viewer_chrome)
+        if leaving_home and not snap.isNull():
+            self._play_hub_transition(
+                snap,
+                direction=self._hub_transition_dir(leaving_home=True, dest="texmesh"),
+                label="Texture / Mesh Tools",
+            )
+
     def _status_from_sounds(self, msg: str) -> None:
         sb = getattr(self, "_status", None)
         if sb is not None:
             sb.showMessage(msg)
+
+    def _on_save_noticed(self, detail: str) -> None:
+        """Glass toast when any studio reports a successful save."""
+        hub = getattr(self, "_toasts", None)
+        if hub is not None:
+            hub.save(detail)
+            return
+        fn = getattr(self, "_show_save_toast", None)
+        if fn is not None:
+            fn(self, detail)
+
+    def _on_progress_noticed(self, detail: str, pct: int) -> None:
+        """Status lines with ``N%`` → sticky progress bubble."""
+        hub = getattr(self, "_toasts", None)
+        if hub is None:
+            return
+        # Title = text without the trailing percent token when possible.
+        title = detail
+        for sep in (" — ", " · ", "… ", "... "):
+            if sep in detail:
+                title = detail.split(sep, 1)[0].strip() or detail
+                break
+        hub.progress(title or "Working…", int(pct), detail)
+
+    def _on_progress_cleared(self, detail: str) -> None:
+        """Load/bake often end at 99% — plain status must close the sticky toast."""
+        hub = getattr(self, "_toasts", None)
+        if hub is not None:
+            hub.finish(detail)
+
+    def _open_status_log(self) -> None:
+        """Footer left chip → frost dialog with recent status lines."""
+        sb = getattr(self, "_status", None)
+        lines = list(getattr(sb, "history", []) or [])
+        fn = getattr(self, "_show_status_log_dialog", None)
+        if fn is not None:
+            fn(self, lines)
 
     def _apply_studio_chrome(self) -> None:
         """Hide mesh chrome on HOME / Sounds / Engine / Assets; show on Mesh.
@@ -3278,6 +3550,9 @@ class MainWindow(QMainWindow):
         self._folder_btn.clicked.connect(self._browse_folder_textures)
         self.att_list.currentItemChanged.connect(self._on_att_select)
         self.scene_mesh_list.currentRowChanged.connect(self._on_scene_mesh_row)
+        self.scene_mesh_list.itemChanged.connect(self._on_scene_mesh_checks)
+        self._mesh_ds_all.toggled.connect(self._on_mesh_ds_all)
+        self._mesh_ds_apply.clicked.connect(self._apply_checked_double_sided)
         self._ed_att_list.currentRowChanged.connect(self._on_ed_att_row)
         self.editor.att_apply.connect(self._on_att_apply)
         self.editor.att_add.connect(self._on_att_add)
@@ -3397,6 +3672,10 @@ class MainWindow(QMainWindow):
         for seg in getattr(self, "_pbr_controls", []) or []:
             if seg is not None:
                 set_glass_dark(seg, dark)
+        view = getattr(self, "view", None)
+        chip = getattr(view, "fps_chip", None) if view is not None else None
+        if chip is not None:
+            set_glass_dark(chip, dark)
 
     def _push_hub_theme_palettes(self) -> None:
         """Cheap palette push — avoids allWidgets polish; fixes sticky hub plates."""
@@ -3540,7 +3819,7 @@ class MainWindow(QMainWindow):
 
     def _active_tab_pie(self) -> ModePie:
         """Editor → Edit pie; Preview/Settings → Shading pie."""
-        if getattr(self, "_page", "preview") == "editor":
+        if self._in_editor_page():
             return self._edit_pie
         return self._shading_pie
 
@@ -3595,7 +3874,7 @@ class MainWindow(QMainWindow):
         bar = getattr(self, "_shortcut_bar", None)
         if bar is None:
             return
-        if getattr(self, "_page", "preview") == "editor":
+        if self._in_editor_page():
             mode = getattr(self, "_att_edit_mode", ATT_EDIT_VIEW)
             edit = "Move" if mode == ATT_EDIT_MOVE else "View"
             bar.setText(
@@ -3623,7 +3902,7 @@ class MainWindow(QMainWindow):
         """Mesh Preview/Editor/Settings: Tab = pie (Blender), not sidebar focus chain."""
         if getattr(self, "_studio_mode", "mesh") != "mesh":
             return False
-        if getattr(self, "_page", "preview") not in ("preview", "editor", "settings"):
+        if getattr(self, "_page", "preview") not in ("preview", "meshes", "attachs", "settings"):
             return False
         return not self._focus_wants_tab()
 
@@ -3659,6 +3938,7 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         # [ ] — collapse / expand left / right frost panels
+        # F3 — frame stats (QAction shortcut alone is flaky with hidden menuBar)
         if not self._focus_wants_tab() and not event.isAutoRepeat():
             if key == Qt.Key.Key_BracketLeft:
                 self._toggle_side_panel()
@@ -3666,6 +3946,10 @@ class MainWindow(QMainWindow):
                 return
             if key == Qt.Key.Key_BracketRight:
                 self._toggle_editor_panel()
+                event.accept()
+                return
+            if key == Qt.Key.Key_F3:
+                self._set_view_flag("_show_fps", not self._show_fps)
                 event.accept()
                 return
         super().keyPressEvent(event)
@@ -3772,6 +4056,7 @@ class MainWindow(QMainWindow):
         if self.view is not None:
             if attr == "_show_fps":
                 self.view.set_show_fps(on)
+                self._place_fps_hud()
             else:
                 setattr(self.view, attr, on)
                 self.view.update()
@@ -3791,6 +4076,25 @@ class MainWindow(QMainWindow):
         label = next((n for n, m in PBR_MODES if m == mode), str(mode))
         self._status.showMessage(f"PBR mode: {label}")
 
+    def _in_editor_page(self) -> bool:
+        return getattr(self, "_page", "") in ("meshes", "attachs")
+
+    def _canonical_page(self, which: str) -> str:
+        """Map legacy ``editor`` onto the tab already showing, else last mode."""
+        if which in ("attachments", "attachs"):
+            return "attachs"
+        if which == "editor":
+            ed = getattr(self, "editor", None)
+            if ed is not None and ed.current_mode() == "meshes":
+                return "meshes"
+            if ed is not None and ed.current_mode() == "attachments":
+                return "attachs"
+            mode = getattr(self, "_editor_mode", "meshes")
+            return mode if mode in ("meshes", "attachs") else "meshes"
+        if which in ("preview", "meshes", "attachs", "settings"):
+            return which
+        return "preview"
+
     def _set_nav_checked(self, which: str) -> None:
         # sync pill only — do not animate button widths (that caused double-click lag)
         self._nav.set_page(which, animate=True, emit=False)
@@ -3800,10 +4104,12 @@ class MainWindow(QMainWindow):
             self._studio_mode = "mesh"
             self._apply_studio_chrome()
         instant = bool(getattr(self._nav, "_drag", False))
-        self._page = which if which in ("preview", "editor", "settings") else "preview"
+        which = self._canonical_page(which)
+        self._page = which
 
-        if which == "editor":
-            self._set_nav_checked("editor")
+        if which in ("meshes", "attachs"):
+            self._editor_mode = which
+            self._set_nav_checked(which)
             self._set_settings_overlay(False, animated=not instant)
             # Keep GL full-size; Editor overlays the right (crop, no resize).
             if self.view is not None and (self._scene.parts or self._scene.attachments):
@@ -3817,21 +4123,24 @@ class MainWindow(QMainWindow):
                 self._hub.setCurrentIndex(HUB_MESH)
                 self._stack.setCurrentIndex(STACK_HUB)
                 self.pbr_hud.hide()
+            if which == "meshes":
+                self.editor.show_meshes_tab()
+            else:
+                self.editor.show_attachments_tab()
             self._set_editor_dock(True, animated=not instant)
             self._set_scene_att_ui_for_editor(True)
             # Lists are preloaded on mesh load — only rebuild if missing/stale
             self._refresh_editor_dock(force=False)
             self._sync_att_viewport_mode()
-            self.editor.show_attachments_tab()
             self._refresh_shortcut_bar()
-            self._status.showMessage(
-                "Editor — Tab: View/Move · Attachments · Meshes"
-            )
+            label = "Meshes Editor" if which == "meshes" else "Attachs Editor"
+            self._status.showMessage(f"{label} — pick on the left · edit on the right · Save")
             QTimer.singleShot(0, self._reposition_viewer_chrome)
             return
         if which == "settings":
             self._set_nav_checked("settings")
-            self._set_editor_dock(False, animated=not instant)
+            # Instant dock shut — slide-out left Editor covering Preview on slow PCs.
+            self._set_editor_dock(False, animated=False)
             self._set_scene_att_ui_for_editor(False)
             self._sync_att_viewport_mode()
             self._refresh_shortcut_bar()
@@ -3845,10 +4154,10 @@ class MainWindow(QMainWindow):
             self._set_settings_overlay(True, animated=not instant)
             QTimer.singleShot(0, self._reposition_viewer_chrome)
             return
-        # preview — viewer only (no a.* drag)
+        # preview — viewer only (no a.* drag); dock shut instant so GL reads full-bleed
         self._set_nav_checked("preview")
         self._set_settings_overlay(False, animated=not instant)
-        self._set_editor_dock(False, animated=not instant)
+        self._set_editor_dock(False, animated=False)
         self._set_scene_att_ui_for_editor(False)
         self._sync_att_viewport_mode()
         self._refresh_shortcut_bar()
@@ -3866,7 +4175,8 @@ class MainWindow(QMainWindow):
         """Left frost sidebar over full-bleed viewport (or parked off-left)."""
         host = self._center_host
         m = SIDE_PANEL_MARGIN
-        w = min(SIDE_PANEL_W, max(300, host.width() // 3))
+        # Cap harder on narrow / high-DPI laptops — //3 + 500px dock ate the strip.
+        w = min(SIDE_PANEL_W, max(260, host.width() // 4))
         h = max(1, host.height() - 2 * m)
         is_open = self._side_open if open_ is None else bool(open_)
         if is_open:
@@ -3953,9 +4263,9 @@ class MainWindow(QMainWindow):
 
     def _toggle_editor_panel(self) -> None:
         open_ = not getattr(self, "_editor_dock_open", False)
-        if open_ and getattr(self, "_page", "preview") != "editor":
-            # expanding right panel enters Editor without burying GL
-            self._set_page("editor")
+        if open_ and not self._in_editor_page():
+            # expanding right panel enters the last editor (Meshes by default)
+            self._set_page(getattr(self, "_editor_mode", "meshes"))
             return
         self._set_editor_dock(open_, animated=True)
         if not open_:
@@ -3973,6 +4283,10 @@ class MainWindow(QMainWindow):
         if open_ == getattr(self, "_side_open", True):
             self._layout_side_panel()
             return
+        from ..util.hw import prefer_instant_panels
+
+        if animated and prefer_instant_panels():
+            animated = False
         self._side_open = open_
         side = self._side_panel
         target = self._side_panel_rect(open_=open_)
@@ -4031,7 +4345,9 @@ class MainWindow(QMainWindow):
             sp = getattr(self, "_side_panel", None)
             if sp is not None and sp.isVisible():
                 side_w = sp.geometry().right() + m
-        w = min(EDITOR_DOCK_W, max(280, host.width() - side_w - 120))
+        # Keep ≥40% clear viewport so Preview never looks "pushed" on 1366×768.
+        clear_min = max(280, int(host.width() * 0.40))
+        w = min(EDITOR_DOCK_W, max(260, host.width() - side_w - clear_min - m))
         h = max(1, host.height() - 2 * m)
         if open_:
             return QRect(host.width() - w - m, m, w, h)
@@ -4122,7 +4438,14 @@ class MainWindow(QMainWindow):
                 self.editor.setGeometry(self._editor_dock_rect(open_=True))
                 self.editor.raise_()
                 self._chrome_layer.raise_()
+            elif self.editor is not None and self.editor.isVisible():
+                # Mid-slide leftover (anim interrupted) — snap shut.
+                self.editor.hide()
             return
+        from ..util.hw import prefer_instant_panels
+
+        if animated and prefer_instant_panels():
+            animated = False
         self._editor_dock_open = open_
         ed = self.editor
         target = self._editor_dock_rect(open_=open_)
@@ -4280,6 +4603,17 @@ class MainWindow(QMainWindow):
         if self.pbr_hud.isVisible():
             self.pbr_hud._sync_pill(animate=False)
         self._update_chrome_mask()
+        self._place_fps_hud()
+        ed = getattr(self, "editor", None)
+        if ed is not None and ed.isVisible():
+            ed.raise_()
+        self._layout_panel_edge_btns()
+        if layer is not None:
+            layer.raise_()
+        if getattr(self, "_settings_open", False):
+            panel = getattr(self, "_settings_panel", None)
+            if panel is not None:
+                panel.raise_()
         # Tab pie must stay above chrome/GL while armed
         if getattr(self, "_tab_pie_armed", False):
             pie = getattr(self, "_tab_pie", None) or (
@@ -4320,6 +4654,10 @@ class MainWindow(QMainWindow):
             if key == Qt.Key.Key_Escape and self._tab_pie_armed:
                 event.accept()
                 return True
+            # Own F3 so hidden-menuBar QAction + our KeyPress don't double-toggle.
+            if key == Qt.Key.Key_F3 and not self._focus_wants_tab():
+                event.accept()
+                return True
         if self.isActiveWindow() and et in (
             QEvent.Type.KeyPress,
             QEvent.Type.KeyRelease,
@@ -4345,6 +4683,9 @@ class MainWindow(QMainWindow):
                     return True
                 if key == Qt.Key.Key_BracketRight:
                     self._toggle_editor_panel()
+                    return True
+                if key == Qt.Key.Key_F3:
+                    self._set_view_flag("_show_fps", not self._show_fps)
                     return True
         watch = (
             getattr(self, "_viewer_pane", None),
@@ -4386,7 +4727,8 @@ class MainWindow(QMainWindow):
         self._sync_side_scroll_body()
 
     def _on_editor_mode_changed(self, mode: str) -> None:
-        if getattr(self, "_page", "preview") != "editor":
+        self._editor_mode = "meshes" if mode == "meshes" else "attachs"
+        if not self._in_editor_page():
             return
         self._set_scene_list_mode("meshes" if mode == "meshes" else "atts")
 
@@ -4396,16 +4738,21 @@ class MainWindow(QMainWindow):
         show_meshes = self._scene_list_mode == "meshes"
         self.att_list.setVisible(not show_meshes)
         self.scene_mesh_list.setVisible(show_meshes)
+        bar = getattr(self, "_mesh_ds_bar", None)
+        if bar is not None:
+            bar.setVisible(show_meshes)
         title = getattr(self, "_scene_list_title", None)
         if title is not None:
             if show_meshes:
                 title.setText("Meshes")
-                title.setToolTip("Select a material — edit properties on the right Editor.")
+                title.setToolTip(
+                    "Tick meshes, then Apply Double Sided. Click a name to edit on the right."
+                )
             else:
                 title.setText("Attachments (a.*)")
                 title.setToolTip("Select an attachment — edit on the right Editor.")
         tip = getattr(self, "_scene_cap_tip", None)
-        if tip is not None and getattr(self, "_page", "") == "editor":
+        if tip is not None and self._in_editor_page():
             tip.setText(
                 "Meshes → edit on right"
                 if show_meshes
@@ -4413,30 +4760,115 @@ class MainWindow(QMainWindow):
             )
         self._sync_side_scroll_body()
 
+    def _scene_mesh_checked_names(self) -> list[str]:
+        names: list[str] = []
+        lst = getattr(self, "scene_mesh_list", None)
+        if lst is None:
+            return names
+        for i in range(lst.count()):
+            item = lst.item(i)
+            if item is None or item.checkState() != Qt.CheckState.Checked:
+                continue
+            text = item.text().strip()
+            if text:
+                names.append(text)
+        return names
+
+    def _refresh_mesh_ds_count(self) -> None:
+        btn = getattr(self, "_mesh_ds_apply", None)
+        all_box = getattr(self, "_mesh_ds_all", None)
+        if btn is None:
+            return
+        n = len(self._scene_mesh_checked_names())
+        total = self.scene_mesh_list.count()
+        btn.setText(f"Apply Double Sided ({n})")
+        btn.setEnabled(n > 0)
+        if all_box is not None:
+            all_box.blockSignals(True)
+            all_box.setChecked(total > 0 and n == total)
+            all_box.blockSignals(False)
+
+    def _on_scene_mesh_checks(self, _item: QListWidgetItem) -> None:
+        self._refresh_mesh_ds_count()
+
+    def _on_mesh_ds_all(self, on: bool) -> None:
+        state = Qt.CheckState.Checked if on else Qt.CheckState.Unchecked
+        lst = self.scene_mesh_list
+        lst.blockSignals(True)
+        for i in range(lst.count()):
+            item = lst.item(i)
+            if item is not None:
+                item.setCheckState(state)
+        lst.blockSignals(False)
+        self._refresh_mesh_ds_count()
+
+    def _apply_checked_double_sided(self) -> None:
+        names = self._scene_mesh_checked_names()
+        if not names:
+            return
+        page = getattr(self.editor, "meshes_page", None)
+        if page is not None:
+            page.note_two_sided(names, True)
+        n = 0
+        if self.view is not None:
+            n = self.view.set_two_sided_for_materials(names, True)
+            view = self.view
+            QTimer.singleShot(0, view.update)
+        else:
+            from ..render.view3d import _two_sided_name_hit
+
+            for part in self._scene.parts:
+                if any(_two_sided_name_hit(part.name or "", raw) for raw in names):
+                    part.two_sided = True
+                    n += 1
+        self._queue_two_sided(names, True)
+        self._status.showMessage(
+            f"Double Sided on · {n or len(names)} part(s) in preview — Save to keep"
+        )
+
     def _refill_scene_mesh_list(self) -> None:
         names = self.editor.meshes_page.material_names()
         if not names:
             names = [p.name for p in self._scene.parts if p.name]
+        checked = set(self._scene_mesh_checked_names())
         keep = self.scene_mesh_list.currentRow()
+        self._suppress_mesh_hl += 1
         self.scene_mesh_list.blockSignals(True)
-        self.scene_mesh_list.clear()
-        self.scene_mesh_list.addItems(names)
-        self.scene_mesh_list.blockSignals(False)
-        if names:
-            row = keep if 0 <= keep < len(names) else 0
-            self.scene_mesh_list.setCurrentRow(row)
+        try:
+            self.scene_mesh_list.clear()
+            for name in names:
+                item = QListWidgetItem(name)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if name in checked
+                    else Qt.CheckState.Unchecked
+                )
+                self.scene_mesh_list.addItem(item)
+        finally:
+            self.scene_mesh_list.blockSignals(False)
+        try:
+            if names:
+                row = keep if 0 <= keep < len(names) else 0
+                self.scene_mesh_list.setCurrentRow(row)
+        finally:
+            self._suppress_mesh_hl -= 1
+        self._refresh_mesh_ds_count()
         _refit_side_table(self.scene_mesh_list)
 
     def _on_scene_mesh_row(self, row: int) -> None:
-        if getattr(self, "_page", "") == "editor":
+        if self._in_editor_page():
             if self.editor.current_mode() != "meshes":
                 self.editor.show_meshes_tab()
             self.editor.meshes_page.select_row(row)
-        self._status.showMessage(
-            self.scene_mesh_list.item(row).text()
-            if 0 <= row < self.scene_mesh_list.count()
-            else ""
-        )
+        if row < 0:
+            self._set_mesh_hl("part", set(), frame=False)
+            self._status.showMessage("")
+            return
+        name = self._mesh_part_name_at(row)
+        self._set_mesh_hl("part", {name} if name else set(), frame=True)
+        if self._mesh_hl_blocked():
+            self._status.showMessage(name)
 
     def _on_editor_mesh_selected(self, row: int) -> None:
         if self.scene_mesh_list.currentRow() != row:
@@ -4791,10 +5223,13 @@ class MainWindow(QMainWindow):
                 from ..lib.trainzmesh_viewer.textures import resolve_texture_path
             except ImportError:
                 resolve_texture_path = None  # type: ignore[assignment]
-            for i, mat in enumerate(self._tzmf_mats_cache):
-                if i >= len(self._scene.parts):
-                    break
-                part = self._scene.parts[i]
+            from ..io.tzmf_edit import materials_by_tail
+
+            mats_at = materials_by_tail(self._tzmf_mats_cache)
+            for part in self._scene.parts:
+                mat = mats_at.get(int(getattr(part, "chunk_tail", -1)))
+                if mat is None:
+                    continue
                 part.name = mat.name
                 part.material_type = mat.type_name
                 part.color = (mat.color[0], mat.color[1], mat.color[2])
@@ -4968,27 +5403,56 @@ class MainWindow(QMainWindow):
         if self.view is not None:
             self.view.set_scene(self._scene)
 
-    def _on_mesh_two_sided_changed(self, index: int, on: bool, material: str) -> None:
-        if 0 <= index < len(self._scene.parts):
-            self._scene.parts[index].two_sided = on
-        if self.view is not None and material:
-            from ..io.texture import texture_stem
+    def _on_mesh_two_sided_changed(self, _index: int, on: bool, material: str) -> None:
+        # _index is the material-list row, not the geometry chunk — match by name.
+        name = (material or "").strip()
+        n = 0
+        if self.view is not None and name:
+            # Live cull in the current preview. Camera and buffers stay put.
+            n = self.view.set_two_sided_for_material(name, on)
+            view = self.view
+            QTimer.singleShot(0, view.update)
+        elif name:
+            for part in self._scene.parts:
+                if (part.name or "").strip().lower() == name.lower():
+                    part.two_sided = on
+                    n += 1
+        if name:
+            self._queue_two_sided([name], on)
+        flag = "on" if on else "off"
+        if n:
+            self._status.showMessage(
+                f"Double Sided {flag} · {name} · {n} part(s) in preview — Save to keep"
+            )
+        else:
+            self._status.showMessage(
+                f"Double Sided {flag} · {name or 'mesh'} · no geometry in preview"
+            )
 
-            stem = texture_stem(material.split(".m.")[0] if ".m." in material else material)
-            if stem:
-                self.view.set_two_sided_for_stems({stem}, on)
-        # also persist mesh.txt when possible
-        if self._mesh_path is not None and material:
-            from ..io.mesh_meta import mesh_meta_path, write_two_sided
+    def _queue_two_sided(self, names: list[str], on: bool) -> None:
+        """Remember flags for the next Editor Save. Does not touch the mesh file."""
+        pending = getattr(self, "_two_sided_pending", None)
+        if pending is None:
+            pending = {}
+            self._two_sided_pending = pending
+        for name in names:
+            key = (name or "").strip()
+            if key:
+                pending[key] = bool(on)
 
-            meta = mesh_meta_path(self._mesh_path)
-            try:
-                write_two_sided(meta, material, on)
-            except OSError:
-                pass
-        self._status.showMessage(
-            f"Double Sided {'on' if on else 'off'} · {material or index}"
-        )
+    def _flush_two_sided_meta(self, mesh_path: Path | None = None) -> None:
+        """Write queued Double Sided flags beside the mesh. No-op until Save."""
+        pending = getattr(self, "_two_sided_pending", None) or {}
+        path = self._mesh_path if mesh_path is None else mesh_path
+        if not pending or path is None:
+            return
+        from ..io.mesh_meta import mesh_meta_path, write_two_sided_map
+
+        try:
+            write_two_sided_map(mesh_meta_path(path), dict(pending))
+        except OSError:
+            return
+        pending.clear()
 
     def _on_att_tree_changed(self, index: int, fields: dict) -> None:
         from ..io.scene import Attachment as SceneAtt
@@ -5077,6 +5541,58 @@ class MainWindow(QMainWindow):
         prefer = select or self._selected_texture_txt() or self.editor.texture.path
         self.editor.texture.set_files(paths, select=prefer)
 
+    def _place_fps_hud(self) -> None:
+        """Pin the F3 chip to the top-right of the clear viewport.
+
+        The GL widget stays full-bleed under the Editor dock, so a chip glued
+        to the widget's right edge sits under the sidebar. Track the dock's
+        left edge and slide the chip with it.
+        """
+        view = getattr(self, "view", None)
+        host = getattr(self, "_center_host", None)
+        if view is None or host is None or not hasattr(view, "fps_chip"):
+            return
+        chip = view.fps_chip
+        mesh = getattr(self, "_studio_mode", "") == "mesh"
+        want = bool(
+            getattr(view, "_show_fps", False)
+            and mesh
+            and view.isVisible()
+            and not getattr(self, "_settings_open", False)
+        )
+        view._fps_suppressed = not want
+        if chip.parentWidget() is not host:
+            chip.setParent(host)
+        # Off the GL widget, this flag keeps the chip above the native viewport.
+        chip.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
+        if not want:
+            chip.hide()
+            return
+        dock_left = None
+        ed = getattr(self, "editor", None)
+        if ed is not None and ed.isVisible():
+            dock_left = int(ed.geometry().x())
+        left_min = 12
+        sp = getattr(self, "_side_panel", None)
+        if (
+            sp is not None
+            and getattr(self, "_side_open", True)
+            and sp.isVisible()
+        ):
+            left_min = max(left_min, int(sp.geometry().right()) + 8)
+        view.set_fps_place(host.width(), dock_left, left_min)
+        if chip.hud_text():
+            chip.show()
+            view.apply_fps_place()
+        # Chip is AlwaysStackOnTop (so the GL hwnd cannot cover it). Keep chrome above it.
+        layer = getattr(self, "_chrome_layer", None)
+        if layer is not None and layer.isVisible():
+            layer.raise_()
+        if getattr(self, "_settings_open", False):
+            panel = getattr(self, "_settings_panel", None)
+            if panel is not None and panel.isVisible():
+                panel.raise_()
+
     def _reposition_pbr_hud(self) -> None:
         host = self.pbr_hud.parentWidget() or self._viewer_pane
         self.pbr_hud.adjustSize()
@@ -5157,12 +5673,24 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
     def _hide_overlay(self) -> None:
-        fade_overlay(self._overlay, False, 160)
+        from ..util.hw import prefer_light_boot_frost
+
+        # Low-end: snap off — fade + frost composite felt sticky after warm.
+        if prefer_light_boot_frost():
+            self._overlay.hide()
+            self._overlay.set_frost(None)
+        else:
+            fade_overlay(self._overlay, False, 100)
+        # Safety: LoadWorker used to top out at 99% — never leave toast stuck.
+        hub = getattr(self, "_toasts", None)
+        if hub is not None:
+            hub.finish()
 
     def _on_load_progress(self, stage: str, pct: int) -> None:
         self._overlay.set_brand("Mesh Studio")
         self._overlay.set_stage(stage, pct)
-        self._status.showMessage(stage)
+        # % in the status line → StudioStatusBar.progress_noticed → toast bubble
+        self._status.showMessage(f"{stage}  {max(0, min(100, int(pct)))}%")
         QApplication.processEvents()
 
     def _set_busy(self, busy: bool) -> None:
@@ -5194,6 +5722,8 @@ class MainWindow(QMainWindow):
             self.view._show_atts = self._show_atts
             self.view._show_corner_gizmo = self._show_corner_gizmo
             self.view.set_show_fps(self._show_fps)
+            self.view._fps_host_hook = self._place_fps_hud
+            set_glass_dark(self.view.fps_chip, self._theme_mode != "light")
             self.view.attachment_moved.connect(self._on_att_viewport_moved)
             self.view.attachment_drag_started.connect(self._on_att_viewport_drag_started)
             self.view.attachment_drag_finished.connect(self._on_att_viewport_drag_finished)
@@ -5545,6 +6075,8 @@ class MainWindow(QMainWindow):
 
     def _on_bake_progress(self, stage: str, pct: int, eta: float) -> None:
         self._bake_bar.set_progress(stage, pct, eta)
+        # Same % → toast path as mesh load (bar stays the detailed bake UI).
+        self._status.showMessage(f"{stage}  {max(0, min(100, int(pct)))}%")
         self._bake_bar.reposition()
 
     def _on_bake_finished(self, result: object) -> None:
@@ -5753,7 +6285,34 @@ class MainWindow(QMainWindow):
         assets_act = QAction("Assets Tools", self)
         assets_act.triggered.connect(self.enter_assets_studio)
         v.addAction(assets_act)
+        texmesh_act = QAction("Texture / Mesh Tools", self)
+        texmesh_act.triggered.connect(self.enter_texmesh_studio)
+        v.addAction(texmesh_act)
         self._view_menu = v
+
+        tools = mb.addMenu("Tools")
+        ve_cur = QAction("VE Rules scan current", self)
+        ve_cur.setShortcut("Ctrl+Shift+V")
+        ve_cur.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        ve_cur.setToolTip(
+            "Scan the open mesh / textures / config / sounds / asset folder "
+            "(works in every studio, not only Assets Tools)."
+        )
+        ve_cur.triggered.connect(self._ve_scan_current)
+        tools.addAction(ve_cur)
+        ve_folder = QAction("VE Rules scan folder…", self)
+        ve_folder.setShortcut("Ctrl+Shift+R")
+        ve_folder.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        ve_folder.triggered.connect(self._ve_scan_folder_dialog)
+        tools.addAction(ve_folder)
+        ve_fix = QAction("VE Rules fix current…", self)
+        ve_fix.triggered.connect(self._ve_fix_current)
+        tools.addAction(ve_fix)
+        tools.addSeparator()
+        ve_last = QAction("Show last VE report", self)
+        ve_last.triggered.connect(self._ve_show_last)
+        tools.addAction(ve_last)
+        self._tools_menu = tools
 
         self._build_theme_menu()
         self._build_lang_menu()
@@ -5841,6 +6400,7 @@ class MainWindow(QMainWindow):
                     "File": self._file_menu,
                     "Edit": self._edit_menu,
                     "View": self._view_menu,
+                    "Tools": getattr(self, "_tools_menu", None),
                     "Theme": self._theme_menu,
                     "Lang": self._lang_menu,
                 }
@@ -5857,6 +6417,7 @@ class MainWindow(QMainWindow):
                 "File": getattr(self, "_file_menu", None),
                 "Edit": getattr(self, "_edit_menu", None),
                 "View": getattr(self, "_view_menu", None),
+                "Tools": getattr(self, "_tools_menu", None),
                 "Theme": getattr(self, "_theme_menu", None),
                 "Lang": getattr(self, "_lang_menu", None),
             }
@@ -5975,6 +6536,200 @@ class MainWindow(QMainWindow):
         name = path.name.lower()
         return name.endswith(".texture.txt") or path.suffix.lower() == ".texture"
 
+    # ── VE Rules hub (app-wide — every studio) ───────────────
+
+    def ve_context_paths(self) -> list[Path]:
+        """Paths relevant to the current studio for a shared VE scan."""
+        mode = getattr(self, "_studio_mode", "home")
+        out: list[Path] = []
+        seen: set[str] = set()
+
+        def _add(p: Path | None) -> None:
+            if p is None:
+                return
+            try:
+                key = str(p.resolve()) if p.exists() else str(p)
+            except OSError:
+                key = str(p)
+            if key in seen:
+                return
+            seen.add(key)
+            out.append(p)
+
+        if mode == "mesh":
+            for p in getattr(self, "_mesh_paths", []) or []:
+                _add(Path(p))
+            folder = getattr(self, "_mesh_folder", None)
+            if folder is not None and Path(folder).is_dir():
+                _add(Path(folder))
+            elif out:
+                _add(out[0].parent)
+        elif mode in ("assets", "texmesh"):
+            host = getattr(self, "_assets_host", None)
+            if host is not None and hasattr(host, "ve_context_paths"):
+                for p in host.ve_context_paths():
+                    _add(Path(p))
+        elif mode == "engine":
+            host = getattr(self, "_engine_host", None)
+            cfg = getattr(getattr(host, "cfg", None), "source_path", None) if host else None
+            if cfg:
+                p = Path(cfg)
+                _add(p)
+                if p.is_file():
+                    _add(p.parent)
+        elif mode == "sounds":
+            host = getattr(self, "_sounds_host", None)
+            clips = getattr(host, "_clips", None) if host else None
+            if clips:
+                for clip in clips:
+                    src = getattr(clip, "source", None)
+                    if src:
+                        _add(Path(src))
+        elif mode == "home":
+            pass
+        return out
+
+    def _ve_busy(self) -> bool:
+        w = getattr(self, "_ve_worker", None)
+        return w is not None and w.isRunning()
+
+    def ve_scan(
+        self,
+        paths: list[Path] | None = None,
+        *,
+        show_dialog: bool = True,
+        announce: bool = True,
+    ) -> None:
+        """Central VE Rules entry — Mesh / Sounds / Engine / Assets / folder drop."""
+        targets = [Path(p) for p in (paths or self.ve_context_paths())]
+        if not targets:
+            if announce:
+                QMessageBox.information(
+                    self,
+                    "VE Rules",
+                    "Nothing to scan in this studio yet.\n"
+                    "Open a mesh, config, sounds, or Assets folder — "
+                    "or use Tools → VE Rules scan folder…",
+                )
+            return
+        if self._ve_busy():
+            if announce:
+                self._status.showMessage("VE Rules — still scanning…", 3000)
+            return
+        if announce:
+            self._status.showMessage(f"VE Rules — scanning {len(targets)} path(s)…")
+        worker = VeScanWorker(targets, self)
+        self._ve_worker = worker
+
+        def _done(reports: object, summary: object) -> None:
+            from .ve_dialog import show_ve_reports
+
+            reps = list(reports) if isinstance(reports, list) else []
+            summ = summary if isinstance(summary, dict) else {}
+            self._ve_last_reports = reps
+            line = str(summ.get("line") or "VE done")
+            has_hit = bool(summ.get("errors") or summ.get("warns"))
+            self._ve_btn.setText("VE!" if has_hit else "VE OK")
+            self._ve_btn.setToolTip(line)
+            self._status.showMessage(f"VE Rules — {line}", 8000)
+            if show_dialog and (announce or has_hit):
+                show_ve_reports(self, reps, title="VE Rules")
+
+        def _err(msg: str) -> None:
+            self._status.showMessage(f"VE Rules error — {msg}", 8000)
+            if announce:
+                QMessageBox.warning(self, "VE Rules", msg)
+
+        worker.done.connect(_done)
+        worker.err.connect(_err)
+        worker.start()
+
+    def _ve_scan_current(self) -> None:
+        self.ve_scan(None, show_dialog=True, announce=True)
+
+    def _ve_scan_folder_dialog(self) -> None:
+        start = self._mesh_folder or Path.home()
+        path = QFileDialog.getExistingDirectory(
+            self, "VE Rules — scan asset folder", str(start)
+        )
+        if not path:
+            return
+        self.ve_scan([Path(path)], show_dialog=True, announce=True)
+
+    def _ve_fix_current(self) -> None:
+        from ..io.ve_rules import fix_reports, scan_paths
+        from .i18n import g
+
+        paths = self.ve_context_paths()
+        if not paths:
+            QMessageBox.information(
+                self, "VE Rules", "Open content in a studio first."
+            )
+            return
+        reply = QMessageBox.question(
+            self,
+            g("rules.ui.fix_title"),
+            g("rules.fix.confirm", n=len(paths)),
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        results = fix_reports(scan_paths(paths), bak=True)
+        ok_n = sum(1 for _, ok, _ in results if ok)
+        self._status.showMessage(
+            f"VE Rules fix — {ok_n} applied, {len(results) - ok_n} failed", 6000
+        )
+        self.ve_scan(paths, show_dialog=True, announce=True)
+
+    def _ve_show_last(self) -> None:
+        from .ve_dialog import show_ve_reports
+
+        reps = getattr(self, "_ve_last_reports", None) or []
+        if not reps:
+            self._ve_scan_current()
+            return
+        show_ve_reports(self, reps, title="VE Rules — last scan")
+
+    def _ve_scan_auto(self, paths: list[Path]) -> None:
+        """Background scan after open — status bar only; dialog if errors."""
+        if not paths:
+            return
+        # Expand mesh parents so textures/config are included
+        expanded: list[Path] = []
+        seen: set[str] = set()
+        for p in paths:
+            p = Path(p)
+            key = str(p)
+            if key not in seen:
+                seen.add(key)
+                expanded.append(p)
+            parent = p.parent if p.is_file() else p
+            pk = str(parent)
+            if parent.is_dir() and pk not in seen:
+                seen.add(pk)
+                expanded.append(parent)
+
+        def _done(reports: object, summary: object) -> None:
+            from .ve_dialog import show_ve_reports
+
+            reps = list(reports) if isinstance(reports, list) else []
+            summ = summary if isinstance(summary, dict) else {}
+            self._ve_last_reports = reps
+            line = str(summ.get("line") or "VE done")
+            has_err = bool(summ.get("errors"))
+            self._ve_btn.setText("VE!" if has_err or summ.get("warns") else "VE OK")
+            self._ve_btn.setToolTip(line)
+            self._status.showMessage(f"VE Rules — {line}", 6000)
+            if has_err:
+                show_ve_reports(self, reps, title="VE Rules — issues found")
+
+        if self._ve_busy():
+            return
+        worker = VeScanWorker(expanded, self)
+        self._ve_worker = worker
+        worker.done.connect(_done)
+        worker.err.connect(lambda m: self._status.showMessage(f"VE Rules — {m}", 5000))
+        worker.start()
+
     def open_path(self, path: Path | None) -> None:
         if path is None:
             return
@@ -6011,6 +6766,7 @@ class MainWindow(QMainWindow):
                 self.setWindowTitle(f"MSTN Mesh Studio — {path.name}")
                 self._status.showMessage(f"Checked {path}")
                 self._select_stem(texture_stem(path.name))
+                QTimer.singleShot(100, lambda p=path: self._ve_scan_auto([p]))
                 return
 
         mesh_paths = [
@@ -6336,8 +7092,12 @@ class MainWindow(QMainWindow):
         self._apply_tex_filter()
 
     def _clear_mat_highlight(self) -> None:
-        if self.view is not None:
-            self.view.set_mat_highlight(None)
+        if self.view is None:
+            return
+        if self._mesh_hl:
+            self._apply_mesh_hl(frame=False, quiet=True)
+            return
+        self.view.set_mat_highlight(None)
 
     def _sync_mat_highlight(self) -> None:
         """Click a mat → orange AABB + fly-to matching geometry (All materials too)."""
@@ -6346,7 +7106,7 @@ class MainWindow(QMainWindow):
         stems = self._selected_stems()
         mesh_keys = self._selected_mesh_keys()
         if not stems and not mesh_keys:
-            self.view.set_mat_highlight(None)
+            self._clear_mat_highlight()
             return
         n = self.view.set_mat_highlight(stems, mesh_keys, frame=True)
         if not stems and not mesh_keys:
@@ -6443,7 +7203,7 @@ class MainWindow(QMainWindow):
                 self.view.set_self_illum_stems(None)
             self._status.showMessage("Self-Illum override cleared (PBR)")
         elif chosen is act_edit:
-            self._set_page("editor")
+            self._set_page("meshes")
         elif chosen is act_force:
             self._force_albedo_on_selection(stems)
         elif chosen is act_reveal:
@@ -6553,7 +7313,7 @@ class MainWindow(QMainWindow):
     def _sync_editor_two_sided(self, path: Path | None) -> None:
         parts = self._parts_for_texture_family(path)
         mat_name = ""
-        checked = True
+        checked = False
         if parts:
             # prefer first named part; majority vote for two_sided
             names = [p.name for p in parts if p.name]
@@ -6733,6 +7493,7 @@ class MainWindow(QMainWindow):
             self._mesh_paths = list(path_list)
             self._lamps = []
             self._hidden_mesh_keys.clear()
+            self._two_sided_pending = {}
         else:
             for p in path_list:
                 if all(x.resolve() != p.resolve() for x in self._mesh_paths):
@@ -6837,8 +7598,17 @@ class MainWindow(QMainWindow):
         if self.view is not None and (scene.parts or scene.attachments):
             self._rescan_lamps()
         QTimer.singleShot(60, self._refresh_side_frost)
+        # App-wide VE Rules — mesh folder + files (status bar; dialog on errors)
+        QTimer.singleShot(200, lambda pl=list(path_list): self._ve_scan_auto(pl))
 
     def _refill_mesh_list(self) -> None:
+        self._suppress_mesh_hl += 1
+        try:
+            self._refill_mesh_list_body()
+        finally:
+            self._suppress_mesh_hl -= 1
+
+    def _refill_mesh_list_body(self) -> None:
         self.mesh_list.blockSignals(True)
         self.mesh_list.setRowCount(0)
         for p in self._mesh_paths:
@@ -6948,6 +7718,7 @@ class MainWindow(QMainWindow):
         self._lamps = []
         self._tzmf_bytes = None
         self._tzmf_dirty = False
+        self._two_sided_pending = {}
         self._autosave_pending = False
         self._im_doc = None
         self._editor_populated_key = ""
@@ -7068,7 +7839,7 @@ class MainWindow(QMainWindow):
         if self.view is not None:
             self.view.fly_to(a.pos, duration_s=0.55, approach=True)
         pos = f"pos=({a.pos[0]:.4f}, {a.pos[1]:.4f}, {a.pos[2]:.4f})"
-        if getattr(self, "_page", "preview") == "editor":
+        if self._in_editor_page():
             if getattr(self, "_att_edit_mode", ATT_EDIT_VIEW) == ATT_EDIT_MOVE:
                 self._status.showMessage(
                     f"{a.name}  {pos}  · Move: drag axis/center · Shift=fine · Alt+LMB pick"
@@ -7098,7 +7869,7 @@ class MainWindow(QMainWindow):
             self._ed_att_list.blockSignals(False)
         self._fill_att_spinboxes(a)
         self._set_view_edit_attachment(index)
-        if getattr(self, "_page", "") == "editor":
+        if self._in_editor_page():
             if self.editor.current_mode() != "attachments":
                 self.editor.show_attachments_tab()
             self.editor.attachments_page.select_row(index)
@@ -7109,7 +7880,7 @@ class MainWindow(QMainWindow):
     def _att_viewport_editable(self) -> bool:
         """LMB translate only on Editor + Move mode (Tab pie)."""
         return (
-            getattr(self, "_page", "preview") == "editor"
+            self._in_editor_page()
             and getattr(self, "_att_edit_mode", ATT_EDIT_VIEW) == ATT_EDIT_MOVE
         )
 
@@ -7127,7 +7898,7 @@ class MainWindow(QMainWindow):
         if self.view is None:
             return
         row = -1
-        if self._page == "editor":
+        if self._in_editor_page():
             row = self._ed_att_list.currentRow()
         else:
             row = self.att_list.currentRow()
@@ -7150,7 +7921,7 @@ class MainWindow(QMainWindow):
         self._set_view_edit_attachment(row)
         self._frame_attachment(a)
         # left → right Editor detail
-        if getattr(self, "_page", "") == "editor":
+        if self._in_editor_page():
             if self.editor.current_mode() != "attachments":
                 self.editor.show_attachments_tab()
             self.editor.attachments_page.select_row(row)
@@ -7341,6 +8112,7 @@ class MainWindow(QMainWindow):
             except OSError as e:
                 QMessageBox.critical(self, "Save .trainzmesh failed", str(e))
                 return
+            self._flush_two_sided_meta(out)
             self._tzmf_dirty = False
             self._autosave_pending = False
             clear_crash_backup()
@@ -7378,6 +8150,7 @@ class MainWindow(QMainWindow):
             except OSError as e:
                 QMessageBox.critical(self, "Save As failed", str(e))
                 return
+            self._flush_two_sided_meta(out_path)
             self._mesh_path = out_path
             self._mesh_folder = out_path.parent
             self._tzmf_dirty = False
@@ -7424,8 +8197,17 @@ class MainWindow(QMainWindow):
         """Route mesh / audio / video / project drops from HOME or window."""
         if not paths:
             return
+        hub = getattr(self, "_toasts", None)
+        if hub is not None:
+            hub.drop(paths)
         if self._busy:
             self._status.showMessage("Busy — wait for current load…")
+            return
+        # Pure folder drop anywhere → app-wide VE Rules on asset folder(s)
+        dirs = [p for p in paths if p.is_dir()]
+        files = [p for p in paths if p.is_file()]
+        if dirs and not files:
+            self.ve_scan(dirs, show_dialog=True, announce=True)
             return
         # Assets Packages — CDP / asset-folder drops (don't swallow as unknown).
         if getattr(self, "_studio_mode", "") == "assets":
