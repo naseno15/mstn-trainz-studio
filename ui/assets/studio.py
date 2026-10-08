@@ -124,6 +124,10 @@ _RIGHT_DOCK_TEX_DEFAULT = 1040
 _RIGHT_DOCK_EDIT_MIN = 320
 _RIGHT_DOCK_EDIT_DEFAULT = 400
 _RIGHT_DOCK_EDIT_MAX = 520
+# Packages Viewer — full-height sibling of left sidebar (Mesh Editor chrome).
+_RIGHT_DOCK_PKG_MIN = 420
+_RIGHT_DOCK_PKG_DEFAULT = 560
+_RIGHT_DOCK_PKG_MAX = 920
 _TEX_ROW_H = 64  # badge + title + subtitle — 52 clipped the second line
 # Longer + InOutCubic + frozen page paint = silk (setSizes every frame was janky).
 _DOCK_ANIM_MS = 560
@@ -924,6 +928,8 @@ class AssetsStudioHost(QWidget):
         self._right_dock_host.hide()
         self._dock_width_saved = _RIGHT_DOCK_TEX_DEFAULT
         self._dock_animating = False
+        self._pkg_viewer_expanded = False
+        self._pkg_split_saved: list[int] | None = None
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_packages_page())  # 0
@@ -959,9 +965,12 @@ class AssetsStudioHost(QWidget):
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         split.setStretchFactor(2, 0)
-        # Start with dock collapsed — texmesh opens it with a slide.
-        split.setSizes([400, 1420, 0])
+        # Packages Viewer after texmesh docks (indices 0–3 stay stable).
+        self._pkg_dock_index = self._right_dock.count()
+        self._right_dock.addWidget(self.packages_page.viewer_panel)
         root.addWidget(split, 1)
+        # Packages is the default page — open full-height Viewer dock immediately.
+        self._sync_right_dock(animate=False)
 
     def _glass(self) -> QFrame:
         f = QFrame()
@@ -982,6 +991,7 @@ class AssetsStudioHost(QWidget):
         self.packages_page.status.connect(self._msg)
         self.packages_page.enginespec_open.connect(self.enginespec_open.emit)
         self.packages_page.mesh_open.connect(self.mesh_open.emit)
+        self.packages_page.viewer_expand_toggled.connect(self._on_pkg_viewer_expand)
         self.sidebar.mount_packages_queue(self.packages_page.queue_rail)
         return self.packages_page
 
@@ -1757,7 +1767,19 @@ class AssetsStudioHost(QWidget):
             self._on_theme()
 
     def _dock_width_budget(self) -> tuple[int, int, int]:
-        """``(min, preferred, max)`` — tex params near-max; editor docks Mesh-sized."""
+        """``(min, preferred, max)`` — packages / tex params / editor docks."""
+        if getattr(self, "_page", None) == "packages":
+            if getattr(self, "_pkg_viewer_expanded", False):
+                return (
+                    _RIGHT_DOCK_PKG_MIN,
+                    _RIGHT_DOCK_PKG_MAX,
+                    _RIGHT_DOCK_PKG_MAX,
+                )
+            return (
+                _RIGHT_DOCK_PKG_MIN,
+                _RIGHT_DOCK_PKG_DEFAULT,
+                _RIGHT_DOCK_PKG_MAX,
+            )
         sub = getattr(self, "_sub_page", "texture")
         if sub == "texture":
             return _RIGHT_DOCK_MIN, _RIGHT_DOCK_TEX_DEFAULT, _RIGHT_DOCK_TEX_MAX
@@ -1775,17 +1797,26 @@ class AssetsStudioHost(QWidget):
         dmin, dpref, dmax = self._dock_width_budget()
         if open_dock:
             sub = getattr(self, "_sub_page", "texture")
-            # tex params: prefer near-max. Editor docks: fixed preferred. Mesh lods: last drag.
-            if sub in ("texture", "parameter", "denoise"):
+            page = getattr(self, "_page", None)
+            # packages expand / tex params: prefer near-max. Editor docks: fixed preferred.
+            if page == "packages" and getattr(self, "_pkg_viewer_expanded", False):
+                right = dpref
+            elif page == "packages":
+                right = int(self._dock_width_saved or dpref)
+                right = max(dmin, min(dmax, right))
+            elif sub in ("texture", "parameter", "denoise"):
                 right = dpref
             else:
                 right = int(self._dock_width_saved or dpref)
             right = max(dmin, min(dmax, right))
-            mid = max(240, total - left - right)
+            mid_floor = 120 if (
+                page == "packages" and getattr(self, "_pkg_viewer_expanded", False)
+            ) else 240
+            mid = max(mid_floor, total - left - right)
             # If mid got crushed, shrink right toward min.
-            if mid < 240:
-                right = max(dmin, total - left - 240)
-                mid = max(240, total - left - right)
+            if mid < mid_floor:
+                right = max(dmin, total - left - mid_floor)
+                mid = max(mid_floor, total - left - right)
             return [left, mid, right]
         # Collapse dock — give its width to the mid column (bars stay centered smoothly).
         right = sizes[2]
@@ -1833,7 +1864,7 @@ class AssetsStudioHost(QWidget):
         )
 
     def _sync_right_dock(self, *, animate: bool = True, after=None) -> None:
-        """Show/hide texmesh right props — silk slide; ``after`` runs when settled."""
+        """Show/hide full-height right dock — packages Viewer or texmesh props."""
         host = getattr(self, "_right_dock_host", None)
         dock = getattr(self, "_right_dock", None)
         split = getattr(self, "_main_split", None)
@@ -1842,16 +1873,23 @@ class AssetsStudioHost(QWidget):
                 after()
             return
 
-        # All texmesh pages own a full-height right dock (sibling of left sidebar).
-        want_open = self._page == "texmesh" and self._sub_page in _TEXMESH_DOCK_INDEX
+        dock_index: int | None = None
+        if self._page == "packages":
+            dock_index = int(getattr(self, "_pkg_dock_index", -1))
+            if dock_index < 0 or dock_index >= dock.count():
+                dock_index = None
+        elif self._page == "texmesh" and self._sub_page in _TEXMESH_DOCK_INDEX:
+            dock_index = _TEXMESH_DOCK_INDEX[self._sub_page]
+
+        want_open = dock_index is not None
         if want_open:
-            dock.setCurrentIndex(_TEXMESH_DOCK_INDEX[self._sub_page])
+            dock.setCurrentIndex(dock_index)
             dmin, _dpref, dmax = self._dock_width_budget()
             host.setMaximumWidth(dmax)
             cur = [int(x) for x in split.sizes()]
             already_open = (not host.isHidden()) and len(cur) >= 3 and cur[2] >= 80
             target = self._dock_target_sizes(open_dock=True)
-            # Texture wants near-max — resize even if the dock is already open.
+            # Texture / packages-expand want near-max — resize even if already open.
             need_resize = (
                 already_open
                 and len(cur) >= 3
@@ -1859,7 +1897,8 @@ class AssetsStudioHost(QWidget):
             )
             if already_open and not need_resize and not self._dock_animating:
                 host.setMinimumWidth(dmin)
-                QTimer.singleShot(0, self._tex_sync_side_scroll)
+                if self._page == "texmesh":
+                    QTimer.singleShot(0, self._tex_sync_side_scroll)
                 if after is not None:
                     after()
                 return
@@ -1869,7 +1908,8 @@ class AssetsStudioHost(QWidget):
                 split.setSizes(target)
                 host.setMinimumWidth(dmin)
                 self._relayout_nav_bars()
-                QTimer.singleShot(0, self._tex_sync_side_scroll)
+                if self._page == "texmesh":
+                    QTimer.singleShot(0, self._tex_sync_side_scroll)
                 if after is not None:
                     after()
                 return
@@ -1883,7 +1923,8 @@ class AssetsStudioHost(QWidget):
 
             def _opened() -> None:
                 host.setMinimumWidth(dmin)
-                QTimer.singleShot(0, self._tex_sync_side_scroll)
+                if self._page == "texmesh":
+                    QTimer.singleShot(0, self._tex_sync_side_scroll)
                 if after is not None:
                     after()
 
@@ -1917,6 +1958,34 @@ class AssetsStudioHost(QWidget):
 
         self._run_dock_anim(target, on_done=_closed)
 
+    def _on_pkg_viewer_expand(self, expanded: bool) -> None:
+        """Grow / restore Packages Viewer dock width when Finder is toggled."""
+        expanded = bool(expanded)
+        self._pkg_viewer_expanded = expanded
+        if expanded:
+            sizes = [int(x) for x in self._main_split.sizes()]
+            if len(sizes) >= 3 and sizes[1] > 80:
+                self._pkg_split_saved = sizes
+        elif self._pkg_split_saved is not None:
+            # Restore prior mid/right split after collapse.
+            saved = list(self._pkg_split_saved)
+            self._pkg_split_saved = None
+            self._pkg_viewer_expanded = False
+            if len(saved) >= 3 and not self._dock_animating:
+                host = self._right_dock_host
+                dmin, _d, dmax = self._dock_width_budget()
+                host.setMaximumWidth(dmax)
+                host.setMinimumWidth(0)
+                host.show()
+
+                def _restored() -> None:
+                    host.setMinimumWidth(dmin)
+                    self._relayout_nav_bars()
+
+                self._run_dock_anim(saved, on_done=_restored)
+                return
+        self._sync_right_dock(animate=True)
+
     def _reveal_sub_nav(self) -> None:
         """Fade top Texture | Mesh Ops bar after the dock has settled (avoids double jank)."""
         sub = getattr(self, "_sub_nav", None)
@@ -1946,6 +2015,11 @@ class AssetsStudioHost(QWidget):
         )
         entering_tex = page == "texmesh" and prev != "texmesh"
         leaving_tex = prev == "texmesh" and page != "texmesh"
+        leaving_pkg = prev == "packages" and page != "packages"
+        if leaving_pkg:
+            self._pkg_viewer_expanded = False
+            self._pkg_split_saved = None
+            self.packages_page.reset_viewer_expand()
         self._page = page
         # Freeze before the stack swap so the first dock frame isn't a heavy paint.
         if changed and (entering_tex or leaving_tex):

@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QSplitter,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -73,7 +72,7 @@ from ..code_edit import (
     code_font_pt,
     syntax_for_filename,
 )
-from ..frost import FrostGlassFrame
+from ..frost import FROST_CONTENT_MARGINS, FrostGlassFrame
 from ..smooth_scroll import enable_smooth_table
 from ..theme import app_font
 
@@ -537,13 +536,15 @@ class _DropTable(QTableWidget):
 
 
 class PackagesPage(QWidget):
-    """Finder · preview/editor; queue_rail mounts into Assets left sidebar."""
+    """Finder column; Viewer docks full-height at AssetsStudioHost (Mesh Editor style)."""
 
     status = Signal(str)
     # kuid, config text, display label — open Engine Tuner CDP session
     enginespec_open = Signal(str, str, str)
     # staged mesh path — open in Mesh Studio (textures already beside file)
     mesh_open = Signal(str)
+    # True = hide Finder / grow studio right dock
+    viewer_expand_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -582,31 +583,26 @@ class PackagesPage(QWidget):
         self._tex_stage_worker: _CdpMeshStageWorker | None = None
         self._open_mesh_studio_after_stage = False
         self._viewer_expanded = False
-        self._expand_busy = False
-        self._split_sizes_saved: list[int] = [560, 560]
         self._pane_mode = "viewer"  # viewer | editor
         self._build()
 
     def set_theme(self, mode: str) -> None:
         self._theme = mode if mode in ("dark", "light") else "dark"
         dark = self._theme != "light"
-        if hasattr(self, "_side"):
-            self._side.set_dark(dark)
+        panel = getattr(self, "viewer_panel", None)
+        if panel is not None:
+            panel.set_dark(dark)
+            apply_code_edit_theme(panel, self._theme)
         apply_code_edit_theme(self, self._theme)
 
     def _build(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
-
-        split = QSplitter(Qt.Orientation.Horizontal)
-        split.setChildrenCollapsible(True)
-        split.setHandleWidth(6)
-        self._main_split = split
+        root.setSpacing(0)
 
         main = QFrame()
         main.setObjectName("glassPanel")
-        main.setMinimumWidth(0)  # allow animated collapse on Viewer expand
+        main.setMinimumWidth(0)  # allow collapse on Viewer expand
         self._main_panel = main
         ml = QVBoxLayout(main)
         ml.setContentsMargins(16, 16, 16, 16)
@@ -770,20 +766,27 @@ class PackagesPage(QWidget):
         self.tz_lab.setVisible(False)
         ml.addWidget(self.tz_lab)
 
-        split.addWidget(main)
+        root.addWidget(main, 1)
+        # Full-height frost dock — AssetsStudioHost mounts into _right_dock.
+        self._build_viewer_panel()
+        apply_code_edit_theme(self, self._theme)
+        self._sync_editor_tab()
 
-        # ── sidebar: preview / editor (wide / expandable) ────
+    def _build_viewer_panel(self) -> None:
+        """Mesh Editor-style right frost plate (padding = FROST_CONTENT_MARGINS)."""
+        from ..icons import apply_icon
+
         side = FrostGlassFrame(radius=14.0)
-        side.setObjectName("sidePanel")
-        side.setMinimumWidth(420)
+        side.setObjectName("editorDock")
+        side.setMinimumWidth(0)
         side.setMaximumWidth(16777215)
         side.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         side.set_dark(True)
-        self._side = side
+        self.viewer_panel = side
         sl = QVBoxLayout(side)
-        sl.setContentsMargins(16, 16, 16, 16)
-        sl.setSpacing(8)
-        from ..icons import apply_icon
+        # Same inset as Mesh Studio EditorWorkspace / left sidebar.
+        sl.setContentsMargins(*FROST_CONTENT_MARGINS)
+        sl.setSpacing(10)
 
         head = QHBoxLayout()
         head.setSpacing(6)
@@ -968,14 +971,6 @@ class PackagesPage(QWidget):
         self.btn_del_all_fbx.clicked.connect(self._delete_all_fbx)
         sl.addWidget(self.btn_del_all_fbx)
 
-        split.addWidget(side)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 1)
-        split.setSizes([560, 560])
-        root.addWidget(split, 1)
-        apply_code_edit_theme(self, self._theme)
-        self._sync_editor_tab()
-
     def _msg(self, text: str) -> None:
         self.status.emit(text)
 
@@ -985,47 +980,18 @@ class PackagesPage(QWidget):
         self._msg(f"Editor font {pt} pt (all text / .gs viewers)")
 
     def _toggle_viewer_expand(self) -> None:
-        """Animate Finder column collapse / restore beside Viewer."""
-        from PySide6.QtCore import QEasingCurve
+        """Hide Finder / grow studio right dock (AssetsStudioHost animates sizes)."""
+        self.set_viewer_expanded(not self._viewer_expanded)
 
+    def set_viewer_expanded(self, expanded: bool) -> None:
         from ..icons import apply_icon
-        from ..motion import animate_splitter_sizes
 
-        if self._expand_busy:
+        expanded = bool(expanded)
+        if expanded == self._viewer_expanded:
             return
-        split = self._main_split
-        sizes = [int(x) for x in split.sizes()]
-        total = max(1, sum(sizes) or int(split.width()) or 1120)
-
-        def _run(target: list[int], on_done) -> None:
-            self._expand_busy = True
-            # Freeze Finder paint during lerp — table relayout was the hitch.
-            self._main_panel.setUpdatesEnabled(False)
-
-            def _finish() -> None:
-                self._main_panel.setUpdatesEnabled(True)
-                self._main_panel.update()
-                self._expand_busy = False
-                if on_done is not None:
-                    on_done()
-
-            animate_splitter_sizes(
-                split,
-                target,
-                ms=560,
-                min_frame_ms=24,
-                easing=QEasingCurve.Type.InOutCubic,
-                on_done=_finish,
-            )
-
-        if not self._viewer_expanded:
-            if sizes[0] > 8:
-                self._split_sizes_saved = sizes
-            saved = self._split_sizes_saved or [560, 560]
-            if sum(saved) < 8:
-                saved = [560, max(1, total - 560)]
-            self._split_sizes_saved = saved
-            self._viewer_expanded = True
+        self._viewer_expanded = expanded
+        self._main_panel.setVisible(not expanded)
+        if expanded:
             apply_icon(
                 self.btn_expand,
                 "fullscreen_exit",
@@ -1035,17 +1001,7 @@ class PackagesPage(QWidget):
                 square=36,
             )
             self._msg("Viewer expanded — Restore to show Finder")
-            _run([0, total], None)
-            return
-
-        target = list(self._split_sizes_saved or [560, 560])
-        if len(target) != 2 or sum(target) < 8:
-            target = [total // 2, total - total // 2]
-        ratio = target[0] / max(1, sum(target))
-        target = [max(0, int(total * ratio)), max(1, total - int(total * ratio))]
-        self._main_panel.setVisible(True)
-        if sizes[0] > 8:
-            self._viewer_expanded = False
+        else:
             apply_icon(
                 self.btn_expand,
                 "fullscreen",
@@ -1054,10 +1010,17 @@ class PackagesPage(QWidget):
                 size=20,
                 square=36,
             )
-            self._msg("Viewer restored")
+            self._msg("Finder restored")
+        self.viewer_expand_toggled.emit(expanded)
+
+    def reset_viewer_expand(self) -> None:
+        """Leave expand without animating — used when navigating away from Packages."""
+        if not self._viewer_expanded:
             return
-        split.setSizes([0, total])
+        from ..icons import apply_icon
+
         self._viewer_expanded = False
+        self._main_panel.setVisible(True)
         apply_icon(
             self.btn_expand,
             "fullscreen",
@@ -1066,7 +1029,6 @@ class PackagesPage(QWidget):
             size=20,
             square=36,
         )
-        _run(target, lambda: self._msg("Viewer restored"))
 
     def _on_pane_mode(self, index: int) -> None:
         if int(index) == 1 and not self._preview_can_edit():
