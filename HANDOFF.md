@@ -14,6 +14,9 @@
 | Buttons | Same `RaiseButton` / `GlassPlate` as Engine Tuner |
 | Paint | Entering Texture & Mesh froze the page stack for the old dock lerp. QML skips that lerp and turns painting back on |
 | Widget nav | Hidden while QML is up — one bottom bar |
+| Texture dock width | Opens at **420** (drag **360–920**). The old 1040 default was the widget sheet |
+| Mesh Lods dock width | Same as Texture Denoiser: opens at **400** (drag **320–520**) |
+| Sidebar icons | Clear actions (open, save, undo, add, remove, copy, denoise run) are icon buttons with a glass caret tip. Rule names stay text |
 
 ### QML Engine Tuner (2026-10-08)
 
