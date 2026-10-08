@@ -6,7 +6,7 @@ from pathlib import Path
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Property, QObject, Qt, Signal, Slot
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -458,6 +458,390 @@ class SimulationPanel(QWidget):
         self.stats.setText(" · ".join(lines))
 
 
+class EngineBridge(QObject):
+    """QML nav talks to the existing page stack. Editors stay widgets."""
+
+    changed = Signal()
+
+    def __init__(self, host: QWidget) -> None:
+        super().__init__(host)
+        self._host = host
+        self._dark = True
+        from PySide6.QtCore import QUrl
+
+        from ..icons import ensure_material_icons, glyph
+        from ... import PKG_ROOT
+
+        ensure_material_icons()
+        self._page = "tuner"
+        self._auto = False
+        self._home = glyph("home") or "Home"
+        self._icon_font = "Material Icons"
+        font_path = PKG_ROOT / "assets" / "fonts" / "MaterialIcons-Regular.ttf"
+        self._icon_url = QUrl.fromLocalFile(str(font_path)).toString()
+        self._side_w = 340
+        self._side_locked = False
+        self._rows: list[dict[str, str]] = []
+        self._show_back = False
+        self._save_as_on = True
+        self._clone_from = 5
+        self._targets = 0
+        self._open_glyph = glyph("file_open")
+        self._back_glyph = glyph("arrow_back")
+        self._save_glyph = glyph("save")
+        self._save_as_glyph = glyph("save_as")
+        self._undo_glyph = glyph("undo")
+        self._redo_glyph = glyph("redo")
+        self._auto_fields: dict[str, str] = {}
+        self._auto_tab = 0
+        self._auto_summary = ""
+        self._shapes: list[str] = []
+        self._tuner = "Tuner"
+        self._simulation = "Simulation"
+        self._parameters = "Parameters"
+        self._auto_tune = "Auto Tune"
+
+    def _bump(self) -> None:
+        self.changed.emit()
+
+    def get_dark(self) -> bool:
+        return self._dark
+
+    def set_dark(self, on: bool) -> None:
+        self._dark = bool(on)
+        self._bump()
+
+    def get_page(self) -> str:
+        return self._page
+
+    def set_page_name(self, page: str) -> None:
+        self._page = page if page in ("tuner", "simulation", "parameters") else "tuner"
+        self._bump()
+
+    def get_auto(self) -> bool:
+        return self._auto
+
+    def set_auto(self, on: bool) -> None:
+        self._auto = bool(on)
+        self._bump()
+
+    def get_home(self) -> str:
+        return self._home
+
+    def set_home(self, text: str) -> None:
+        from ..icons import glyph
+
+        back = str(text) in ("←", "back", "Back")
+        self._home = glyph("arrow_back" if back else "home") or str(text)
+        self._bump()
+
+    def get_icon_font(self) -> str:
+        return self._icon_font
+
+    def get_icon_url(self) -> str:
+        return self._icon_url
+
+    def get_side_w(self) -> int:
+        return self._side_w
+
+    def set_side_locked(self, locked: bool) -> None:
+        self._side_locked = bool(locked)
+        self._bump()
+
+    def get_side_locked(self) -> bool:
+        return self._side_locked
+
+    def get_rows(self) -> list:
+        return self._rows
+
+    def get_show_back(self) -> bool:
+        return self._show_back
+
+    def get_save_as_on(self) -> bool:
+        return self._save_as_on
+
+    def get_clone_from(self) -> int:
+        return self._clone_from
+
+    def get_targets(self) -> int:
+        return self._targets
+
+    def sync_sidebar(self) -> None:
+        side = self._host.sidebar
+        order = (
+            ("file", "File"),
+            ("name", "Name"),
+            ("kuid", "KUID"),
+            ("kind", "Kind"),
+            ("notches", "Notches"),
+            ("vmax", "Vmax"),
+            ("mr", "MR"),
+            ("bp", "BP"),
+            ("points", "TE points"),
+        )
+        self._rows = [
+            {"cap": cap, "val": side._info_rows[key].text()} for key, cap in order
+        ]
+        self._show_back = side.back_btn.isVisible()
+        self._save_as_on = side.save_as_btn.isEnabled()
+        self._bump()
+
+    def get_tuner(self) -> str:
+        return self._tuner
+
+    def get_simulation(self) -> str:
+        return self._simulation
+
+    def get_parameters(self) -> str:
+        return self._parameters
+
+    def get_auto_tune(self) -> str:
+        return self._auto_tune
+
+    def set_labels(self, *, tuner: str, simulation: str, parameters: str, auto_tune: str) -> None:
+        self._tuner = tuner
+        self._simulation = simulation
+        self._parameters = parameters
+        self._auto_tune = auto_tune
+        self._bump()
+
+    dark = Property(bool, get_dark, notify=changed)
+    page = Property(str, get_page, notify=changed)
+    autoOn = Property(bool, get_auto, notify=changed)
+    homeLabel = Property(str, get_home, notify=changed)
+    iconFont = Property(str, get_icon_font, notify=changed)
+    iconFontUrl = Property(str, get_icon_url, notify=changed)
+    sideW = Property(int, get_side_w, notify=changed)
+    sideLocked = Property(bool, get_side_locked, notify=changed)
+    sideJson = Property(str, lambda self: __import__("json").dumps(self._rows), notify=changed)
+    showBack = Property(bool, get_show_back, notify=changed)
+    saveAsOn = Property(bool, get_save_as_on, notify=changed)
+    cloneFrom = Property(int, get_clone_from, notify=changed)
+    targets = Property(int, get_targets, notify=changed)
+    autoJson = Property(str, lambda self: __import__("json").dumps(self._auto_fields), notify=changed)
+    autoTab = Property(int, lambda self: self._auto_tab, notify=changed)
+    autoSummary = Property(str, lambda self: self._auto_summary, notify=changed)
+    shapeNames = Property("QVariantList", lambda self: self._shapes, notify=changed)
+    openGlyph = Property(str, lambda self: self._open_glyph, notify=changed)
+    backGlyph = Property(str, lambda self: self._back_glyph, notify=changed)
+    saveGlyph = Property(str, lambda self: self._save_glyph, notify=changed)
+    saveAsGlyph = Property(str, lambda self: self._save_as_glyph, notify=changed)
+    undoGlyph = Property(str, lambda self: self._undo_glyph, notify=changed)
+    redoGlyph = Property(str, lambda self: self._redo_glyph, notify=changed)
+    tuner = Property(str, get_tuner, notify=changed)
+    simulation = Property(str, get_simulation, notify=changed)
+    parameters = Property(str, get_parameters, notify=changed)
+    autoTune = Property(str, get_auto_tune, notify=changed)
+
+    @Slot(str)
+    def setPage(self, page: str) -> None:
+        self.set_page_name(page)
+        self._host._nav.set_page(page, emit=True)
+
+    @Slot()
+    def goHome(self) -> None:
+        self._host._home_or_back()
+
+    @Slot()
+    def toggleAuto(self) -> None:
+        self._host._on_autotune_toggled(not self._host._autotune_open)
+
+    @Slot(float)
+    def setSideW(self, w: float) -> None:
+        if self._side_locked:
+            return
+        self._side_w = max(280, min(520, int(w)))
+        self._bump()
+
+    @Slot(int)
+    def setCloneFrom(self, n: int) -> None:
+        self._clone_from = max(0, min(8, int(n)))
+        self._bump()
+
+    @Slot(int)
+    def toggleTarget(self, n: int) -> None:
+        bit = 1 << int(n)
+        self._targets ^= bit
+        self._bump()
+
+    @Slot()
+    def openFile(self) -> None:
+        self._host.sidebar.open_clicked.emit()
+
+    @Slot()
+    def goBack(self) -> None:
+        self._host.sidebar.back_clicked.emit()
+
+    @Slot()
+    def saveFile(self) -> None:
+        self._host.sidebar.save_clicked.emit()
+
+    @Slot()
+    def saveFileAs(self) -> None:
+        if self._save_as_on:
+            self._host.sidebar.save_as_clicked.emit()
+
+    @Slot()
+    def undoEdit(self) -> None:
+        self._host.sidebar.undo_clicked.emit()
+
+    @Slot()
+    def redoEdit(self) -> None:
+        self._host.sidebar.redo_clicked.emit()
+
+    @Slot()
+    def doClone(self) -> None:
+        src = self._clone_from
+        targets = [n for n in range(1, 9) if (self._targets & (1 << n)) and n != src]
+        self._host._on_sidebar_clone(src, targets)
+
+    @Slot()
+    def doCloneHigher(self) -> None:
+        self._host._on_sidebar_clone_higher(self._clone_from)
+
+    def sync_auto(self) -> None:
+        panel = self._host._autotune_panel
+        if not hasattr(panel, "power_kw"):
+            return
+
+        def num(spin) -> str:
+            decimals = getattr(spin, "decimals", lambda: 0)()
+            if decimals:
+                return f"{float(spin.value()):.{int(decimals)}f}"
+            return str(int(spin.value()))
+
+        def flag(box) -> str:
+            return "1" if box.isChecked() else "0"
+
+        self._auto_fields = {
+            "powerKw": num(panel.power_kw),
+            "powerCoeff": num(panel.power_coeff),
+            "speedKmh": num(panel.speed_kmh),
+            "speedCoeff": num(panel.speed_coeff),
+            "maxTe": num(panel.max_te),
+            "maxTeOn": "1" if panel.max_te.isEnabled() else "0",
+            "estTe": flag(panel.est_te),
+            "frictionPct": num(panel.friction_pct),
+            "adhesionT": num(panel.adhesion_t),
+            "fricOn": "1" if panel.friction_pct.isEnabled() else "0",
+            "notchCoeff": num(panel.notch_coeff),
+            "nodeCount": num(panel.node_count),
+            "fit": flag(panel.fit_cb),
+            "regen": flag(panel.regen_cb),
+            "engMass": num(panel.eng_mass),
+            "engArea": num(panel.eng_area),
+            "engShape": str(panel.eng_shape.currentIndex()),
+            "engAxles": num(panel.eng_axles),
+            "engFric": num(panel.eng_fric),
+            "carCount": num(panel.car_count),
+            "carMass": num(panel.car_mass),
+            "carArea": num(panel.car_area),
+            "carShape": str(panel.car_shape.currentIndex()),
+            "carAxles": num(panel.car_axles),
+            "carFric": num(panel.car_fric),
+            "grade": num(panel.grade),
+            "accelV0": num(panel.accel_v0),
+            "accelV1": num(panel.accel_v1),
+            "accelNotch": num(panel.accel_notch),
+            "showResist": flag(panel.show_resist_cb),
+        }
+        self._shapes = [panel.eng_shape.itemText(i) for i in range(panel.eng_shape.count())]
+        self._auto_summary = panel.summary.text()
+        self._bump()
+
+    @Slot(str, str)
+    def setAutoField(self, key: str, raw: str) -> None:
+        panel = self._host._autotune_panel
+        if not hasattr(panel, "power_kw"):
+            return
+        spins = {
+            "powerKw": panel.power_kw,
+            "powerCoeff": panel.power_coeff,
+            "speedKmh": panel.speed_kmh,
+            "speedCoeff": panel.speed_coeff,
+            "maxTe": panel.max_te,
+            "frictionPct": panel.friction_pct,
+            "adhesionT": panel.adhesion_t,
+            "notchCoeff": panel.notch_coeff,
+            "nodeCount": panel.node_count,
+            "engMass": panel.eng_mass,
+            "engArea": panel.eng_area,
+            "engAxles": panel.eng_axles,
+            "engFric": panel.eng_fric,
+            "carCount": panel.car_count,
+            "carMass": panel.car_mass,
+            "carArea": panel.car_area,
+            "carAxles": panel.car_axles,
+            "carFric": panel.car_fric,
+            "grade": panel.grade,
+            "accelV0": panel.accel_v0,
+            "accelV1": panel.accel_v1,
+            "accelNotch": panel.accel_notch,
+        }
+        checks = {
+            "estTe": panel.est_te,
+            "fit": panel.fit_cb,
+            "regen": panel.regen_cb,
+            "showResist": panel.show_resist_cb,
+        }
+        combos = {"engShape": panel.eng_shape, "carShape": panel.car_shape}
+        try:
+            if key in spins:
+                box = spins[key]
+                if hasattr(box, "decimals"):
+                    box.setValue(float(raw))
+                else:
+                    box.setValue(int(float(raw)))
+            elif key in checks:
+                checks[key].setChecked(str(raw).lower() in ("1", "true", "yes", "on"))
+            elif key in combos:
+                combos[key].setCurrentIndex(int(float(raw)))
+        except ValueError:
+            return
+        self.sync_auto()
+
+    @Slot(int)
+    def setAutoTab(self, index: int) -> None:
+        panel = self._host._autotune_panel
+        self._auto_tab = 1 if int(index) == 1 else 0
+        if hasattr(panel, "_tab_strip"):
+            panel._tab_strip.set_index(self._auto_tab, animate=False, emit=True)
+        self._bump()
+
+    @Slot()
+    def previewAuto(self) -> None:
+        panel = self._host._autotune_panel
+        if not hasattr(panel, "power_kw"):
+            return
+        panel._preview()
+        self.sync_auto()
+
+    @Slot()
+    def applyAuto(self) -> None:
+        panel = self._host._autotune_panel
+        if not hasattr(panel, "power_kw"):
+            return
+        panel._apply()
+        self.sync_auto()
+
+    @Slot(float, float, float, float)
+    def placeEditor(self, x: float, y: float, w: float, h: float) -> None:
+        self.placeStage(x, y, w, h)
+
+    @Slot(float, float, float, float)
+    def placeStage(self, x: float, y: float, w: float, h: float) -> None:
+        from PySide6.QtCore import QPoint
+
+        split = getattr(self._host, "_split", None)
+        view = getattr(self._host, "_engine_view", None)
+        if split is None or view is None:
+            return
+        origin = view.mapTo(self._host, QPoint(int(x), int(y)))
+        split.setGeometry(origin.x(), origin.y(), max(1, int(w)), max(1, int(h)))
+        split.show()
+        split.raise_()
+
+
 class EngineTunerHost(QWidget):
     """Engine Tuner — top actions · stacked pages · Mesh-style bottom nav."""
 
@@ -495,6 +879,9 @@ class EngineTunerHost(QWidget):
         self._nav.set_theme(self._theme)
         if hasattr(self, "_autotune_panel"):
             self._autotune_panel.set_theme(self._theme)
+        bridge = getattr(self, "_eng_bridge", None)
+        if bridge is not None:
+            bridge.set_dark(self._theme != "light")
 
     def _build(self) -> None:
         from .autotune_dialog import AutotunePanel
@@ -615,6 +1002,64 @@ class EngineTunerHost(QWidget):
         root.addWidget(self._drawer_host, 0)
 
         self.sidebar.refresh_info(self.cfg)
+        self._mount_qml()
+
+    def _mount_qml(self) -> None:
+        """Sunk well + raised nav in QML. Sidebar, editors, and Auto Tune stay widgets."""
+        from PySide6.QtQuickWidgets import QQuickWidget
+
+        from ..qml_host import _quick, warm_quick
+        from .sidebar import _logo_pixmap
+
+        qml = Path(__file__).resolve().parents[1] / "qml" / "EnginePage.qml"
+        if not qml.is_file():
+            return
+        self._eng_bridge = EngineBridge(self)
+        self._eng_bridge.set_dark(self._theme != "light")
+        view = _quick(qml, self._eng_bridge, logo=lambda mode: _logo_pixmap(160, mode=mode))
+        if view.status() != QQuickWidget.Status.Ready:
+            view.deleteLater()
+            self._eng_bridge = None
+            return
+        lay = self.layout()
+        if lay is not None:
+            lay.removeWidget(self._split)
+        self._split.setParent(self)
+        self._engine_view = view
+        if lay is not None:
+            lay.insertWidget(0, view, 1)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+        self._nav.hide()
+        self._nav.setMaximumHeight(0)
+        self._nav.page_changed.connect(self._eng_bridge.set_page_name)
+        self._bind_side_mirror()
+        self.sidebar.setParent(self)
+        self.sidebar.hide()
+        self._split.setHandleWidth(0)
+        warm_quick(view)
+
+    def _bind_side_mirror(self) -> None:
+        """Keep the widget sidebar as the data source; QML paints it."""
+        side = self.sidebar
+        orig_info = side.refresh_info
+        orig_cdp = side.set_cdp_session
+
+        def refresh(cfg, _orig=orig_info) -> None:
+            _orig(cfg)
+            bridge = getattr(self, "_eng_bridge", None)
+            if bridge is not None:
+                bridge.sync_sidebar()
+
+        def cdp(active: bool, label: str = "", _orig=orig_cdp) -> None:
+            _orig(active, label=label)
+            bridge = getattr(self, "_eng_bridge", None)
+            if bridge is not None:
+                bridge.sync_sidebar()
+
+        side.refresh_info = refresh  # type: ignore[method-assign]
+        side.set_cdp_session = cdp  # type: ignore[method-assign]
+        self._eng_bridge.sync_sidebar()
 
     def _theme_clicked(self) -> None:
         if self._on_theme is not None:
@@ -642,13 +1087,20 @@ class EngineTunerHost(QWidget):
             graph_max_kn=max_kn,
             current_resist=self.throttle_editor._resist_params,
         )
-        # Freeze left sidebar width so the dock only steals from center content
-        sizes = self._split.sizes()
-        self._sidebar_lock_w = sizes[0] if sizes else self.sidebar.width()
-        self.sidebar.setMinimumWidth(self._sidebar_lock_w)
-        self.sidebar.setMaximumWidth(self._sidebar_lock_w)
         self._autotune_open = True
         self._nav.set_autotune_checked(True)
+        bridge = getattr(self, "_eng_bridge", None)
+        if bridge is not None and getattr(self, "_engine_view", None) is not None:
+            bridge.sync_auto()
+            bridge.set_auto(True)
+            self.status.emit("Auto Tune sidebar")
+            return
+        # Widget dock only when the QML page did not load.
+        if bridge is None:
+            sizes = self._split.sizes()
+            self._sidebar_lock_w = sizes[0] if sizes else self.sidebar.width()
+            self.sidebar.setMinimumWidth(self._sidebar_lock_w)
+            self.sidebar.setMaximumWidth(self._sidebar_lock_w)
         target = AutotunePanel.PANEL_W + 8
         self.throttle_editor.set_layout_animating(True)
 
@@ -670,6 +1122,12 @@ class EngineTunerHost(QWidget):
         from ..motion import animate_max_width
 
         self._nav.set_autotune_checked(False)
+        bridge = getattr(self, "_eng_bridge", None)
+        if bridge is not None:
+            bridge.set_auto(False)
+        if getattr(self, "_engine_view", None) is not None:
+            self._autotune_open = False
+            return
         if not self._autotune_open and self._drawer_host.maximumWidth() == 0:
             return
         self._autotune_open = False
@@ -679,6 +1137,9 @@ class EngineTunerHost(QWidget):
             self.sidebar.setMinimumWidth(280)
             self.sidebar.setMaximumWidth(520)
             self._sidebar_lock_w = None
+            bridge = getattr(self, "_eng_bridge", None)
+            if bridge is not None:
+                bridge.set_side_locked(False)
             self.throttle_editor.set_layout_animating(False)
 
         animate_max_width(
@@ -691,6 +1152,8 @@ class EngineTunerHost(QWidget):
         )
 
     def _keep_sidebar_lock(self) -> None:
+        if getattr(self, "_engine_view", None) is not None:
+            return
         w = self._sidebar_lock_w
         if w is None:
             return
@@ -861,6 +1324,9 @@ class EngineTunerHost(QWidget):
         self._cdp_on_back = None
         self.sidebar.set_cdp_session(False)
         self._nav.set_home_mode(cdp=False)
+        bridge = getattr(self, "_eng_bridge", None)
+        if bridge is not None:
+            bridge.set_home("Home")
 
     def open_cdp_session(
         self,
@@ -883,6 +1349,9 @@ class EngineTunerHost(QWidget):
         self._load_into_ui()
         self.sidebar.set_cdp_session(True, label=label)
         self._nav.set_home_mode(cdp=True)
+        bridge = getattr(self, "_eng_bridge", None)
+        if bridge is not None:
+            bridge.set_home("←")
         self.path_lab.setText(f"CDP session — {label}")
         self.status.emit(f"Opened from CDP — {label}")
         return True
