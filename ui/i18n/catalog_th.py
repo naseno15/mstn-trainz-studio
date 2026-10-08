@@ -92,6 +92,7 @@ STRINGS: dict[str, str] = {
     'Attachment edit': 'แก้ไข attachment',
     'Attachments (a.*)': 'Attachments (a.*)',
     'Attachments from FBX are preview-only. Open .trainzmesh / .im to Save.': 'Attachment จาก FBX ใช้พรีวิวได้อย่างเดียว เปิด .trainzmesh / .im เพื่อ Save',
+    'Atts': 'Atts',
     'Audio': 'เสียง',
     'Auto Tune': 'Auto Tune',
     'Auto Tune applied — N': 'ใช้ Auto Tune แล้ว — N',

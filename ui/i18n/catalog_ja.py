@@ -92,6 +92,7 @@ STRINGS: dict[str, str] = {
     'Attachment edit': 'アタッチメント編集',
     'Attachments (a.*)': 'アタッチメント (a.*)',
     'Attachments from FBX are preview-only. Open .trainzmesh / .im to Save.': 'FBX のアタッチメントはプレビュー専用です。保存するには .trainzmesh / .im を開いてください。',
+    'Atts': 'Atts',
     'Audio': 'オーディオ',
     'Auto Tune': 'Auto Tune',
     'Auto Tune applied — N': 'Auto Tune を適用しました — N',

@@ -90,6 +90,7 @@ KEYS = [
     'Attach move',
     'Attachment edit',
     'Attachments (a.*)',
+    'Atts',
     'Attachments from FBX are preview-only. Open .trainzmesh / .im to Save.',
     'Audio',
     'Auto Tune',
