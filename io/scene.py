@@ -13,6 +13,8 @@ class Attachment:
     pos: tuple[float, float, float]
     # world-space 3x3 orientation, row-major (identity if unknown)
     orient: tuple[float, ...] = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    # Owning file name when several meshes share one preview ("" = unknown).
+    mesh_key: str = ""
 
     def axes_end(self, length: float = 0.25) -> tuple[Any, Any, Any]:
         import numpy as np

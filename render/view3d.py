@@ -32,12 +32,13 @@ except Exception:
 import numpy as np
 from OpenGL import GL
 from OpenGL.GL import shaders as gl_shaders
-from PySide6.QtCore import Qt, QPoint, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
     QFont,
     QFontMetrics,
+    QGuiApplication,
     QKeyEvent,
     QPainter,
     QSurfaceFormat,
@@ -229,6 +230,33 @@ def fly_approach_dist(current_dist: float, *, approach: bool = True) -> float:
 def is_mesh_key_hidden(mesh_key: str, hidden: set[str] | frozenset[str]) -> bool:
     """Scene mesh table Show-off → skip this batch (empty key = always draw)."""
     return bool(mesh_key) and mesh_key in hidden
+
+
+def attachment_owner_mesh_key(
+    att_name: str, mesh_keys: Sequence[str] | set[str] | frozenset[str]
+) -> str:
+    """Map a.* name → mesh_key. Multi prefix ``stem/a.foo``; single mesh = sole key."""
+    keys = [str(k) for k in mesh_keys if k]
+    name = att_name or ""
+    if "/" in name:
+        stem = name.split("/", 1)[0]
+        for mk in keys:
+            if Path(mk).stem == stem:
+                return mk
+        return ""
+    return keys[0] if len(keys) == 1 else ""
+
+
+def is_attachment_hidden(
+    att_name: str,
+    hidden_att_mesh_keys: set[str] | frozenset[str],
+    mesh_keys: Sequence[str] | set[str] | frozenset[str],
+) -> bool:
+    """Scene table Atts-off → skip gizmos for that mesh's a.*."""
+    if not hidden_att_mesh_keys:
+        return False
+    owner = attachment_owner_mesh_key(att_name, mesh_keys)
+    return bool(owner) and owner in hidden_att_mesh_keys
 
 
 def _two_sided_name_hit(have: str, want: str) -> bool:
@@ -1257,12 +1285,16 @@ def pick_attachment_index(
     height: float,
     *,
     radius_px: float = 22.0,
+    skip_index: set[int] | frozenset[int] | None = None,
 ) -> int:
     """Nearest a.* under cursor within ``radius_px``. -1 if none."""
     best_i = -1
     best_d2 = float(radius_px) ** 2
     best_z = 1e9
+    skip = skip_index or ()
     for i, att in enumerate(attachments):
+        if i in skip:
+            continue
         hit = project_world_to_screen(mvp, att.pos, width, height)
         if hit is None:
             continue
@@ -1596,6 +1628,8 @@ class MeshView(QOpenGLWidget):
         self._tex_filter_mesh_keys: set[str] = set()
         # Scene "Meshes in scene" Show column — unchecked file names stay GPU-hidden
         self._hidden_mesh_keys: set[str] = set()
+        # Scene Atts column — unchecked mesh keys hide that file's a.* gizmos
+        self._hidden_att_mesh_keys: set[str] = set()
         # Mat list / Meshes list / Meshes-in-scene → orange outline
         self._highlight_stems: set[str] = set()
         self._highlight_mesh_keys: set[str] = set()
@@ -1689,6 +1723,7 @@ class MeshView(QOpenGLWidget):
         self._tex_filter_stems.clear()
         self._tex_filter_mesh_keys.clear()
         self._hidden_mesh_keys.clear()
+        self._hidden_att_mesh_keys.clear()
         self._highlight_stems.clear()
         self._highlight_mesh_keys.clear()
         self._highlight_names.clear()
@@ -1949,6 +1984,39 @@ class MeshView(QOpenGLWidget):
         self._hidden_mesh_keys = nxt
         self._shadow_dirty = True
         self.update()
+
+    def set_hidden_att_mesh_keys(self, keys: set[str] | frozenset[str] | None) -> None:
+        """Hide a.* gizmos by owning mesh_key (Scene table Atts checkboxes)."""
+        nxt = {str(k) for k in (keys or set()) if k}
+        if nxt == self._hidden_att_mesh_keys:
+            return
+        self._hidden_att_mesh_keys = nxt
+        self.update()
+
+    def _scene_mesh_keys(self) -> set[str]:
+        keys = {str(p.mesh_key) for p in self._scene.parts if getattr(p, "mesh_key", "")}
+        if keys:
+            return keys
+        return {str(b.mesh_key) for b in self._batches if getattr(b, "mesh_key", "")}
+
+    def _att_is_hidden(self, att) -> bool:
+        mk = "" if isinstance(att, str) else str(getattr(att, "mesh_key", "") or "")
+        if mk:
+            return mk in self._hidden_att_mesh_keys
+        name = att if isinstance(att, str) else str(getattr(att, "name", "") or "")
+        return is_attachment_hidden(
+            name, self._hidden_att_mesh_keys, self._scene_mesh_keys()
+        )
+
+    def event(self, event) -> bool:  # noqa: N802
+        # Win32 Alt opens the menu bar and drops Alt from the click — keep it for a.* pick.
+        if (
+            event.type() == QEvent.Type.ShortcutOverride
+            and event.key() == Qt.Key.Key_Alt
+        ):
+            event.accept()
+            return True
+        return super().event(event)
 
     def set_render_active(self, on: bool) -> None:
         """Pause camera timer / paints — Packages preview must stop when Mesh Studio runs."""
@@ -3025,7 +3093,7 @@ class MeshView(QOpenGLWidget):
             # One draw for all idle a.* — per-att glGet+draw was mode-independent jank.
             idle_chunks: list[np.ndarray] = []
             for i, att in enumerate(self._scene.attachments):
-                if i == sel_i:
+                if i == sel_i or self._att_is_hidden(att):
                     continue
                 idle_chunks.append(
                     attachment_gizmo_lines(att, selected=False, dist=self._dist)
@@ -3034,31 +3102,32 @@ class MeshView(QOpenGLWidget):
                 self._draw_lines(np.vstack(idle_chunks), mvp, width=2.0)
             if 0 <= sel_i < len(self._scene.attachments):
                 att = self._scene.attachments[sel_i]
-                if move:
-                    # Blender translate gizmo — Editor Move only; draw on top
-                    GL.glDisable(GL.GL_DEPTH_TEST)
-                    self._draw_lines(
-                        attachment_gizmo_lines(
+                if not self._att_is_hidden(att):
+                    if move:
+                        # Blender translate gizmo — Editor Move only; draw on top
+                        GL.glDisable(GL.GL_DEPTH_TEST)
+                        self._draw_lines(
+                            attachment_gizmo_lines(
+                                att, selected=True, move_mode=True, dist=self._dist
+                            ),
+                            mvp,
+                            width=4.5,
+                        )
+                        solids = attachment_gizmo_solids(
                             att, selected=True, move_mode=True, dist=self._dist
-                        ),
-                        mvp,
-                        width=4.5,
-                    )
-                    solids = attachment_gizmo_solids(
-                        att, selected=True, move_mode=True, dist=self._dist
-                    )
-                    if solids.size:
-                        self._draw_colored_tris(solids, mvp)
-                    GL.glEnable(GL.GL_DEPTH_TEST)
-                else:
-                    # Preview / Editor View: highlight axes only (no arrows)
-                    self._draw_lines(
-                        attachment_gizmo_lines(
-                            att, selected=True, move_mode=False, dist=self._dist
-                        ),
-                        mvp,
-                        width=3.0,
-                    )
+                        )
+                        if solids.size:
+                            self._draw_colored_tris(solids, mvp)
+                        GL.glEnable(GL.GL_DEPTH_TEST)
+                    else:
+                        # Preview / Editor View: highlight axes only (no arrows)
+                        self._draw_lines(
+                            attachment_gizmo_lines(
+                                att, selected=True, move_mode=False, dist=self._dist
+                            ),
+                            mvp,
+                            width=3.0,
+                        )
 
         if self._show_lamp_gizmos:
             # Off bulbs: tiny crosses only (never soft glow — that looked "on")
@@ -3922,8 +3991,20 @@ class MeshView(QOpenGLWidget):
         mvp, w, h = self._mvp_for_pick()
         # scale pick radius with gizmo on-screen size (near camera → larger)
         rad = max(14.0, float(radius_px) * (28.0 / max(8.0, float(self._dist))))
+        skip = {
+            i
+            for i, att in enumerate(self._scene.attachments)
+            if self._att_is_hidden(att)
+        }
         return pick_attachment_index(
-            self._scene.attachments, mvp, sx, sy, w, h, radius_px=rad
+            self._scene.attachments,
+            mvp,
+            sx,
+            sy,
+            w,
+            h,
+            radius_px=rad,
+            skip_index=skip or None,
         )
 
     def pick_translate_handle_at(self, sx: float, sy: float) -> str | None:
@@ -3950,7 +4031,8 @@ class MeshView(QOpenGLWidget):
         self._last = event.position().toPoint()
         self._alt_pick_armed = False
         self.setFocus(Qt.FocusReason.MouseFocusReason)
-        alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        mods = event.modifiers() | QGuiApplication.keyboardModifiers()
+        alt = bool(mods & Qt.KeyboardModifier.AltModifier)
         if event.button() == Qt.MouseButton.LeftButton and alt and self._show_atts:
             # Alt+LMB: pick a.* under cursor (then Move-mode gizmo drag)
             hit = self.pick_attachment_at(
@@ -3959,6 +4041,7 @@ class MeshView(QOpenGLWidget):
             if hit >= 0:
                 self._alt_pick_armed = True
                 self._cancel_fly()
+                event.accept()
                 self.attachment_picked.emit(hit)
                 return
         if (
