@@ -189,19 +189,18 @@ def paint_glass_chip(widget: QWidget, radius: float = 22.0) -> None:
     p.drawLine(int(r.left() + rad), int(r.top() + 1), int(r.right() - rad), int(r.top() + 1))
 
 
-def _paint_frost_glass(
-    widget: QWidget,
+def _paint_frost_glass_to(
+    p: QPainter,
+    full: QRectF,
     *,
     radius: float,
     frost: QPixmap | None,
     dark: bool,
 ) -> None:
-    """Shared glass plate — soft shadow + frost + light tint."""
-    p = QPainter(widget)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    full = QRectF(widget.rect())
+    """Shared glass plate onto an existing painter — soft shadow + frost + tint."""
     if full.width() < 4 or full.height() < 4:
         return
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     # Match FROST_CONTENT_MARGINS air: side/top/bot leave room for a full fade.
     side, top, bot = 14.0, 11.0, 16.0
     r = _glass_plate_rect(full, side=side, top=top, bottom=bot)
@@ -259,6 +258,44 @@ def _paint_frost_glass(
     )
 
 
+def _paint_frost_glass(
+    widget: QWidget,
+    *,
+    radius: float,
+    frost: QPixmap | None,
+    dark: bool,
+) -> None:
+    """Shared glass plate — soft shadow + frost + light tint."""
+    p = QPainter(widget)
+    _paint_frost_glass_to(
+        p, QRectF(widget.rect()), radius=radius, frost=frost, dark=dark
+    )
+
+
+def bake_frost_plate(
+    width: int,
+    height: int,
+    *,
+    radius: float,
+    frost: QPixmap | None,
+    dark: bool,
+    dpr: float = 1.0,
+) -> QPixmap:
+    """Bake full glass (14-ring shadow) once for motion-lod blit."""
+    w = max(1, int(width))
+    h = max(1, int(height))
+    scale = max(1.0, float(dpr))
+    pm = QPixmap(max(1, int(w * scale)), max(1, int(h * scale)))
+    pm.setDevicePixelRatio(scale)
+    pm.fill(QColor(0, 0, 0, 0))
+    p = QPainter(pm)
+    _paint_frost_glass_to(
+        p, QRectF(0.0, 0.0, float(w), float(h)), radius=radius, frost=frost, dark=dark
+    )
+    p.end()
+    return pm
+
+
 class FrostGlassFrame(QFrame):
     """Floating frost panel (sidebar / Editor / Settings)."""
 
@@ -267,13 +304,17 @@ class FrostGlassFrame(QFrame):
         self._frost: QPixmap | None = None
         self._radius = float(radius)
         self._dark = True
+        self._motion_lod = False
+        self._lod_pm: QPixmap | None = None
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
 
     def set_frost(self, pm: QPixmap | None, *, dark: bool = True) -> None:
         self._frost = pm
         self._dark = bool(dark)
-        self.update()
+        # Mid-slide: keep lod plate; fresh frost applies on end_motion_lod.
+        if not self._motion_lod:
+            self.update()
 
     def set_dark(self, dark: bool) -> None:
         """Retint glass plate — drop stale frost so light/dark never mix."""
@@ -282,10 +323,43 @@ class FrostGlassFrame(QFrame):
             return
         self._dark = dark
         self._frost = None
+        if self._motion_lod:
+            self.end_motion_lod()
+            return
         self.update()
+
+    def begin_motion_lod(self) -> None:
+        """Cache full glass once — later paints blit only (silk dock/hub slides)."""
+        w, h = self.width(), self.height()
+        if w < 4 or h < 4:
+            self._motion_lod = False
+            self._lod_pm = None
+            return
+        self._lod_pm = bake_frost_plate(
+            w,
+            h,
+            radius=self._radius,
+            frost=self._frost,
+            dark=self._dark,
+            dpr=float(self.devicePixelRatioF()),
+        )
+        self._motion_lod = True
+
+    def end_motion_lod(self) -> None:
+        """Drop plate cache and redraw live glass (full soft shadow again)."""
+        self._motion_lod = False
+        self._lod_pm = None
+        self.update()
+
+    def in_motion_lod(self) -> bool:
+        return bool(self._motion_lod)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         del event
+        if self._motion_lod and self._lod_pm is not None and not self._lod_pm.isNull():
+            p = QPainter(self)
+            p.drawPixmap(0, 0, self._lod_pm)
+            return
         _paint_frost_glass(
             self, radius=self._radius, frost=self._frost, dark=self._dark
         )

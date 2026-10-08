@@ -635,13 +635,13 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
     QPushButton#segBtn {{
         background: transparent;
         border: none;
-        border-radius: 10px;
-        /* Compact HUD uses fixedHeight 28 — 7px pad left only ~14px for glyphs. */
-        padding: 4px 12px;
+        border-radius: 12px;
+        /* PBR HUD: fixedHeight 34 inside 56px glass (shadow air top5/bot12). */
+        padding: 6px 14px;
         font-weight: 600;
         font-size: 12px;
         color: {p.muted};
-        min-width: 52px;
+        min-width: 58px;
     }}
     QPushButton#segBtn:checked {{
         background: transparent;

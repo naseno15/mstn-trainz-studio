@@ -84,11 +84,11 @@ def prefer_light_boot_frost() -> bool:
 
 
 def hub_reveal_ms(*, warm: bool) -> int:
-    """Hub morph duration — silky on normal PCs; skip entirely on low-end."""
+    """HOME↔studio cover fade — short; skip entirely on low-end."""
     if prefer_short_hub_motion():
         return 0
-    # Was cut to ~420 and felt rushed/choppy; restore near original cinema length.
-    return 640 if warm else 720
+    # Soft fade only (no directional morph) — keep it brief.
+    return 260 if warm else 300
 
 
 def _worker_budget() -> int:
@@ -147,7 +147,12 @@ def boost_process() -> None:
 
 
 def apply_qt_gl_attrs() -> None:
-    """Force desktop OpenGL before QApplication (no ANGLE/software fallback)."""
+    """Desktop OpenGL for the mesh view; Qt Quick stays on the software scene graph.
+
+    QQuickWidget and QOpenGLWidget in one window leave the Quick framebuffer
+    black on Windows. The software backend paints QML through QPainter, so
+    HOME / title / Sounds stay visible beside the mesh view.
+    """
     try:
         from PySide6.QtCore import QCoreApplication, Qt
 
@@ -157,6 +162,12 @@ def apply_qt_gl_attrs() -> None:
         QCoreApplication.setAttribute(
             Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True
         )
+    except Exception:
+        pass
+    try:
+        from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
+
+        QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.Software)
     except Exception:
         pass
 
