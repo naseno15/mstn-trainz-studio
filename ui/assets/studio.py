@@ -882,6 +882,11 @@ class AssetsStudioHost(QWidget):
         if hasattr(self, "packages_page"):
             self.packages_page.set_theme(self._theme)
         apply_code_edit_theme(self, self._theme)
+        bridge = getattr(self, "_assets_bridge", None)
+        if bridge is not None:
+            bridge.set_dark(dark)
+            bridge.sync_nav()
+            self._drop_qml_plates()
 
     def _build(self) -> None:
         root = QHBoxLayout(self)
@@ -899,6 +904,7 @@ class AssetsStudioHost(QWidget):
         split.addWidget(self.sidebar)
 
         mid_host = QWidget()
+        self._mid_host = mid_host
         mid = QVBoxLayout(mid_host)
         mid.setContentsMargins(10, 0, 0, 0)
         mid.setSpacing(8)
@@ -971,6 +977,195 @@ class AssetsStudioHost(QWidget):
         root.addWidget(split, 1)
         # Packages is the default page — open full-height Viewer dock immediately.
         self._sync_right_dock(animate=False)
+        self._mount_qml()
+
+    def _mount_qml(self) -> None:
+        """Sunk stage + raised nav in QML. Center pages, queue, and docks stay widgets."""
+        from PySide6.QtQuickWidgets import QQuickWidget
+
+        from ..qml_host import _quick, warm_quick
+        from .bridge import AssetsBridge
+        from .sidebar import _logo_pixmap
+
+        qml = Path(__file__).resolve().parents[1] / "qml" / "AssetsPage.qml"
+        if not qml.is_file():
+            return
+        self._assets_bridge = AssetsBridge(self)
+        self._assets_bridge.set_dark(self._theme != "light")
+        self._assets_bridge.sync_nav()
+        view = _quick(qml, self._assets_bridge, logo=lambda mode: _logo_pixmap(160, mode=mode))
+        if view.status() != QQuickWidget.Status.Ready:
+            view.deleteLater()
+            self._assets_bridge = None
+            return
+        lay = self.layout()
+        if lay is not None:
+            lay.removeWidget(self._main_split)
+        self._main_split.hide()
+        self._assets_view = view
+        if lay is not None:
+            lay.insertWidget(0, view, 1)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+        for nav in (self._nav_assets, self._nav_texmesh, getattr(self, "_sub_nav", None)):
+            if nav is None:
+                continue
+            nav.hide()
+            nav.setMaximumHeight(0)
+        mid_lay = self._mid_host.layout()
+        if mid_lay is not None:
+            mid_lay.setContentsMargins(0, 0, 0, 0)
+        self._mid_host.setAutoFillBackground(False)
+        self._mid_host.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.path_lab.hide()
+        self._nav_stack.hide()
+        self._nav_stack.setMaximumHeight(0)
+        self.sidebar.hide()
+        rail = self.packages_page.queue_rail
+        rail.setParent(self)
+        self._mid_host.setParent(self)
+        self._right_dock_host.setParent(self)
+        dock_lay = self._right_dock_host.layout()
+        if dock_lay is not None:
+            dock_lay.setContentsMargins(0, 0, 0, 0)
+        self._bind_side_mirror()
+        self._bind_viewer_mirror()
+        self._drop_qml_plates()
+        open_dock = self._page == "packages" or (
+            self._page == "texmesh" and self._sub_page in _TEXMESH_DOCK_INDEX
+        )
+        _dmin, dpref, _dmax = self._dock_width_budget()
+        self._assets_bridge.set_dock(open_dock, dpref if open_dock else 0)
+        warm_quick(view)
+
+    def _clear_widget_fill(self, widget: QWidget, name: str) -> None:
+        widget.setObjectName(name)
+        widget.setAutoFillBackground(False)
+        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        rule = f"#{name} {{ background: transparent; border: none; }}"
+        sheet = widget.styleSheet()
+        if rule not in sheet:
+            widget.setStyleSheet((sheet + "\n" + rule).strip())
+
+    def _drop_qml_plates(self) -> None:
+        """Center column and right dock sit on the QML stage — no extra black plate."""
+        if not self._qml_active():
+            return
+        from PySide6.QtGui import QColor, QPalette
+
+        self._clear_widget_fill(self._mid_host, "assetsMidWell")
+        self._clear_widget_fill(self._stack, "assetsPageStack")
+        for index in range(self._stack.count()):
+            page = self._stack.widget(index)
+            if page is not None:
+                self._clear_widget_fill(page, f"assetsPage{index}")
+        self._clear_widget_fill(self._right_dock_host, "assetsDockWell")
+        self._clear_widget_fill(self._right_dock, "assetsRightDock")
+        panel = getattr(self.packages_page, "_main_panel", None)
+        if panel is not None:
+            self._clear_widget_fill(panel, "assetsPkgPanel")
+        shell = self.packages_page.findChild(QFrame, "pkgFinderShell")
+        if shell is not None:
+            self._clear_widget_fill(shell, "pkgFinderShell")
+        preview = getattr(self.packages_page, "preview_stack", None)
+        if preview is not None:
+            self._clear_widget_fill(preview, "assetsPreviewStack")
+        for frame in self._right_dock.findChildren(FrostGlassFrame):
+            frame.set_paint_plate(False)
+        from PySide6.QtWidgets import QAbstractScrollArea, QPlainTextEdit
+
+        clear = QColor(0, 0, 0, 0)
+        areas = list(self._right_dock.findChildren(QAbstractScrollArea))
+        slide = getattr(self, "_sub_slide", None)
+        if slide is not None:
+            areas.extend(slide.findChildren(QAbstractScrollArea))
+            for edit in slide.findChildren(QPlainTextEdit):
+                edit.setStyleSheet(
+                    "QPlainTextEdit { background: transparent; border: none; }"
+                )
+        for area in areas:
+            vp = area.viewport()
+            if vp is None:
+                continue
+            area.setAutoFillBackground(False)
+            vp.setAutoFillBackground(False)
+            pal = vp.palette()
+            pal.setColor(QPalette.ColorRole.Base, clear)
+            pal.setColor(QPalette.ColorRole.Window, clear)
+            vp.setPalette(pal)
+        table = getattr(self.packages_page, "finder_table", None)
+        views = [table.viewport()] if table is not None else []
+        if preview is not None:
+            views.append(preview)
+        for view in views:
+            view.setAutoFillBackground(False)
+            view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            pal = view.palette()
+            pal.setColor(QPalette.ColorRole.Base, clear)
+            pal.setColor(QPalette.ColorRole.Window, clear)
+            view.setPalette(pal)
+
+    def _bind_side_mirror(self) -> None:
+        side = self.sidebar
+        orig_page = side.set_page
+        orig_en = side.set_action_enabled
+        orig_brand = side.set_brand
+
+        def set_page(page: str, *, animate: bool = True, _orig=orig_page) -> None:
+            _orig(page, animate=animate)
+            bridge = getattr(self, "_assets_bridge", None)
+            if bridge is not None:
+                bridge.sync_side()
+
+        def set_enabled(action: str, enabled: bool, _orig=orig_en) -> None:
+            _orig(action, enabled)
+            bridge = getattr(self, "_assets_bridge", None)
+            if bridge is not None:
+                bridge.sync_side()
+
+        def set_brand(title: str, _orig=orig_brand) -> None:
+            _orig(title)
+            bridge = getattr(self, "_assets_bridge", None)
+            if bridge is not None:
+                bridge.sync_nav()
+
+        side.set_page = set_page  # type: ignore[method-assign]
+        side.set_action_enabled = set_enabled  # type: ignore[method-assign]
+        side.set_brand = set_brand  # type: ignore[method-assign]
+
+    def _bind_viewer_mirror(self) -> None:
+        """QML dock reads the widget labels; refresh it when preview chrome changes."""
+        page = self.packages_page
+        bridge = self._assets_bridge
+
+        def wrap(widget: QWidget, method: str) -> None:
+            orig = getattr(widget, method)
+
+            def inner(*args, _orig=orig, **kwargs):
+                _orig(*args, **kwargs)
+                bridge.sync_viewer()
+
+            setattr(widget, method, inner)
+
+        wrap(page.preview_lab, "setText")
+        wrap(page._side_title, "setText")
+        wrap(page.font_lab, "setText")
+        wrap(page.btn_nested, "setEnabled")
+        wrap(page.btn_save_text, "setEnabled")
+        for btn in (page.btn_engine_tuner, page.btn_fast_preview, page.btn_mesh_studio):
+            wrap(btn, "setVisible")
+        tabs = page._pane_mode_tabs
+        orig_tab = tabs.set_tab_enabled
+
+        def set_tab_enabled(index: int, enabled: bool, *, tip: str = "", _orig=orig_tab) -> None:
+            _orig(index, enabled, tip=tip)
+            bridge.sync_viewer()
+
+        tabs.set_tab_enabled = set_tab_enabled  # type: ignore[method-assign]
+
+    def _qml_active(self) -> bool:
+        return getattr(self, "_assets_view", None) is not None and getattr(self, "_assets_bridge", None) is not None
 
     def _glass(self) -> QFrame:
         f = QFrame()
@@ -1022,7 +1217,7 @@ class AssetsStudioHost(QWidget):
             if stack is not None:
                 stack.setCurrentIndex(0)
             sub = getattr(self, "_sub_nav", None)
-            if sub is not None:
+            if sub is not None and not self._qml_active():
                 sub.show()  # only visible while stack is on texmesh (won't be)
             self.sidebar.set_brand("Assets Tools")
             if not same or self._page == "texmesh":
@@ -1468,6 +1663,9 @@ class AssetsStudioHost(QWidget):
             self._tex_sync_map_panel()
         self._tex_sync_side_scroll()
         QTimer.singleShot(0, self._tex_sync_side_scroll)
+        bridge = getattr(self, "_assets_bridge", None)
+        if bridge is not None:
+            bridge.sync_form()
 
     def _tex_page_need_height(self, page: QWidget, width: int) -> int:
         """Content height at ``width`` — word-wrapped tips need heightForWidth."""
@@ -1874,6 +2072,27 @@ class AssetsStudioHost(QWidget):
             return
 
         dock_index: int | None = None
+        if self._qml_active():
+            if self._page == "packages":
+                dock_index = int(getattr(self, "_pkg_dock_index", -1))
+                if dock_index < 0 or dock_index >= dock.count():
+                    dock_index = None
+            elif self._page == "texmesh" and self._sub_page in _TEXMESH_DOCK_INDEX:
+                dock_index = _TEXMESH_DOCK_INDEX[self._sub_page]
+            if dock_index is not None:
+                dock.setCurrentIndex(dock_index)
+                _dmin, dpref, dmax = self._dock_width_budget()
+                host.setMaximumWidth(dmax)
+                self._assets_bridge.set_dock(True, dpref)
+            else:
+                self._assets_bridge.set_dock(False, 0)
+            # Entering texmesh froze the page stack so the dock could move.
+            # QML does not run that lerp, so paint has to come back here.
+            self._freeze_page_paint(False)
+            if after is not None:
+                after()
+            return
+
         if self._page == "packages":
             dock_index = int(getattr(self, "_pkg_dock_index", -1))
             if dock_index < 0 or dock_index >= dock.count():
@@ -1962,6 +2181,9 @@ class AssetsStudioHost(QWidget):
         """Grow / restore Packages Viewer dock width when Finder is toggled."""
         expanded = bool(expanded)
         self._pkg_viewer_expanded = expanded
+        if self._qml_active():
+            self._sync_right_dock(animate=True)
+            return
         if expanded:
             sizes = [int(x) for x in self._main_split.sizes()]
             if len(sizes) >= 3 and sizes[1] > 80:
@@ -2065,6 +2287,9 @@ class AssetsStudioHost(QWidget):
         msg = f"{self._suite_label()} — {label}"
         self.path_lab.setText(msg)
         self.status.emit(msg)
+        bridge = getattr(self, "_assets_bridge", None)
+        if bridge is not None:
+            bridge.sync_nav()
 
     def _on_sub_page(self, page: str) -> None:
         if page not in _TEXMESH_SUB_PAGES:
@@ -2312,8 +2537,11 @@ class AssetsStudioHost(QWidget):
         keys = self._tex_keys()
         if not keys.get("Primary"):
             self.tex_preview.setPlainText("Primary=…")
-            return
-        self.tex_preview.setPlainText(format_texture_txt(keys))
+        else:
+            self.tex_preview.setPlainText(format_texture_txt(keys))
+        bridge = getattr(self, "_assets_bridge", None)
+        if bridge is not None:
+            bridge.sync_form()
 
     def _tex_apply_hints_from_stem(self, stem: str) -> None:
         _, role = material_family(stem)
@@ -3302,6 +3530,11 @@ class AssetsStudioHost(QWidget):
             src = (source_dir / m.name) if source_dir is not None else None
             self._lm_add_row(m.width, m.name, lod=True, source=src, refresh=False)
 
+    def _sync_qml_form(self) -> None:
+        bridge = getattr(self, "_assets_bridge", None)
+        if bridge is not None:
+            bridge.sync_form()
+
     def _lm_refresh_preview(self) -> None:
         prev = getattr(self, "lm_preview", None)
         if prev is None:
@@ -3309,6 +3542,7 @@ class AssetsStudioHost(QWidget):
         rows = self._lm_collect_rows()
         if not rows:
             prev.setPlainText("Drop .trainzmesh / .im / .fbx — or Add mesh row.")
+            self._sync_qml_form()
             return
         lod_rows = [r for r in rows if r["lod"]]
         solo_rows = [r for r in rows if not r["lod"]]
@@ -3338,6 +3572,7 @@ class AssetsStudioHost(QWidget):
             except ValueError as exc:
                 parts.append(str(exc))
         prev.setPlainText("\n\n".join(parts) + "\n")
+        self._sync_qml_form()
 
     def _lm_load(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

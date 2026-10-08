@@ -236,6 +236,11 @@ class DenoisePage(QWidget):
             black_threshold=int(self._black.value()),
         )
 
+    def _sync_form(self) -> None:
+        bridge = getattr(self.window(), "_assets_bridge", None)
+        if bridge is not None:
+            bridge.sync_form()
+
     def open_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -265,6 +270,7 @@ class DenoisePage(QWidget):
         self._bar.setValue(0)
         self._prog_lab.setText("Idle")
         self.status.emit(f"Bake · {path.name}")
+        self._sync_form()
 
     def run_denoise(self) -> None:
         if self._orig is None:
@@ -284,6 +290,7 @@ class DenoisePage(QWidget):
     def _on_progress(self, msg: str, frac: float) -> None:
         self._bar.setValue(int(max(0.0, min(1.0, frac)) * 100))
         self._prog_lab.setText(msg)
+        self._sync_form()
 
     def _on_done(self, rgba: object, engine: str) -> None:
         self._work = np.asarray(rgba, dtype=np.uint8)
@@ -292,10 +299,12 @@ class DenoisePage(QWidget):
         self._prog_lab.setText(f"Done · {engine}")
         self._preview.set_image(_rgba_to_pixmap(self._work))
         self.status.emit(f"Denoised via {engine} — Save to overwrite")
+        self._sync_form()
 
     def _on_fail(self, err: str) -> None:
         self._prog_lab.setText("Failed")
         self.status.emit(f"Denoise failed: {err}")
+        self._sync_form()
 
     def _show_orig(self) -> None:
         if self._orig is not None:

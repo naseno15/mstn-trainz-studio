@@ -529,6 +529,10 @@ class ParameterPage(QWidget):
         if self._session is None:
             self._canvas.set_image(None)
             self._stats.setText("")
+            host = self.window()
+            bridge = getattr(host, "_assets_bridge", None)
+            if bridge is not None:
+                bridge.sync_form()
             return
         view = view_param_channels(
             self._session.pixels,
@@ -543,6 +547,10 @@ class ParameterPage(QWidget):
         parts = [f"{k} {v[0]}–{v[1]} μ{v[2]:.0f}" for k, v in st.items()]
         dirty = " · dirty" if self._session.dirty else ""
         self._stats.setText(" · ".join(parts) + dirty)
+        host = self.window()
+        bridge = getattr(host, "_assets_bridge", None)
+        if bridge is not None:
+            bridge.sync_form()
 
     def undo(self) -> None:
         if self._session and self._session.undo():

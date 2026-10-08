@@ -37,6 +37,16 @@ _PAGE_TITLES = {
     "kuid": "KUID",
 }
 
+_PAGE_BLURBS = {
+    "packages": "Queue — ลากโฟลเดอร์ asset หรือ .cdp · Pack ≤500 / ≤800 / max 1 GB",
+    "config": "Edit config.chump · pack/export config.txt · VE rules on asset folder.",
+    "texture": "Texture Params · VE37/39/65… · .texture.txt · Resize → _prep/.",
+    "parameter": "Texture Editor · m.pbrmetal R/G/B/A · paint · Save overwrite.",
+    "denoise": "Texture Denoiser · OIDN + OpenCV · preview then Save overwrite.",
+    "meshops": "Mesh Lods · material rules · .lm.txt · .m.pbrmetal / .m.onetex.",
+    "kuid": "Normalize · hex · hash-XX folder (chump buckets).",
+}
+
 # page → list of (label, action_id, accent?)
 _ACTIONS: dict[str, list[tuple[str, str, bool]]] = {
     "packages": [],  # icon footer — see _PACKAGE_FOOTER
@@ -281,6 +291,7 @@ class AssetsSidebar(FrostGlassFrame):
             return
         self._page = page
         self.page_lab.setText(_PAGE_TITLES[page])
+        self._apply_blurb()
         if not animate:
             self._stop_page_anim()
             self._rebuild_actions()
@@ -369,25 +380,9 @@ class AssetsSidebar(FrostGlassFrame):
         self._footer_row.addStretch(1)
 
     def _rebuild_actions(self) -> None:
-        from ..i18n import g, t
+        from ..i18n import t
 
-        blurbs = {
-            "packages": "Queue — ลากโฟลเดอร์ asset หรือ .cdp · Pack ≤500 / ≤800 / max 1 GB",
-            "config": "Edit config.chump · pack/export config.txt · VE rules on asset folder.",
-            "texture": "Texture Params · VE37/39/65… · .texture.txt · Resize → _prep/.",
-            "parameter": "Texture Editor · m.pbrmetal R/G/B/A · paint · Save overwrite.",
-            "denoise": "Texture Denoiser · OIDN + OpenCV · preview then Save overwrite.",
-            "meshops": "Mesh Lods · material rules · .lm.txt · .m.pbrmetal / .m.onetex.",
-            "kuid": "Normalize · hex · hash-XX folder (chump buckets).",
-        }
-        blurb = blurbs.get(self._page, "")
-        self._blurb.setText(t(blurb) if blurb else "")
-        if self._page == "texture":
-            self._blurb.setToolTip(g("rules.tip"))
-        elif self._page == "meshops":
-            self._blurb.setToolTip(g("rules.mesh.tip"))
-        else:
-            self._blurb.setToolTip("")
+        self._apply_blurb()
         self._clear_actions()
         self._action_btns: dict[str, QPushButton] = {}
         self._sync_packages_visibility()
@@ -418,6 +413,18 @@ class AssetsSidebar(FrostGlassFrame):
             self._action_btns[action] = btn
         for action, on in getattr(self, "_action_enabled", {}).items():
             self.set_action_enabled(action, on)
+
+    def _apply_blurb(self) -> None:
+        from ..i18n import g, t
+
+        blurb = _PAGE_BLURBS.get(self._page, "")
+        self._blurb.setText(t(blurb) if blurb else "")
+        if self._page == "texture":
+            self._blurb.setToolTip(g("rules.tip"))
+        elif self._page == "meshops":
+            self._blurb.setToolTip(g("rules.mesh.tip"))
+        else:
+            self._blurb.setToolTip("")
 
     def set_action_enabled(self, action: str, enabled: bool) -> None:
         """Enable/disable a sidebar action button (persists across page rebuilds)."""
