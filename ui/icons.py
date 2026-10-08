@@ -51,6 +51,8 @@ GLYPHS: dict[str, str] = {
     "tune": "\ue429",
     "texture": "\ue421",
     "upload_file": "\ue9fc",
+    "add_photo_alternate": "\ue43e",
+    "history": "\ue889",
 }
 
 _FAMILY = "Material Icons"

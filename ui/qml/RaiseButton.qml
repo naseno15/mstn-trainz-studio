@@ -7,9 +7,40 @@ Item {
     property string label: ""
     property string glyph: ""
     property string fontName: ""
+    property string tip: ""
     property bool accent: false
     property bool lit: false
     signal clicked()
+
+    function topItem() {
+        var item = btn
+        while (item.parent)
+            item = item.parent
+        return item
+    }
+
+    function shortTip(text) {
+        var cut = text.indexOf(" — ")
+        if (cut < 0)
+            cut = text.indexOf(" – ")
+        if (cut < 0)
+            cut = text.indexOf(" - ")
+        return cut < 0 ? text : text.slice(0, cut)
+    }
+
+    function placeTip() {
+        if (tipItem.parent !== topItem())
+            tipItem.parent = topItem()
+        var root = tipItem.parent
+        var above = btn.mapToItem(root, width / 2, 0)
+        var below = btn.mapToItem(root, width / 2, height)
+        var showBelow = above.y < tipItem.height + 10
+        tipItem.caretDown = !showBelow
+        tipItem.x = Math.max(8, Math.min(above.x - tipItem.width / 2, root.width - tipItem.width - 8))
+        tipItem.y = showBelow ? below.y + 6 : above.y - tipItem.height - 4
+        tipItem.caretX = above.x - tipItem.x
+        tipItem.visible = true
+    }
 
     implicitWidth: 88
     implicitHeight: 36
@@ -74,11 +105,82 @@ Item {
         }
     }
 
-    HoverHandler { id: hv }
+    HoverHandler {
+        id: hv
+        onHoveredChanged: {
+            if (hovered && btn.tip.length > 0) {
+                tipWait.restart()
+            } else {
+                tipWait.stop()
+                tipItem.visible = false
+            }
+        }
+    }
+    Timer {
+        id: tipWait
+        interval: 380
+        onTriggered: if (hv.hovered && btn.tip.length > 0) btn.placeTip()
+    }
     Rectangle {
         anchors.fill: face
         radius: 10
         color: hv.hovered ? Qt.rgba(1, 1, 1, 0.10) : "transparent"
     }
     TapHandler { onTapped: if (btn.enabled) btn.clicked() }
+
+    // Reparented onto the page so sidebars and docks cannot clip it.
+    Item {
+        id: tipItem
+        visible: false
+        z: 4000
+        width: tipText.width + 24
+        height: tipText.height + 20
+        property bool caretDown: true
+        property real caretX: width / 2
+
+        Text {
+            id: tipText
+            visible: false
+            width: Math.min(220, implicitWidth)
+            wrapMode: Text.WordWrap
+            text: btn.shortTip(btn.tip)
+            font.pixelSize: 12
+        }
+        Rectangle {
+            id: caret
+            width: 10
+            height: 10
+            rotation: 45
+            x: tipItem.caretX - width / 2
+            y: tipItem.caretDown ? tipItem.height - 12 : 2
+            radius: 1
+            color: bridge.dark ? "#242830" : "#f7f7f9"
+            border.width: 1
+            border.color: bridge.dark ? Qt.rgba(1, 1, 1, 0.28) : Qt.rgba(0, 0, 0, 0.12)
+        }
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: tipItem.caretDown ? parent.top : undefined
+            anchors.bottom: tipItem.caretDown ? undefined : parent.bottom
+            height: parent.height - 8
+            radius: 10
+            border.width: 1
+            border.color: bridge.dark ? Qt.rgba(1, 1, 1, 0.28) : Qt.rgba(0, 0, 0, 0.12)
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: bridge.dark ? "#2c323c" : "#ffffff" }
+                GradientStop { position: 1.0; color: bridge.dark ? "#1a1e26" : "#f0f0f4" }
+            }
+            Text {
+                anchors.fill: parent
+                anchors.margins: 6
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                text: tipText.text
+                color: bridge.dark ? "#f4f6fa" : "#1c1c1e"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
 }
