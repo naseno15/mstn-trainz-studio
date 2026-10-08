@@ -1,6 +1,7 @@
 """Overlay toast bubble + clickable status-bar log — frost chrome like crash_dialog.
 
 Kinds: save · drop · progress · info. Progress toasts update in place with %.
+Compact chip under the floating title bar (or centered when no topbar).
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
     QParallelAnimationGroup,
+    QPoint,
     QPropertyAnimation,
     QRect,
     Qt,
@@ -138,6 +140,40 @@ def _anchor_for(host: QWidget) -> QWidget:
     return cw if cw is not None else host
 
 
+def toast_rest_y(host_h: int, toast_h: int, top_inset: int | None) -> int:
+    """Y for toast rest rect. ``top_inset`` = px under topbar; ``None`` = center."""
+    if top_inset is None:
+        return max(8, (int(host_h) - int(toast_h)) // 2)
+    return max(8, int(top_inset))
+
+
+def _one_line(text: str) -> str:
+    """Collapse whitespace / newlines into a single toast line."""
+    return " ".join(str(text or "").replace("\n", " ").split())
+
+
+def _short_progress_detail(title: str, detail: str) -> str:
+    """Drop redundant status text — title + % bar already carry the message."""
+    sub = _one_line(detail)
+    head = _one_line(title)
+    if not sub or sub == head:
+        return ""
+    if parse_progress_pct(sub) is not None:
+        cleaned = _PCT_RE.sub("", sub).strip(" —·….%\t ")
+        cleaned = _one_line(cleaned)
+        if not cleaned or cleaned == head or cleaned.rstrip("…") == head.rstrip("…"):
+            return ""
+        return cleaned
+    return sub
+
+
+def _toast_lines(title: str, detail: str) -> tuple[str, str]:
+    """At most two lines: title, then one-line desc (empty if redundant)."""
+    head = _one_line(title)
+    sub = _short_progress_detail(head, detail)
+    return head, sub
+
+
 class _StatusLogLabel(QLabel):
     """Left status chip — click opens the full log."""
 
@@ -218,7 +254,7 @@ class StudioStatusBar(QStatusBar):
 
 
 class GlassToastBubble(QWidget):
-    """Center-bottom overlay bubble — slide + fade; optional progress bar."""
+    """Compact overlay chip — hangs under topbar, or centers when none."""
 
     def __init__(
         self,
@@ -245,64 +281,74 @@ class GlassToastBubble(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 10, 12, 14)
+        # Room for soft bloom only — keep the chip itself short + wide.
+        root.setContentsMargins(10, 8, 10, 10)
 
-        card = FrostGlassFrame(radius=18.0)
-        card.setObjectName("sidePanel")
+        card = FrostGlassFrame(radius=10.0)
+        card.setObjectName("toastCard")
         card.set_dark(self._dark)
         self._card = card
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(16, 12, 18, 12)
-        cl.setSpacing(8)
+        cl.setContentsMargins(10, 6, 12, 6)
+        cl.setSpacing(3)
 
         row = QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(8)
         mark_ch, mark_bg, mark_fg = _KIND_MARK[self._kind]
         self._mark = QLabel(mark_ch)
-        self._mark.setFixedSize(34, 34)
+        self._mark.setFixedSize(18, 18)
         self._mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._mark.setObjectName("toastMark")
         self._mark.setStyleSheet(
             f"QLabel#toastMark {{ background: {mark_bg}; color: {mark_fg};"
-            f" border-radius: 10px; font-weight: 800; font-size: 16px; }}"
+            f" border-radius: 6px; font-weight: 700; font-size: 10px; }}"
         )
-        row.addWidget(self._mark)
+        row.addWidget(self._mark, 0, Qt.AlignmentFlag.AlignVCenter)
 
+        # Do NOT use #welcomeTitle — theme sets it to 34px (HOME hero).
         texts = QVBoxLayout()
-        texts.setSpacing(2)
-        self._title = QLabel(title)
-        self._title.setObjectName("welcomeTitle")
-        self._title.setFont(app_font(13, QFont.Weight.Bold))
+        texts.setSpacing(1)
+        head, sub = _toast_lines(title, detail)
+        title_ink = "#f5f5f7" if self._dark else "#1d1d1f"
+        muted_ink = "rgba(235,235,245,0.62)" if self._dark else "rgba(29,29,31,0.58)"
+        self._title = QLabel(head)
+        self._title.setObjectName("toastTitle")
+        self._title.setFont(app_font(12, QFont.Weight.DemiBold))
+        self._title.setStyleSheet(f"QLabel#toastTitle {{ color: {title_ink}; }}")
         texts.addWidget(self._title)
-        self._detail = QLabel(detail.strip())
-        self._detail.setObjectName("mutedTip")
-        self._detail.setWordWrap(True)
-        self._detail.setMaximumWidth(440)
-        self._detail.setFont(app_font(11, QFont.Weight.Medium))
-        self._detail.setVisible(bool(detail.strip()))
+        self._detail = QLabel("")
+        self._detail.setObjectName("toastDetail")
+        self._detail.setWordWrap(False)
+        self._detail.setTextFormat(Qt.TextFormat.PlainText)
+        self._detail.setMinimumWidth(240)
+        self._detail.setMaximumWidth(380)
+        self._detail.setFont(app_font(10, QFont.Weight.Medium))
+        self._detail.setStyleSheet(f"QLabel#toastDetail {{ color: {muted_ink}; }}")
+        self._set_detail(sub)
         texts.addWidget(self._detail)
         row.addLayout(texts, 1)
 
         self._pct_lab = QLabel("")
-        self._pct_lab.setObjectName("mutedTip")
-        self._pct_lab.setFont(app_font(12, QFont.Weight.DemiBold))
+        self._pct_lab.setObjectName("toastPct")
+        self._pct_lab.setFont(app_font(10, QFont.Weight.DemiBold))
         self._pct_lab.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self._pct_lab.setMinimumWidth(44)
-        row.addWidget(self._pct_lab)
+        self._pct_lab.setMinimumWidth(32)
+        self._pct_lab.setStyleSheet(f"QLabel#toastPct {{ color: {muted_ink}; }}")
+        row.addWidget(self._pct_lab, 0, Qt.AlignmentFlag.AlignVCenter)
         cl.addLayout(row)
 
         self._bar = QProgressBar()
         self._bar.setObjectName("toastProgress")
         self._bar.setRange(0, 100)
         self._bar.setTextVisible(False)
-        self._bar.setFixedHeight(6)
+        self._bar.setFixedHeight(2)
         self._bar.setStyleSheet(
             "QProgressBar#toastProgress {"
-            " background: rgba(127,127,127,0.22); border: none; border-radius: 3px; }"
+            " background: rgba(127,127,127,0.22); border: none; border-radius: 1px; }"
             "QProgressBar#toastProgress::chunk {"
-            " background: #64d2ff; border-radius: 3px; }"
+            " background: #64d2ff; border-radius: 1px; }"
         )
         cl.addWidget(self._bar)
         root.addWidget(card)
@@ -319,6 +365,9 @@ class GlassToastBubble(QWidget):
 
         self.adjustSize()
         host.installEventFilter(self)
+        win = host.window()
+        if win is not None and win is not host:
+            win.installEventFilter(self)
         self._play_in()
         if self._ms > 0 and self._kind != "progress":
             self._hold_timer.start(self._ms)
@@ -328,11 +377,11 @@ class GlassToastBubble(QWidget):
         return self._kind
 
     def eventFilter(self, obj, event):  # noqa: N802
-        if obj is self._host and event.type() in (
-            QEvent.Type.Resize,
-            QEvent.Type.Move,
-        ):
-            self._reposition(animate=False)
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Move):
+            if obj is self._host or obj is (
+                self._host.window() if self._host is not None else None
+            ):
+                self._reposition(animate=False)
         return super().eventFilter(obj, event)
 
     def set_content(
@@ -350,14 +399,17 @@ class GlassToastBubble(QWidget):
             self._mark.setText(ch)
             self._mark.setStyleSheet(
                 f"QLabel#toastMark {{ background: {bg}; color: {fg};"
-                f" border-radius: 10px; font-weight: 800; font-size: 16px; }}"
+                f" border-radius: 6px; font-weight: 700; font-size: 10px; }}"
             )
             self.update()
-        if title is not None:
-            self._title.setText(title)
-        if detail is not None:
-            self._detail.setText(detail.strip())
-            self._detail.setVisible(bool(detail.strip()))
+        if title is not None or detail is not None:
+            head = title if title is not None else self._title.text()
+            sub = detail if detail is not None else (
+                self._detail.toolTip() or self._detail.text()
+            )
+            head, sub = _toast_lines(head, sub)
+            self._title.setText(head)
+            self._set_detail(sub)
         if progress is not None:
             self._apply_progress(progress)
         elif kind is not None and kind != "progress":
@@ -371,6 +423,21 @@ class GlassToastBubble(QWidget):
         self.adjustSize()
         self._reposition(animate=False)
 
+    def _set_detail(self, text: str) -> None:
+        """One elided line under the title — keeps the chip wide, not tall."""
+        sub = _one_line(text)
+        self._detail.setToolTip(sub)
+        if not sub:
+            self._detail.clear()
+            self._detail.setVisible(False)
+            return
+        fm = self._detail.fontMetrics()
+        max_w = max(160, int(self._detail.maximumWidth()))
+        self._detail.setText(
+            fm.elidedText(sub, Qt.TextElideMode.ElideRight, max_w)
+        )
+        self._detail.setVisible(True)
+
     def _apply_progress(self, pct: int) -> None:
         pct = max(0, min(100, int(pct)))
         self._bar.show()
@@ -378,28 +445,37 @@ class GlassToastBubble(QWidget):
         self._bar.setValue(pct)
         self._pct_lab.setText(f"{pct}%")
 
-    def _bottom_clearance(self) -> int:
-        """Sit above floating bottom nav / shortcut / bake bar (not on top of them)."""
-        # Status bar is outside the central widget — only clear in-content chrome.
-        gap = 14
+    def _title_bar(self) -> QWidget | None:
         win = self._host.window() if self._host is not None else None
-        extra = 0
-        for name in ("_bake_bar", "_shortcut_bar", "_nav"):
-            bar = getattr(win, name, None) if win is not None else None
-            if bar is not None and bar.isVisible():
-                extra += max(0, int(bar.height())) + 8
-        # Mesh chrome: nav 64 + shortcut ~26 + pads ≈ matches _reposition_viewer_chrome
-        if extra > 0:
-            return extra + gap
-        return 20
+        bar = getattr(win, "_title_bar", None) if win is not None else None
+        if bar is None:
+            return None
+        try:
+            if not bar.isVisible():
+                return None
+        except RuntimeError:
+            return None
+        return bar
+
+    def _top_inset(self) -> int | None:
+        """Px from host top to hang under the floating title bar; None = center."""
+        bar = self._title_bar()
+        if bar is None:
+            return None
+        try:
+            bottom = bar.mapToGlobal(QPoint(0, bar.height()))
+            y = self._host.mapFromGlobal(bottom).y()
+        except RuntimeError:
+            return None
+        # Small gap under the capsule so the chip reads as hanging from it.
+        return max(8, int(y) + 6)
 
     def _rest_rect(self) -> QRect:
         host = self._host
-        margin = self._bottom_clearance()
         self.adjustSize()
         w, h = self.width(), self.height()
         x = max(8, (host.width() - w) // 2)
-        y = max(8, host.height() - h - margin)
+        y = toast_rest_y(host.height(), h, self._top_inset())
         return QRect(x, y, w, h)
 
     def _reposition(self, *, animate: bool) -> None:
@@ -411,19 +487,20 @@ class GlassToastBubble(QWidget):
 
     def _play_in(self) -> None:
         rest = self._rest_rect()
-        start = QRect(rest.x(), rest.y() + 28, rest.width(), rest.height())
+        # Slide down from the topbar (or from above center when no bar).
+        start = QRect(rest.x(), rest.y() - 18, rest.width(), rest.height())
         self.setGeometry(start)
         self.show()
         self.raise_()
         self._eff.setOpacity(0.0)
         group = QParallelAnimationGroup(self)
         geo = QPropertyAnimation(self, b"geometry", self)
-        geo.setDuration(320)
+        geo.setDuration(280)
         geo.setStartValue(start)
         geo.setEndValue(rest)
         geo.setEasingCurve(QEasingCurve.Type.OutCubic)
         op = QPropertyAnimation(self._eff, b"opacity", self)
-        op.setDuration(280)
+        op.setDuration(240)
         op.setStartValue(0.0)
         op.setEndValue(1.0)
         op.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -437,15 +514,15 @@ class GlassToastBubble(QWidget):
         self._dismissing = True
         self._hold_timer.stop()
         rest = self.geometry()
-        end = QRect(rest.x(), rest.y() + 22, rest.width(), rest.height())
+        end = QRect(rest.x(), rest.y() - 14, rest.width(), rest.height())
         group = QParallelAnimationGroup(self)
         geo = QPropertyAnimation(self, b"geometry", self)
-        geo.setDuration(220)
+        geo.setDuration(200)
         geo.setStartValue(rest)
         geo.setEndValue(end)
         geo.setEasingCurve(QEasingCurve.Type.InCubic)
         op = QPropertyAnimation(self._eff, b"opacity", self)
-        op.setDuration(200)
+        op.setDuration(180)
         op.setStartValue(float(self._eff.opacity()))
         op.setEndValue(0.0)
         op.setEasingCurve(QEasingCurve.Type.InCubic)
@@ -461,6 +538,12 @@ class GlassToastBubble(QWidget):
                 host.removeEventFilter(self)
             except Exception:
                 pass
+            win = host.window()
+            if win is not None and win is not host:
+                try:
+                    win.removeEventFilter(self)
+                except Exception:
+                    pass
         self.hide()
         self.deleteLater()
 
@@ -472,11 +555,11 @@ class GlassToastBubble(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         bloom_c = _KIND_BLOOM.get(self._kind, _KIND_BLOOM["info"])
         cr = self._card.geometry()
-        bloom = cr.adjusted(-20, -14, 20, 22)
-        glow = QRadialGradient(bloom.center(), max(bloom.width(), 1) * 0.55)
-        a0 = 40 if self._dark else 28
+        bloom = cr.adjusted(-8, -6, 8, 8)
+        glow = QRadialGradient(bloom.center(), max(bloom.width(), 1) * 0.5)
+        a0 = 22 if self._dark else 16
         glow.setColorAt(0.0, QColor(bloom_c.red(), bloom_c.green(), bloom_c.blue(), a0))
-        glow.setColorAt(0.55, QColor(bloom_c.red(), bloom_c.green(), bloom_c.blue(), 10))
+        glow.setColorAt(0.55, QColor(bloom_c.red(), bloom_c.green(), bloom_c.blue(), 6))
         glow.setColorAt(1.0, QColor(bloom_c.red(), bloom_c.green(), bloom_c.blue(), 0))
         p.fillRect(bloom, glow)
 
@@ -557,7 +640,7 @@ class ToastHost:
             return
         self._last_prog_ms = now
         self._last_prog_pct = pct
-        sub = detail.strip() or title
+        sub = _short_progress_detail(title, detail)
         self.notify("progress", title, sub, ms=0, progress=pct)
         if pct >= 100:
             self.finish(detail or title)
@@ -580,7 +663,9 @@ class ToastHost:
 
         def _done() -> None:
             self._finishing = False
-            self.notify("save", _t("Done"), sub, ms=_DONE_MS)
+            # Strip trailing % / collapse — "Done" + one desc line only.
+            desc = _short_progress_detail(_t("Done"), sub)
+            self.notify("save", _t("Done"), desc, ms=_DONE_MS)
 
         QTimer.singleShot(180, _done)
 

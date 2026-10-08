@@ -9,13 +9,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QEvent, QObject, QRect, QRectF
+from PySide6.QtCore import (
+    Qt,
+    QThread,
+    Signal,
+    QTimer,
+    QPoint,
+    QPointF,
+    QEvent,
+    QObject,
+    QRect,
+    QRectF,
+    QEasingCurve,
+    QVariantAnimation,
+)
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QColor,
     QCursor,
     QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
     QDropEvent,
     QFont,
     QFontMetrics,
@@ -28,6 +43,7 @@ from PySide6.QtGui import (
     QPixmap,
     QRadialGradient,
     QRegion,
+    QTransform,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -108,17 +124,14 @@ from .code_edit import apply_code_edit_theme
 from .frost import (
     FROST_CONTENT_MARGINS,
     FrostGlassFrame,
+    glass_is_dark,
     make_frost_pixmap,
     paint_glass_chip,
     prepare_frost_scroll,
     set_glass_dark,
 )
-from .home import build_home_page
+from .qml_host import build_qml_home, make_title_bar
 from .motion import (
-    HUB_DIR_DOWN,
-    HUB_DIR_LEFT,
-    HUB_DIR_RIGHT,
-    HUB_DIR_UP,
     HubRevealOverlay,
     animate_geometry,
     animate_max_height,
@@ -138,7 +151,6 @@ from .theme import apply_theme, app_font, palette, qpalette_for
 from .title_chrome import (
     EDGE_GRIP,
     TITLE_CONTENT_INSET,
-    FloatTitleBar,
     begin_frameless_move,
     edge_at,
     install_frameless,
@@ -448,7 +460,8 @@ class LoadWorker(QThread):
                 for part in scene.parts:
                     part.mesh_key = key
                 for att in scene.attachments:
-                    if multi:
+                    att.mesh_key = key
+                    if multi and "/" not in (att.name or ""):
                         att.name = f"{path.stem}/{att.name}"
                 parts.extend(scene.parts)
                 attachments.extend(scene.attachments)
@@ -566,10 +579,15 @@ class AccentPill(QWidget):
 
 
 class ModePie(QWidget):
-    """Blender-style hold-Tab pie — aim, release (or click) to pick a mode key."""
+    """Blender-style hold-Tab pie — glassmorphism wheel with bubble open/close."""
 
     mode_picked = Signal(str)
     dismissed = Signal()  # click/Esc path when parent wants to commit/cancel
+
+    _R_OUTER = 124.0
+    _R_INNER = 40.0
+    _OPEN_MS = 340
+    _CLOSE_MS = 220
 
     def __init__(
         self,
@@ -592,36 +610,132 @@ class ModePie(QWidget):
         self._default_hover = self._hover
         self._cx = 0.0
         self._cy = 0.0
+        self._reveal = 0.0  # paint-time open amount (never opacity on MainWindow/GL)
+        self._closing = False
+        self._bubble_t = 0.0
+        self._bubbles: list[tuple[float, float, float, float, float]] = []
+        self._anim: QVariantAnimation | None = None
+        self._tick = QTimer(self)
+        self._tick.setInterval(16)
+        self._tick.timeout.connect(self._on_bubble_tick)
         self.hide()
 
     def popup_at(self, global_pos: QPoint) -> None:
         host = self.parentWidget()
         if host is None:
             return
+        self._stop_anim()
+        self._closing = False
         self.setGeometry(host.rect())
         local = self.mapFromGlobal(global_pos)
         self._cx = float(local.x())
         self._cy = float(local.y())
         self._hover = self._sector_at(local)
+        self._seed_bubbles()
+        self._bubble_t = 0.0
+        self._reveal = 0.0
         self.show()
         self.raise_()
         self.grabMouse()
         self.setFocus(Qt.FocusReason.PopupFocusReason)
-        self.update()
+        self._tick.start()
+        self._animate_reveal(1.0, ms=self._OPEN_MS, easing=QEasingCurve.Type.OutBack)
 
     def commit(self) -> str | None:
-        if not self.isVisible():
+        if not self.isVisible() and not self._closing:
             return None
-        self.releaseMouse()
-        self.hide()
+        try:
+            self.releaseMouse()
+        except RuntimeError:
+            pass
+        picked = None
         if 0 <= self._hover < len(self._modes):
-            return str(self._modes[self._hover][1])
-        return None
+            picked = str(self._modes[self._hover][1])
+        self._begin_close()
+        return picked
 
     def cancel(self) -> None:
-        if self.isVisible():
+        if not self.isVisible() and not self._closing:
+            return
+        try:
             self.releaseMouse()
-            self.hide()
+        except RuntimeError:
+            pass
+        self._begin_close()
+
+    def _begin_close(self) -> None:
+        if self._closing and self._anim is not None:
+            return
+        self._closing = True
+        if self._reveal <= 0.02:
+            self._finish_close()
+            return
+        self._animate_reveal(
+            0.0,
+            ms=self._CLOSE_MS,
+            easing=QEasingCurve.Type.InCubic,
+            on_done=self._finish_close,
+        )
+
+    def _finish_close(self) -> None:
+        self._stop_anim()
+        self._tick.stop()
+        self._closing = False
+        self._reveal = 0.0
+        self.hide()
+
+    def _stop_anim(self) -> None:
+        anim = self._anim
+        self._anim = None
+        if anim is not None:
+            anim.stop()
+
+    def _animate_reveal(
+        self,
+        target: float,
+        *,
+        ms: int,
+        easing: QEasingCurve.Type,
+        on_done=None,
+    ) -> None:
+        self._stop_anim()
+        anim = QVariantAnimation(self)
+        anim.setStartValue(float(self._reveal))
+        anim.setEndValue(float(target))
+        anim.setDuration(max(1, int(ms)))
+        anim.setEasingCurve(easing)
+        anim.valueChanged.connect(self._on_reveal)
+        if on_done is not None:
+            anim.finished.connect(on_done)
+        self._anim = anim
+        anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _on_reveal(self, value: object) -> None:
+        # Allow OutBack overshoot (>1) so the wheel can pop past full size.
+        self._reveal = max(0.0, float(value))
+        self.update()
+
+    def _on_bubble_tick(self) -> None:
+        if not self.isVisible():
+            self._tick.stop()
+            return
+        self._bubble_t += 0.016
+        self.update()
+
+    def _seed_bubbles(self) -> None:
+        import math
+
+        # (base_ang, orbit_r, size, phase, drift)
+        n = 14
+        out: list[tuple[float, float, float, float, float]] = []
+        for i in range(n):
+            ang = (i / n) * math.tau + (0.35 if i % 2 else 0.0)
+            orbit = self._R_OUTER + 18.0 + (i % 4) * 14.0
+            size = 4.0 + (i % 5) * 2.2
+            phase = i * 0.73
+            drift = 0.55 + (i % 3) * 0.22
+            out.append((ang, orbit, size, phase, drift))
+        self._bubbles = out
 
     def _sector_at(self, pos: QPoint) -> int:
         import math
@@ -640,6 +754,9 @@ class ModePie(QWidget):
         return int(ang / (2 * math.pi / n)) % n
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._closing:
+            event.accept()
+            return
         idx = self._sector_at(event.position().toPoint())
         if idx != self._hover:
             self._hover = idx
@@ -649,52 +766,223 @@ class ModePie(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         # Sticky / click-to-confirm — parent commits via dismissed
         if event.button() == Qt.MouseButton.LeftButton:
-            self._hover = self._sector_at(event.position().toPoint())
-            self.dismissed.emit()
+            if not self._closing:
+                self._hover = self._sector_at(event.position().toPoint())
+                self.dismissed.emit()
             event.accept()
             return
         super().mousePressEvent(event)
+
+    @staticmethod
+    def _donut_sector(
+        cx: float, cy: float, r_out: float, r_in: float, start_deg: float, span_deg: float
+    ) -> QPainterPath:
+        """Clockwise pie slice as a glass plate (Qt: 0°=east, CCW positive)."""
+        import math
+
+        path = QPainterPath()
+        # Convert "start + negative span" pie convention → arcTo CCW extents.
+        a0 = float(start_deg)
+        a1 = float(start_deg) + float(span_deg)  # span is negative (CW)
+        lo, hi = (a1, a0) if a1 < a0 else (a0, a1)
+        rect_o = QRectF(cx - r_out, cy - r_out, r_out * 2, r_out * 2)
+        rect_i = QRectF(cx - r_in, cy - r_in, r_in * 2, r_in * 2)
+        rad = math.radians(lo)
+        path.moveTo(QPointF(cx + r_out * math.cos(rad), cy - r_out * math.sin(rad)))
+        path.arcTo(rect_o, lo, hi - lo)
+        path.arcTo(rect_i, hi, lo - hi)
+        path.closeSubpath()
+        return path
 
     def paintEvent(self, event) -> None:  # noqa: N802
         del event
         import math
 
+        reveal = float(self._reveal)
+        if reveal <= 0.001:
+            return
+        dark = glass_is_dark(self)
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        p.fillRect(self.rect(), QColor(0, 0, 0, 110))
-        r_outer, r_inner = 118.0, 36.0
-        pie = QRectF(
-            self._cx - r_outer, self._cy - r_outer, r_outer * 2, r_outer * 2
-        )
+
+        # Soft radial veil — fades with reveal (no QGraphicsOpacityEffect on GL hosts).
+        veil_a = int((130 if dark else 72) * reveal)
+        veil = QRadialGradient(QPointF(self._cx, self._cy), max(self.width(), self.height()) * 0.72)
+        if dark:
+            veil.setColorAt(0.0, QColor(8, 12, 18, int(veil_a * 0.35)))
+            veil.setColorAt(0.45, QColor(6, 8, 12, veil_a))
+            veil.setColorAt(1.0, QColor(0, 0, 0, int(veil_a * 1.15)))
+        else:
+            veil.setColorAt(0.0, QColor(255, 255, 255, int(veil_a * 0.2)))
+            veil.setColorAt(0.5, QColor(210, 218, 228, veil_a))
+            veil.setColorAt(1.0, QColor(160, 170, 184, int(veil_a * 1.1)))
+        p.fillRect(self.rect(), veil)
+
+        # OutBack can overshoot >1 — scale pops past full; alpha stays capped.
+        alpha = min(1.0, reveal)
+        if self._closing:
+            scale = 0.55 + 0.45 * reveal
+        else:
+            scale = 0.72 + 0.28 * min(1.15, reveal)
+
+        p.save()
+        xform = QTransform()
+        xform.translate(self._cx, self._cy)
+        xform.scale(scale, scale)
+        xform.translate(-self._cx, -self._cy)
+        p.setTransform(xform, combine=True)
+
+        r_outer, r_inner = self._R_OUTER, self._R_INNER
         n = max(1, len(self._modes))
         sector = 360.0 / n
+        gap = min(5.0, sector * 0.08)
+
+        # Outer glass halo ring
+        halo = QRadialGradient(QPointF(self._cx, self._cy), r_outer + 28.0)
+        if dark:
+            halo.setColorAt(0.55, QColor(255, 255, 255, 0))
+            halo.setColorAt(0.78, QColor(255, 255, 255, int(28 * alpha)))
+            halo.setColorAt(0.92, QColor(255, 140, 80, int(40 * alpha)))
+            halo.setColorAt(1.0, QColor(255, 90, 31, 0))
+        else:
+            halo.setColorAt(0.55, QColor(255, 255, 255, 0))
+            halo.setColorAt(0.80, QColor(255, 255, 255, int(90 * alpha)))
+            halo.setColorAt(0.93, QColor(255, 140, 90, int(50 * alpha)))
+            halo.setColorAt(1.0, QColor(255, 90, 31, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(halo)
+        p.drawEllipse(QPointF(self._cx, self._cy), r_outer + 28.0, r_outer + 28.0)
+
+        # Floating glass bubbles (orbit + bob)
+        t = self._bubble_t
+        for base_ang, orbit, size, phase, drift in self._bubbles:
+            ang = base_ang + t * 0.35 * drift
+            bob = math.sin(t * 1.7 + phase) * 6.0
+            br = orbit + bob + math.cos(t * 1.1 + phase) * 4.0
+            bx = self._cx + math.cos(ang) * br
+            by = self._cy + math.sin(ang) * br
+            pulse = 0.85 + 0.15 * math.sin(t * 2.4 + phase)
+            rs = size * pulse
+            bg = QRadialGradient(QPointF(bx - rs * 0.25, by - rs * 0.3), rs * 1.35)
+            if dark:
+                bg.setColorAt(0.0, QColor(255, 255, 255, int(110 * alpha)))
+                bg.setColorAt(0.45, QColor(255, 200, 160, int(55 * alpha)))
+                bg.setColorAt(1.0, QColor(255, 90, 31, 0))
+            else:
+                bg.setColorAt(0.0, QColor(255, 255, 255, int(200 * alpha)))
+                bg.setColorAt(0.5, QColor(255, 180, 140, int(70 * alpha)))
+                bg.setColorAt(1.0, QColor(255, 120, 70, 0))
+            p.setBrush(bg)
+            p.drawEllipse(QPointF(bx, by), rs, rs)
+
         for i, (label, _key) in enumerate(self._modes):
-            # Qt angles: 1/16°, 0=east, CCW. Sector 0 = up.
-            start = int((90 - i * sector + sector / 2) * 16)
-            span = int(-sector * 16)
+            # Qt angles: 0=east CCW. Sector 0 = up; draw CW with negative span.
+            start = 90.0 - i * sector + sector / 2.0 - gap / 2.0
+            span = -(sector - gap)
             hot = i == self._hover
-            p.setBrush(QColor(255, 90, 31, 210) if hot else QColor(40, 46, 54, 220))
-            p.setPen(QPen(QColor(255, 255, 255, 40), 1.0))
-            p.drawPie(pie, start, span)
+            r_o = r_outer + (6.0 if hot else 0.0)
+            r_i = r_inner + 2.0
+            wedge = self._donut_sector(self._cx, self._cy, r_o, r_i, start, span)
+
+            fill = QLinearGradient(
+                QPointF(self._cx, self._cy - r_o),
+                QPointF(self._cx, self._cy + r_o),
+            )
+            if hot:
+                if dark:
+                    fill.setColorAt(0.0, QColor(255, 210, 180, int(90 * alpha)))
+                    fill.setColorAt(0.35, QColor(255, 120, 70, int(120 * alpha)))
+                    fill.setColorAt(1.0, QColor(200, 70, 30, int(140 * alpha)))
+                    rim = QColor(255, 230, 200, int(160 * alpha))
+                else:
+                    fill.setColorAt(0.0, QColor(255, 255, 255, int(210 * alpha)))
+                    fill.setColorAt(0.4, QColor(255, 180, 140, int(160 * alpha)))
+                    fill.setColorAt(1.0, QColor(255, 120, 70, int(150 * alpha)))
+                    rim = QColor(255, 255, 255, int(200 * alpha))
+            elif dark:
+                fill.setColorAt(0.0, QColor(255, 255, 255, int(48 * alpha)))
+                fill.setColorAt(0.4, QColor(48, 56, 68, int(130 * alpha)))
+                fill.setColorAt(1.0, QColor(22, 28, 36, int(155 * alpha)))
+                rim = QColor(255, 255, 255, int(70 * alpha))
+            else:
+                fill.setColorAt(0.0, QColor(255, 255, 255, int(200 * alpha)))
+                fill.setColorAt(0.45, QColor(236, 242, 248, int(175 * alpha)))
+                fill.setColorAt(1.0, QColor(210, 220, 232, int(190 * alpha)))
+                rim = QColor(255, 255, 255, int(180 * alpha))
+            p.fillPath(wedge, fill)
+
+            # Specular sheen on the wedge
+            sheen = QRadialGradient(
+                QPointF(self._cx - r_o * 0.15, self._cy - r_o * 0.35),
+                r_o * 0.95,
+            )
+            sheen.setColorAt(0.0, QColor(255, 255, 255, int((70 if hot else 40) * alpha)))
+            sheen.setColorAt(0.55, QColor(255, 255, 255, 0))
+            p.fillPath(wedge, sheen)
+            p.setPen(QPen(rim, 1.15 if hot else 1.0))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(wedge)
+
             mid_deg = -90.0 + i * sector
             mid = math.radians(mid_deg)
-            tx = self._cx + math.cos(mid) * (r_outer * 0.62)
-            ty = self._cy + math.sin(mid) * (r_outer * 0.62)
-            p.setPen(QColor("#ffffff") if hot else QColor("#c8ccd0"))
+            label_r = (r_outer + r_inner) * 0.52
+            tx = self._cx + math.cos(mid) * label_r
+            ty = self._cy + math.sin(mid) * label_r
+            if hot:
+                p.setPen(QColor(255, 255, 255, int(255 * alpha)))
+            elif dark:
+                p.setPen(QColor(210, 216, 224, int(230 * alpha)))
+            else:
+                p.setPen(QColor(40, 48, 58, int(230 * alpha)))
             font = p.font()
             font.setBold(hot)
-            font.setPointSize(11)
+            font.setPointSize(11 if hot else 10)
             p.setFont(font)
-            p.drawText(QRectF(tx - 48, ty - 12, 96, 24), Qt.AlignmentFlag.AlignCenter, label)
-        p.setBrush(QColor(22, 26, 32, 240))
-        p.setPen(QPen(QColor(255, 90, 31, 180), 2.0))
-        p.drawEllipse(QPoint(int(self._cx), int(self._cy)), int(r_inner), int(r_inner))
-        p.setPen(QColor("#ff5a1f"))
+            p.drawText(
+                QRectF(tx - 52, ty - 12, 104, 24),
+                Qt.AlignmentFlag.AlignCenter,
+                label,
+            )
+
+        # Center hub — frosted glass disc
+        hub = QRectF(
+            self._cx - r_inner, self._cy - r_inner, r_inner * 2, r_inner * 2
+        )
+        hub_path = QPainterPath()
+        hub_path.addEllipse(hub)
+        hub_fill = QRadialGradient(QPointF(self._cx, self._cy - r_inner * 0.25), r_inner * 1.15)
+        if dark:
+            hub_fill.setColorAt(0.0, QColor(255, 255, 255, int(70 * alpha)))
+            hub_fill.setColorAt(0.45, QColor(40, 48, 58, int(175 * alpha)))
+            hub_fill.setColorAt(1.0, QColor(16, 20, 28, int(200 * alpha)))
+            hub_rim = QColor(255, 170, 120, int(170 * alpha))
+        else:
+            hub_fill.setColorAt(0.0, QColor(255, 255, 255, int(230 * alpha)))
+            hub_fill.setColorAt(0.55, QColor(240, 244, 250, int(210 * alpha)))
+            hub_fill.setColorAt(1.0, QColor(210, 220, 232, int(220 * alpha)))
+            hub_rim = QColor(255, 120, 70, int(160 * alpha))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(hub_fill)
+        p.drawPath(hub_path)
+        p.setPen(QPen(hub_rim, 1.6))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(hub_path)
+        # Inner specular arc
+        p.setPen(QPen(QColor(255, 255, 255, int((90 if dark else 140) * alpha)), 1.2))
+        p.drawArc(hub.adjusted(5, 4, -5, -8), 30 * 16, 120 * 16)
+
+        title_pen = QColor(255, 140, 80, int(255 * alpha)) if dark else QColor(200, 70, 30, int(255 * alpha))
+        p.setPen(title_pen)
+        font = p.font()
+        font.setBold(True)
+        font.setPointSize(10)
+        p.setFont(font)
         p.drawText(
-            QRectF(self._cx - 40, self._cy - 10, 80, 20),
+            QRectF(self._cx - 44, self._cy - 10, 88, 20),
             Qt.AlignmentFlag.AlignCenter,
             self._title,
         )
+        p.restore()
 
 
 class ShadingPie(ModePie):
@@ -717,6 +1005,12 @@ class EditModePie(ModePie):
         self.setObjectName("editModePie")
 
 
+# paint_glass_chip reserves top=5 / bot=12 for shadow — HUD must clear that air.
+PBR_HUD_H = 56  # matches BakeProgressBar; plate ≈ 39px for Lit…AO labels
+PBR_HUD_BTN_H = 34
+PBR_HUD_MIN_W = 420  # six labels; 320 crushed Albedo/Normal
+
+
 class SegmentedControl(QFrame):
     """Exclusive Lit | Albedo | … pills — click or press-drag scrub, commit on release."""
 
@@ -730,16 +1024,24 @@ class SegmentedControl(QFrame):
         modes: tuple[tuple[str, int], ...] | None = None,
     ) -> None:
         super().__init__(parent)
-        if compact:
+        self._compact = bool(compact)
+        if self._compact:
             self.setObjectName("pbrHud")
-        self._pill = AccentPill(self, radius=11.0 if compact else 12.0)
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            self.setFixedHeight(PBR_HUD_H)
+        self._pill = AccentPill(self, radius=12.0)
         self._pill.lower()
         self._drag = False
         self._mode = 0
         self._committed = 0
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(2)
+        if self._compact:
+            # Align labels inside glass plate (side 8 / top 5 / bot 12).
+            lay.setContentsMargins(14, 8, 14, 14)
+            lay.setSpacing(4)
+        else:
+            lay.setContentsMargins(4, 4, 4, 4)
+            lay.setSpacing(2)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons: list[QPushButton] = []
@@ -751,18 +1053,20 @@ class SegmentedControl(QFrame):
             btn.setObjectName("segBtn")
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             if mid == 0:
                 btn.setChecked(True)
                 self._mode = mid
                 self._committed = mid
-            if compact:
-                btn.setFixedHeight(30)  # #segBtn 4px pad + 12px glyphs + descenders
+            if self._compact:
+                btn.setFixedHeight(PBR_HUD_BTN_H)
+                btn.setMinimumWidth(58)
             self._group.addButton(btn, mid)
             btn.installEventFilter(self)
             lay.addWidget(btn)
             self._buttons.append(btn)
             self._modes.append(mid)
-        attach_hover_bubble(self, self._buttons, radius=11.0 if compact else 12.0, pad=1)
+        attach_hover_bubble(self, self._buttons, radius=12.0, pad=1)
         # scrub handles commit — idClicked would fire mid-drag
         QTimer.singleShot(0, self._sync_pill)
 
@@ -1719,8 +2023,82 @@ class BakeWorker(QThread):
 SIDE_TABLE_ROWS = 10
 _SIDE_ROW_FALLBACK = 34  # matches theme item min-height + padding
 
-# Scene "Meshes in scene" — same column language as Assets Mesh Ops (LOD|Width|Mesh file)
-_MESH_COL_SHOW, _MESH_COL_FACES, _MESH_COL_NAME = 0, 1, 2
+# Scene "Meshes in scene" — Show mesh · Atts gizmos · Mesh file
+_MESH_COL_SHOW, _MESH_COL_ATTS, _MESH_COL_NAME = 0, 1, 2
+_ATT_ROLE_INDEX = int(Qt.ItemDataRole.UserRole) + 1
+
+
+class _SceneMeshDropTable(QTableWidget):
+    """Meshes-in-scene table — drop .fbx/.im/.trainzmesh to append into the preview."""
+
+    meshes_dropped = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(0, 3, parent)
+        self._drag_over = False
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+
+    def _mesh_paths(self, event: QDragEnterEvent | QDragMoveEvent | QDropEvent) -> list[Path]:
+        md = event.mimeData()
+        if md is None or not md.hasUrls():
+            return []
+        out: list[Path] = []
+        for url in md.urls():
+            if not url.isLocalFile():
+                continue
+            p = Path(url.toLocalFile())
+            if p.is_file() and p.suffix.lower() in MESH_EXTS:
+                out.append(p)
+        return out
+
+    def _set_drag_over(self, active: bool) -> None:
+        if self._drag_over == active:
+            return
+        self._drag_over = active
+        self.viewport().update()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._mesh_paths(event):
+            event.acceptProposedAction()
+            self._set_drag_over(True)
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if self._mesh_paths(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._set_drag_over(False)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._set_drag_over(False)
+        paths = self._mesh_paths(event)
+        if paths:
+            self.meshes_dropped.emit(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001
+        super().paintEvent(event)
+        if not self._drag_over:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#ff5a1f"))
+        pen.setWidthF(2.0)
+        pen.setStyle(Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern([6.0, 5.0])
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(self.viewport().rect().adjusted(3, 3, -3, -3), 10, 10)
+
 
 # Re-export: Mesh side tables share Studio-wide damped scroll.
 from .smooth_scroll import DampedScrollFilter as _DampedScrollFilter  # noqa: E402
@@ -1792,6 +2170,8 @@ class MainWindow(QMainWindow):
         self._mesh_path: Path | None = None
         self._mesh_paths: list[Path] = []
         self._hidden_mesh_keys: set[str] = set()
+        self._hidden_att_mesh_keys: set[str] = set()
+        self._att_tab_mesh_key: str | None = None  # Scene att list filter (None = all)
         self._mesh_hl: tuple[str, frozenset[str]] | None = None
         self._suppress_mesh_hl = 0
         self.view = None
@@ -1889,12 +2269,12 @@ class MainWindow(QMainWindow):
 
     def _build_widgets(self) -> None:
         self.att_list = QListWidget()
-        self.mesh_list = QTableWidget(0, 3)
+        self.mesh_list = _SceneMeshDropTable()
         self.mesh_list.setObjectName("studioTable")
-        self.mesh_list.setHorizontalHeaderLabels(["Show", "Faces", "Mesh file"])
+        self.mesh_list.setHorizontalHeaderLabels(["Show", "Atts", "Mesh file"])
         self.mesh_list.horizontalHeader().setStretchLastSection(True)
         self.mesh_list.setColumnWidth(_MESH_COL_SHOW, 48)
-        self.mesh_list.setColumnWidth(_MESH_COL_FACES, 72)
+        self.mesh_list.setColumnWidth(_MESH_COL_ATTS, 48)
         self.mesh_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.mesh_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.mesh_list.verticalHeader().setVisible(False)
@@ -1902,10 +2282,18 @@ class MainWindow(QMainWindow):
         enable_smooth_table(self.mesh_list)
         _enable_side_table_scroll(self.mesh_list)
         self.mesh_list.setToolTip(
-            "Loaded meshes — tick Show to draw (multi-select ok). "
-            "Drop/Open adds more; Clear empties the preview."
+            "Show = draw mesh · Atts = a.* gizmos · drop here to add more."
         )
         self._hidden_mesh_keys: set[str] = set()
+        self._hidden_att_mesh_keys: set[str] = set()
+        self._att_tab_host = QWidget()
+        self._att_tab_host.setObjectName("attMeshTabHost")
+        self._att_tab_lay = QVBoxLayout(self._att_tab_host)
+        self._att_tab_lay.setContentsMargins(0, 0, 0, 0)
+        self._att_tab_lay.setSpacing(0)
+        self._att_strip: SideTabStrip | None = None
+        self._att_tab_keys: list[str] = []
+        self._att_tab_host.hide()
         _enable_side_table_scroll(self.att_list)
         # Scene-tab material list (Editor ↔ left link); not the multi-file mesh_list
         self.scene_mesh_list = QListWidget()
@@ -1936,9 +2324,26 @@ class MainWindow(QMainWindow):
             "Blender-style: blue = front face, red = back face (triangle winding). "
             "Trainz culls / shades by facing — red outside usually means flipped normals."
         )
-        self._mesh_remove_btn = QPushButton("Remove selected mesh")
-        self._mesh_clear_btn = QPushButton("Clear meshes")
-        self._mesh_clear_btn.setToolTip("Unload every mesh so you can open a fresh preview")
+        from .icons import apply_icon
+
+        self._mesh_remove_btn = QPushButton()
+        apply_icon(
+            self._mesh_remove_btn,
+            "delete",
+            tip="Remove selected",
+            kind="icon",
+            size=20,
+            square=36,
+        )
+        self._mesh_clear_btn = QPushButton()
+        apply_icon(
+            self._mesh_clear_btn,
+            "clear",
+            tip="Clear meshes",
+            kind="icon",
+            size=20,
+            square=36,
+        )
         self.tex_tree = QTreeWidget()
         self.tex_tree.setObjectName("matTable")
         self.tex_tree.setColumnCount(3)
@@ -2117,7 +2522,7 @@ class MainWindow(QMainWindow):
         home_logo = QLabel()
         home_logo.setPixmap(_logo_pixmap(180, mode=self._theme_mode))
         self._home_logo = home_logo
-        self._home_page = build_home_page(
+        self._home_page = build_qml_home(
             logo=home_logo,
             on_mesh=self.enter_mesh_studio,
             on_sounds=self.enter_sounds_studio,
@@ -2435,39 +2840,96 @@ class MainWindow(QMainWindow):
             self._boot_batch = False
 
     def warmup_hub_studios(self, *, on_stage=None) -> None:
-        """Precache Mesh / Sounds / Engine / Assets under the boot frost.
-
-        ponytail: build once at boot so HOME card clicks only swap the stack —
-        no first-click hitch from EditorWorkspace / Sounds / Engine imports.
-        Mesh GL is prewarmed before first show (see prewarm_mesh_gl).
-        Finder GL still warms idle after overlay hide.
-        """
+        """Warm Mesh, then Sounds and Engine Tuner, before the boot cover drops."""
         self._boot_batch = True
         try:
             if on_stage is not None:
-                on_stage("Warming Mesh Studio…", 40)
+                on_stage("Warming Mesh Studio…", 55)
             warm_logo_cache()
             self.ensure_studio_chrome()
             # MeshView should already exist from prewarm_mesh_gl; keep as safety net
             # when boot is invoked without the hidden prewarm path.
             if self.view is None:
                 self._ensure_gl()
-            if on_stage is not None:
-                on_stage("Warming Sounds Studio…", 60)
-            self._ensure_sounds_host()
-            if on_stage is not None:
-                on_stage("Warming Engine Tuner…", 78)
-            self._ensure_engine_host()
-            if on_stage is not None:
-                on_stage("Warming Assets Tools…", 92)
-            self._ensure_assets_host()
         finally:
             self._boot_batch = False
         from .i18n import snapshot_and_apply
 
         snapshot_and_apply(self)
-        # Assets Finder GL after HOME is interactive — studios themselves are warm.
-        QTimer.singleShot(0, self._idle_warm_assets_preview)
+        # First real frame too. A hidden widget is not cached; the first click
+        # was still the cold paint, and the old idle timer froze HOME after entry.
+        self._boot_batch = True
+        try:
+            self._ensure_sounds_host()
+            self._expose_hub_page(HUB_SOUNDS)
+            self._ensure_engine_host()
+            self._expose_hub_page(HUB_ENGINE)
+        finally:
+            self._boot_batch = False
+            self._hub.setCurrentIndex(HUB_HOME)
+            self._stack.setCurrentIndex(STACK_HUB)
+            overlay = getattr(self, "_overlay", None)
+            if overlay is not None:
+                overlay.raise_()
+            self._raise_overlay_chrome()
+
+    def _expose_hub_page(self, index: int) -> None:
+        """Paint one frame while the boot cover is still up. Do not leave this page visible."""
+        from PySide6.QtWidgets import QApplication
+
+        from .qml_host import warm_quick
+
+        self._stack.setCurrentIndex(STACK_HUB)
+        self._hub.setCurrentIndex(index)
+        host = self._hub.currentWidget()
+        if host is not None and self._hub.width() > 64 and self._hub.height() > 64:
+            host.resize(self._hub.size())
+        QApplication.sendPostedEvents()
+        view = None
+        if host is not None:
+            view = getattr(host, "_engine_view", None) or getattr(host, "_view", None)
+        if view is not None:
+            warm_quick(view)
+        QApplication.processEvents()
+        self._hub.setCurrentIndex(HUB_HOME)
+        overlay = getattr(self, "_overlay", None)
+        if overlay is not None and overlay.isVisible():
+            overlay.raise_()
+            self._raise_overlay_chrome()
+
+    def _idle_warm_secondary_hubs(self) -> None:
+        """Build Sounds, then Engine, then Assets after the boot cover is gone."""
+        if getattr(self, "_secondary_hubs_warming", False):
+            return
+        if self.hubs_are_warm():
+            QTimer.singleShot(0, self._idle_warm_assets_preview)
+            return
+        self._secondary_hubs_warming = True
+
+        steps: list = []
+        if not self._sounds_ready:
+            steps.append(self._ensure_sounds_host)
+        if not self._engine_ready:
+            steps.append(self._ensure_engine_host)
+        if not self._assets_ready:
+            steps.append(self._ensure_assets_host)
+
+        def _next(i: int = 0) -> None:
+            if i >= len(steps):
+                self._secondary_hubs_warming = False
+                from .i18n import snapshot_and_apply
+
+                snapshot_and_apply(self)
+                QTimer.singleShot(0, self._idle_warm_assets_preview)
+                return
+            self._boot_batch = True
+            try:
+                steps[i]()
+            finally:
+                self._boot_batch = False
+            QTimer.singleShot(400, lambda: _next(i + 1))
+
+        _next(0)
 
     def hubs_are_warm(self) -> bool:
         return bool(
@@ -2496,8 +2958,9 @@ class MainWindow(QMainWindow):
         mesh_btns = QHBoxLayout()
         mesh_btns.setContentsMargins(0, 0, 0, 0)
         mesh_btns.setSpacing(6)
-        mesh_btns.addWidget(self._mesh_remove_btn, 1)
-        mesh_btns.addWidget(self._mesh_clear_btn, 1)
+        mesh_btns.addStretch(1)
+        mesh_btns.addWidget(self._mesh_remove_btn)
+        mesh_btns.addWidget(self._mesh_clear_btn)
         mlay.addLayout(mesh_btns)
         lay.addWidget(self._mesh_list_block)
         self._mesh_list_block.hide()
@@ -2595,14 +3058,7 @@ class MainWindow(QMainWindow):
         self._stat_labels["mesh"].setText(f"{n_verts:,} / {n_faces:,}")
         self._stat_labels["parts"].setText(str(len(parts)))
         if mesh_key:
-            # attachments tagged with mesh stem prefix when multi
-            stem = Path(mesh_key).stem
-            n_att = sum(
-                1
-                for a in sc.attachments
-                if a.name.startswith(f"{stem}/") or "/" not in a.name
-            )
-            # single-mesh scene: all atts belong to it
+            n_att = sum(1 for a in sc.attachments if self._att_owned_by(a, mesh_key))
             if len(self._mesh_paths) <= 1:
                 n_att = len(sc.attachments)
             self._stat_labels["atts"].setText(str(n_att))
@@ -2694,9 +3150,13 @@ class MainWindow(QMainWindow):
             )
 
     def _on_mesh_table_item_changed(self, item: QTableWidgetItem) -> None:
-        if item is None or item.column() != _MESH_COL_SHOW:
+        if item is None:
             return
-        self._sync_mesh_visibility_from_table()
+        col = item.column()
+        if col == _MESH_COL_SHOW:
+            self._sync_mesh_visibility_from_table()
+        elif col == _MESH_COL_ATTS:
+            self._sync_att_visibility_from_table()
 
     def _sync_mesh_visibility_from_table(self) -> None:
         hidden: set[str] = set()
@@ -2713,9 +3173,39 @@ class MainWindow(QMainWindow):
         self._hidden_mesh_keys = hidden
         self._push_mesh_visibility()
 
+    def _sync_att_visibility_from_table(self) -> None:
+        hidden: set[str] = set()
+        for r in range(self.mesh_list.rowCount()):
+            atts_it = self.mesh_list.item(r, _MESH_COL_ATTS)
+            name_it = self.mesh_list.item(r, _MESH_COL_NAME)
+            if atts_it is None or name_it is None:
+                continue
+            key = str(name_it.data(Qt.ItemDataRole.UserRole) or name_it.text() or "")
+            if not key:
+                continue
+            if atts_it.checkState() != Qt.CheckState.Checked:
+                hidden.add(key)
+        self._hidden_att_mesh_keys = hidden
+        self._push_att_visibility()
+
     def _push_mesh_visibility(self) -> None:
         if self.view is not None:
             self.view.set_hidden_mesh_keys(self._hidden_mesh_keys)
+
+    def _effective_hidden_att_keys(self) -> set[str]:
+        """Checkbox hides + every mesh except the open attachment tab."""
+        hidden = set(self._hidden_att_mesh_keys)
+        keys = getattr(self, "_att_tab_keys", []) or []
+        active = getattr(self, "_att_tab_mesh_key", None)
+        if len(keys) > 1 and active:
+            for key in keys:
+                if key != active:
+                    hidden.add(key)
+        return hidden
+
+    def _push_att_visibility(self) -> None:
+        if self.view is not None:
+            self.view.set_hidden_att_mesh_keys(self._effective_hidden_att_keys())
 
     def _build_sidebar(self) -> FrostGlassFrame:
         side = FrostGlassFrame(radius=SIDE_PANEL_RADIUS)
@@ -2847,6 +3337,7 @@ class MainWindow(QMainWindow):
         )
         att_lay.addWidget(self._scene_list_title)
         att_lay.addWidget(self._scene_cap_tip)
+        att_lay.addWidget(self._att_tab_host)
         att_lay.addWidget(self.att_list)
         att_lay.addWidget(self.scene_mesh_list)
         att_lay.addWidget(self._mesh_ds_bar)
@@ -3229,32 +3720,8 @@ class MainWindow(QMainWindow):
         except Exception:
             return QPixmap()
 
-    def _hub_transition_dir(self, *, leaving_home: bool, dest: str) -> str:
-        """Directional wipe — Mesh← Sounds↑ Engine→ Assets↓ TexMesh↘ (reverse home)."""
-        if leaving_home:
-            return {
-                "mesh": HUB_DIR_LEFT,
-                "sounds": HUB_DIR_UP,
-                "engine": HUB_DIR_RIGHT,
-                "assets": HUB_DIR_DOWN,
-                "texmesh": HUB_DIR_DOWN,
-            }.get(dest, HUB_DIR_LEFT)
-        return {
-            "mesh": HUB_DIR_RIGHT,
-            "sounds": HUB_DIR_DOWN,
-            "engine": HUB_DIR_LEFT,
-            "assets": HUB_DIR_UP,
-            "texmesh": HUB_DIR_UP,
-        }.get(dest, HUB_DIR_RIGHT)
-
-    def _play_hub_transition(
-        self,
-        from_pm: QPixmap,
-        *,
-        direction: str,
-        label: str,
-    ) -> None:
-        """Reveal next hub page under a sliding snapshot (safe over GL)."""
+    def _play_hub_transition(self, from_pm: QPixmap) -> None:
+        """Fade the previous hub page away (safe over GL — sibling cover only)."""
         if from_pm.isNull():
             return
         ov = getattr(self, "_hub_reveal", None)
@@ -3273,16 +3740,7 @@ class MainWindow(QMainWindow):
         ms = hub_reveal_ms(warm=self.hubs_are_warm())
         if ms <= 0:
             return
-        pal = palette(self._theme_mode)
-        ov.play(
-            from_pm,
-            direction=direction,
-            label=label,
-            accent=QColor(pal.accent),
-            ink=QColor(pal.ink),
-            dark=self._theme_mode != "light",
-            ms=ms,
-        )
+        ov.play(from_pm, ms=ms)
 
     def go_home(self) -> None:
         """Return to MSTN Trainz Studio HOME (keep mesh scene in memory)."""
@@ -3292,7 +3750,6 @@ class MainWindow(QMainWindow):
             if leaving in ("mesh", "sounds", "engine", "assets", "texmesh")
             else QPixmap()
         )
-        direction = self._hub_transition_dir(leaving_home=False, dest=leaving)
         self._studio_mode = "home"
         if self._chrome_ready:
             self._set_editor_dock(False, animated=False)
@@ -3308,7 +3765,7 @@ class MainWindow(QMainWindow):
         )
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if not snap.isNull():
-            self._play_hub_transition(snap, direction=direction, label="Home")
+            self._play_hub_transition(snap)
 
     def enter_mesh_studio(self) -> None:
         """Return to Mesh mode — restore last GL scene when still in memory."""
@@ -3347,11 +3804,7 @@ class MainWindow(QMainWindow):
         )
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if leaving_home and not snap.isNull():
-            self._play_hub_transition(
-                snap,
-                direction=self._hub_transition_dir(leaving_home=True, dest="mesh"),
-                label="Mesh Studio",
-            )
+            self._play_hub_transition(snap)
 
     def enter_sounds_studio(self, paths: list[Path] | None = None) -> None:
         leaving_home = self._studio_mode == "home"
@@ -3374,11 +3827,7 @@ class MainWindow(QMainWindow):
         self._status.showMessage("Sounds Studio")
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if leaving_home and not snap.isNull():
-            self._play_hub_transition(
-                snap,
-                direction=self._hub_transition_dir(leaving_home=True, dest="sounds"),
-                label="Sounds Studio",
-            )
+            self._play_hub_transition(snap)
 
     def enter_engine_tuner(self) -> None:
         leaving_home = self._studio_mode == "home"
@@ -3396,11 +3845,7 @@ class MainWindow(QMainWindow):
         self._status.showMessage("Engine Tuner")
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if leaving_home and not snap.isNull():
-            self._play_hub_transition(
-                snap,
-                direction=self._hub_transition_dir(leaving_home=True, dest="engine"),
-                label="Engine Tuner",
-            )
+            self._play_hub_transition(snap)
 
     def _on_packages_enginespec_open(self, kuid: str, text: str, label: str) -> None:
         """Packages → Engine Tuner CDP session; Save writes back and returns."""
@@ -3483,11 +3928,7 @@ class MainWindow(QMainWindow):
         self._status.showMessage("Assets Tools")
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if leaving_home and not snap.isNull():
-            self._play_hub_transition(
-                snap,
-                direction=self._hub_transition_dir(leaving_home=True, dest="assets"),
-                label="Assets Tools",
-            )
+            self._play_hub_transition(snap)
 
     def enter_texmesh_studio(self) -> None:
         """Texture & Mesh Lods tools — maps + LM / materials (same host, texmesh suite)."""
@@ -3507,11 +3948,7 @@ class MainWindow(QMainWindow):
         self._status.showMessage("Texture & Mesh Lods tools")
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if leaving_home and not snap.isNull():
-            self._play_hub_transition(
-                snap,
-                direction=self._hub_transition_dir(leaving_home=True, dest="texmesh"),
-                label="Texture & Mesh Lods tools",
-            )
+            self._play_hub_transition(snap)
 
     def _status_from_sounds(self, msg: str) -> None:
         sb = getattr(self, "_status", None)
@@ -3656,6 +4093,7 @@ class MainWindow(QMainWindow):
         self._bake_bar.cancel_requested.connect(self._cancel_lamp_bake)
         self._mesh_remove_btn.clicked.connect(self._remove_selected_meshes)
         self._mesh_clear_btn.clicked.connect(self._clear_meshes)
+        self.mesh_list.meshes_dropped.connect(self._on_mesh_list_drop)
 
     # ── theme / pages / PBR ──────────────────────────────────
 
@@ -3718,6 +4156,12 @@ class MainWindow(QMainWindow):
         chip = getattr(view, "fps_chip", None) if view is not None else None
         if chip is not None:
             set_glass_dark(chip, dark)
+        for pie in (
+            getattr(self, "_shading_pie", None),
+            getattr(self, "_edit_pie", None),
+        ):
+            if pie is not None:
+                set_glass_dark(pie, dark)
 
     def _push_hub_theme_palettes(self) -> None:
         """Cheap palette push — avoids allWidgets polish; fixes sticky hub plates."""
@@ -3748,6 +4192,9 @@ class MainWindow(QMainWindow):
         self._retint_frost_panels()
         if hasattr(self, "_home_page"):
             self._home_page.set_theme(self._theme_mode)
+        bar = getattr(self, "_title_bar", None)
+        if bar is not None and hasattr(bar, "set_theme"):
+            bar.set_theme(self._theme_mode)
 
     def _deferred_frost_after_theme(self) -> None:
         """Re-grab frost plates after style polish settles — never sync in _apply_theme_mode."""
@@ -4334,6 +4781,8 @@ class MainWindow(QMainWindow):
         target = self._side_panel_rect(open_=open_)
 
         def _done() -> None:
+            if isinstance(side, FrostGlassFrame):
+                side.end_motion_lod()
             side.setGeometry(target)
             side.setVisible(open_)
             if open_:
@@ -4348,6 +4797,8 @@ class MainWindow(QMainWindow):
             side.show()
             side.raise_()
             if animated:
+                if isinstance(side, FrostGlassFrame):
+                    side.begin_motion_lod()
                 animate_geometry(
                     side,
                     target,
@@ -4359,6 +4810,8 @@ class MainWindow(QMainWindow):
                 _done()
             return
         if animated and side.isVisible():
+            if isinstance(side, FrostGlassFrame):
+                side.begin_motion_lod()
             animate_geometry(
                 side,
                 target,
@@ -4439,6 +4892,9 @@ class MainWindow(QMainWindow):
         # Skip GL readback while orbiting — keep previous plate (or solid tint).
         if view is not None and getattr(view, "_cam_busy", False):
             return
+        # Mid-slide lod already holds a baked plate — don't grabFramebuffer.
+        if panel.in_motion_lod():
+            return
         pm = self._frost_pixmap_for_host_rect(host_rect)
         if pm is None:
             return  # keep existing frost; don't thrash to empty
@@ -4507,12 +4963,16 @@ class MainWindow(QMainWindow):
             self._chrome_layer.raise_()
 
             def _opened() -> None:
+                if isinstance(ed, FrostGlassFrame):
+                    ed.end_motion_lod()
                 ed.setGeometry(target)
                 ed.raise_()
                 self._chrome_layer.raise_()
                 _chrome()
 
             if animated:
+                if isinstance(ed, FrostGlassFrame):
+                    ed.begin_motion_lod()
                 animate_geometry(
                     ed, target, EDITOR_DOCK_MS, on_tick=_chrome, on_done=_opened
                 )
@@ -4521,10 +4981,14 @@ class MainWindow(QMainWindow):
             return
 
         def _closed() -> None:
+            if isinstance(ed, FrostGlassFrame):
+                ed.end_motion_lod()
             ed.hide()
             _chrome()
 
         if animated and ed.isVisible():
+            if isinstance(ed, FrostGlassFrame):
+                ed.begin_motion_lod()
             animate_geometry(
                 ed, target, EDITOR_DOCK_MS, on_tick=_chrome, on_done=_closed
             )
@@ -4779,6 +5243,9 @@ class MainWindow(QMainWindow):
         self._scene_list_mode = mode if mode in ("atts", "meshes") else "atts"
         show_meshes = self._scene_list_mode == "meshes"
         self.att_list.setVisible(not show_meshes)
+        host = getattr(self, "_att_tab_host", None)
+        if host is not None:
+            host.setVisible(not show_meshes and len(getattr(self, "_att_tab_keys", [])) > 1)
         self.scene_mesh_list.setVisible(show_meshes)
         bar = getattr(self, "_mesh_ds_bar", None)
         if bar is not None:
@@ -5132,7 +5599,11 @@ class MainWindow(QMainWindow):
             mesh_paths=[str(p) for p in self._mesh_paths],
             studio_page=page,
             editor_tab=tab,
-            sel_att=self.att_list.currentRow() if hasattr(self, "att_list") else -1,
+            sel_att=(
+                self._scene_att_global_index()
+                if hasattr(self, "att_list")
+                else -1
+            ),
             sel_mesh=(
                 self.scene_mesh_list.currentRow()
                 if hasattr(self, "scene_mesh_list")
@@ -5303,7 +5774,9 @@ class MainWindow(QMainWindow):
         else:
             self.editor.show_attachments_tab()
         if state.sel_att >= 0:
-            self.att_list.setCurrentRow(state.sel_att)
+            self._select_scene_att(state.sel_att)
+            if 0 <= state.sel_att < self._ed_att_list.count():
+                self._ed_att_list.setCurrentRow(state.sel_att)
         if state.sel_mesh >= 0 and hasattr(self, "scene_mesh_list"):
             self.scene_mesh_list.setCurrentRow(state.sel_mesh)
         if state.studio_page and state.studio_page != "home":
@@ -5569,11 +6042,13 @@ class MainWindow(QMainWindow):
         self._att_y.blockSignals(False)
         self._att_z.blockSignals(False)
         self._att_name.blockSignals(False)
-        # sync left Scene attachment label
-        item = self.att_list.item(index)
-        if item is not None:
-            item.setText(name)
-            item.setData(Qt.ItemDataRole.UserRole, self._scene.attachments[index])
+        # sync left Scene attachment label (list may be filtered by mesh tab)
+        for r in range(self.att_list.count()):
+            item = self.att_list.item(r)
+            if item is not None and item.data(_ATT_ROLE_INDEX) == index:
+                item.setText(name)
+                item.setData(Qt.ItemDataRole.UserRole, self._scene.attachments[index])
+                break
         self._status.showMessage(f"{name}  Z-up {pos_z} · quat {quat_z}")
 
     def _sync_editor_texture_list(self, *, select: Path | None = None) -> None:
@@ -5650,8 +6125,8 @@ class MainWindow(QMainWindow):
     def _reposition_pbr_hud(self) -> None:
         host = self.pbr_hud.parentWidget() or self._viewer_pane
         self.pbr_hud.adjustSize()
-        w = max(self.pbr_hud.sizeHint().width(), 320)
-        self.pbr_hud.setFixedWidth(w)
+        w = max(self.pbr_hud.sizeHint().width(), PBR_HUD_MIN_W)
+        self.pbr_hud.setFixedSize(w, PBR_HUD_H)
         x = (host.width() - w) // 2
         # Chrome layer already starts under TITLE_CONTENT_INSET — only a small gap.
         y = 4
@@ -6476,7 +6951,7 @@ class MainWindow(QMainWindow):
 
     def _install_title_bar(self) -> None:
         """Floating glass menu bar + macOS traffic lights (frameless chrome)."""
-        bar = FloatTitleBar(self, mode=self._theme_mode)
+        bar = make_title_bar(self, mode=self._theme_mode)
         bar.close_clicked.connect(self.close)
         bar.minimize_clicked.connect(self.showMinimized)
         bar.zoom_clicked.connect(self._toggle_max_restore)
@@ -6537,6 +7012,9 @@ class MainWindow(QMainWindow):
             home = getattr(self, "_home_page", None)
             if home is not None and hasattr(home, "retranslate"):
                 home.retranslate()
+            sounds = getattr(self, "_sounds_host", None)
+            if sounds is not None and hasattr(sounds, "retranslate"):
+                sounds.retranslate()
             for host in (
                 getattr(self, "_sounds_host", None),
                 getattr(self, "_engine_host", None),
@@ -7561,13 +8039,16 @@ class MainWindow(QMainWindow):
             self._mesh_paths = list(path_list)
             self._lamps = []
             self._hidden_mesh_keys.clear()
+            self._hidden_att_mesh_keys.clear()
+            self._att_tab_mesh_key = None
             self._two_sided_pending = {}
         else:
             for p in path_list:
                 if all(x.resolve() != p.resolve() for x in self._mesh_paths):
                     self._mesh_paths.append(p)
-                # freshly added mesh starts visible
+                # freshly added mesh starts visible (geometry + a.* gizmos)
                 self._hidden_mesh_keys.discard(p.name)
+                self._hidden_att_mesh_keys.discard(p.name)
 
         self._scene = scene
         self._mesh_path = self._mesh_paths[-1] if self._mesh_paths else None
@@ -7698,13 +8179,19 @@ class MainWindow(QMainWindow):
             )
             show_it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             show_it.setToolTip("Draw this mesh in the viewport")
-            faces_it = QTableWidgetItem(f"{faces:,}")
-            faces_it.setFlags(
-                Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+            atts_it = QTableWidgetItem("")
+            atts_it.setFlags(
+                Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
             )
-            faces_it.setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            atts_it.setCheckState(
+                Qt.CheckState.Unchecked
+                if p.name in self._hidden_att_mesh_keys
+                else Qt.CheckState.Checked
             )
+            atts_it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            atts_it.setToolTip("Show a.* attachment gizmos for this mesh")
             name_it = QTableWidgetItem(p.name)
             name_it.setData(Qt.ItemDataRole.UserRole, p.name)
             name_it.setFlags(
@@ -7714,7 +8201,7 @@ class MainWindow(QMainWindow):
                 f"{p}\n{verts:,} verts · {faces:,} faces · {len(parts)} parts"
             )
             self.mesh_list.setItem(r, _MESH_COL_SHOW, show_it)
-            self.mesh_list.setItem(r, _MESH_COL_FACES, faces_it)
+            self.mesh_list.setItem(r, _MESH_COL_ATTS, atts_it)
             self.mesh_list.setItem(r, _MESH_COL_NAME, name_it)
         self.mesh_list.blockSignals(False)
         n = self.mesh_list.rowCount()
@@ -7728,6 +8215,17 @@ class MainWindow(QMainWindow):
         else:
             self._fill_mesh_detail(None)
         self._push_mesh_visibility()
+        self._push_att_visibility()
+
+    def _on_mesh_list_drop(self, paths: object) -> None:
+        """Append meshes dropped onto the Mesh Info table (never replace)."""
+        if not isinstance(paths, (list, tuple)) or not paths:
+            return
+        mesh_paths = [Path(p) for p in paths if Path(p).suffix.lower() in MESH_EXTS]
+        if not mesh_paths:
+            return
+        self._studio_mode = "mesh"
+        self.open_paths(mesh_paths, mode="append")
 
     def _remove_selected_meshes(self) -> None:
         keys: set[str] = set()
@@ -7743,14 +8241,14 @@ class MainWindow(QMainWindow):
         self._mesh_paths = [p for p in self._mesh_paths if p.name not in keys]
         self._scene.parts = [p for p in self._scene.parts if (p.mesh_key or "") not in keys]
         # drop attachments prefixed with removed mesh stems
-        stems = {Path(k).stem for k in keys}
         self._scene.attachments = [
             a
             for a in self._scene.attachments
-            if not any(a.name.startswith(f"{s}/") for s in stems)
+            if not any(self._att_owned_by(a, k) for k in keys)
         ]
         self._lamps = [L for L in self._lamps if L.mesh_key not in keys]
         self._hidden_mesh_keys -= keys
+        self._hidden_att_mesh_keys -= keys
         self._mesh_path = self._mesh_paths[-1] if self._mesh_paths else None
         self._mesh_folder = self._mesh_path.parent if self._mesh_path else None
         if len(self._mesh_paths) <= 1 and self._scene.parts:
@@ -7766,6 +8264,7 @@ class MainWindow(QMainWindow):
         if self.view is not None:
             self.view.set_scene(self._scene)
             self._push_mesh_visibility()
+            self._push_att_visibility()
             self._push_lamps_to_view()
         if not self._mesh_paths:
             self.setWindowTitle("MSTN Mesh Studio")
@@ -7782,6 +8281,8 @@ class MainWindow(QMainWindow):
         self._mesh_path = None
         self._mesh_folder = None
         self._hidden_mesh_keys.clear()
+        self._hidden_att_mesh_keys.clear()
+        self._att_tab_mesh_key = None
         self._scene = Scene()
         self._lamps = []
         self._tzmf_bytes = None
@@ -7804,6 +8305,7 @@ class MainWindow(QMainWindow):
         if self.view is not None:
             self.view.set_scene(self._scene)
             self._push_mesh_visibility()
+            self._push_att_visibility()
             self._push_lamps_to_view()
         self.setWindowTitle("MSTN Mesh Studio")
         self._status.showMessage("Meshes cleared — Open or drop a new mesh")
@@ -7818,24 +8320,171 @@ class MainWindow(QMainWindow):
         doc.open(path)
         self._im_doc = doc
 
-    def _refill_att_list(self, scene: Scene) -> None:
+    def _stamp_att_mesh_keys(self, scene: Scene) -> None:
+        """Bind each a.* to a mesh file. Append used to leave the first file untagged."""
+        keys = [p.name for p in self._mesh_paths]
+        if not keys and scene.parts:
+            keys = sorted({p.mesh_key for p in scene.parts if p.mesh_key})
+        stems = {Path(k).stem: k for k in keys}
+        for att in scene.attachments:
+            if getattr(att, "mesh_key", ""):
+                continue
+            name = att.name or ""
+            if "/" in name:
+                att.mesh_key = stems.get(name.split("/", 1)[0], "")
+            elif len(keys) == 1:
+                att.mesh_key = keys[0]
+        tagged = {getattr(a, "mesh_key", "") for a in scene.attachments}
+        missing = [k for k in keys if k not in tagged]
+        bare = [a for a in scene.attachments if not getattr(a, "mesh_key", "")]
+        if len(missing) == 1:
+            for att in bare:
+                att.mesh_key = missing[0]
+
+    def _att_owned_by(self, att, mesh_key: str) -> bool:
+        owned = str(getattr(att, "mesh_key", "") or "")
+        if owned:
+            return owned == mesh_key
+        stem = Path(mesh_key).stem
+        name = getattr(att, "name", "") or ""
+        return bool(stem) and name.startswith(f"{stem}/")
+
+    def _att_row_label(self, att) -> str:
+        name = getattr(att, "name", "") or ""
+        stem = Path(str(getattr(att, "mesh_key", "") or "")).stem
+        prefix = f"{stem}/"
+        if stem and name.startswith(prefix):
+            return name[len(prefix):]
+        return name
+
+    def _mesh_keys_with_attachments(self, scene: Scene | None = None) -> list[str]:
+        """Mesh file names that own at least one a.* (order follows _mesh_paths)."""
+        sc = scene if scene is not None else self._scene
+        self._stamp_att_mesh_keys(sc)
+        keys = [p.name for p in self._mesh_paths]
+        if not keys and sc.parts:
+            keys = sorted({p.mesh_key for p in sc.parts if p.mesh_key})
+        return [mk for mk in keys if any(self._att_owned_by(a, mk) for a in sc.attachments)]
+
+    def _att_tab_label(self, mesh_key: str, keys: list[str]) -> str:
+        stem = Path(mesh_key).stem or mesh_key
+        if sum(1 for k in keys if Path(k).stem == stem) > 1:
+            return mesh_key
+        return stem
+
+    def _rebuild_att_mesh_tabs(self, scene: Scene) -> None:
+        host = getattr(self, "_att_tab_host", None)
+        lay = getattr(self, "_att_tab_lay", None)
+        if host is None or lay is None:
+            return
+        keys = self._mesh_keys_with_attachments(scene)
+        self._att_tab_keys = keys
+        show = len(keys) > 1 and getattr(self, "_scene_list_mode", "atts") != "meshes"
+        labels = [self._att_tab_label(k, keys) for k in keys]
+        strip = self._att_strip
+        same = (
+            strip is not None
+            and [b.text() for b in strip._buttons] == labels
+        )
+        if not same:
+            if strip is not None:
+                lay.removeWidget(strip)
+                strip.deleteLater()
+                self._att_strip = None
+            if len(keys) > 1:
+                from .motion import attach_glass_tip
+
+                strip = SideTabStrip(tuple(labels), host)
+                for i, mk in enumerate(keys):
+                    attach_glass_tip(strip._buttons[i], mk, highlight=True)
+                strip.index_changed.connect(self._on_att_strip_changed)
+                lay.addWidget(strip)
+                self._att_strip = strip
+                if self._att_tab_mesh_key not in keys:
+                    self._att_tab_mesh_key = keys[0]
+                strip.set_index(keys.index(self._att_tab_mesh_key), animate=False, emit=False)
+            else:
+                self._att_tab_mesh_key = keys[0] if keys else None
+        elif keys:
+            if self._att_tab_mesh_key not in keys:
+                self._att_tab_mesh_key = keys[0]
+                if strip is not None:
+                    strip.set_index(0, animate=False, emit=False)
+        else:
+            self._att_tab_mesh_key = None
+        host.setVisible(show)
+
+    def _on_att_strip_changed(self, index: int) -> None:
+        keys = getattr(self, "_att_tab_keys", [])
+        if index < 0 or index >= len(keys):
+            return
+        self._att_tab_mesh_key = keys[index]
+        self._fill_scene_att_list(self._scene)
+        self._push_att_visibility()
+
+    def _fill_scene_att_list(self, scene: Scene) -> None:
+        """Scene list shows only the open mesh tab (one mesh = every a.*)."""
+        keys = getattr(self, "_att_tab_keys", [])
+        filt = self._att_tab_mesh_key if len(keys) > 1 else None
         self.att_list.blockSignals(True)
         self.att_list.clear()
+        for i, att in enumerate(scene.attachments):
+            if filt and not self._att_owned_by(att, filt):
+                continue
+            item = QListWidgetItem(self._att_row_label(att))
+            item.setData(Qt.ItemDataRole.UserRole, att)
+            item.setData(_ATT_ROLE_INDEX, i)
+            self.att_list.addItem(item)
+        self.att_list.blockSignals(False)
+        _refit_side_table(self.att_list)
+
+    def _refill_att_list(self, scene: Scene) -> None:
+        self._rebuild_att_mesh_tabs(scene)
+        self._fill_scene_att_list(scene)
         self._ed_att_list.blockSignals(True)
         self._ed_att_list.clear()
-        for i, a in enumerate(scene.attachments):
-            item = QListWidgetItem(a.name)
-            item.setData(Qt.ItemDataRole.UserRole, a)
-            item.setData(Qt.ItemDataRole.UserRole + 1, i)
-            self.att_list.addItem(item)
-            ed_item = QListWidgetItem(a.name)
-            ed_item.setData(Qt.ItemDataRole.UserRole, a)
-            ed_item.setData(Qt.ItemDataRole.UserRole + 1, i)
+        for i, att in enumerate(scene.attachments):
+            ed_item = QListWidgetItem(att.name)
+            ed_item.setData(Qt.ItemDataRole.UserRole, att)
+            ed_item.setData(_ATT_ROLE_INDEX, i)
             self._ed_att_list.addItem(ed_item)
-        self.att_list.blockSignals(False)
         self._ed_att_list.blockSignals(False)
-        _refit_side_table(self.att_list)
         _refit_side_table(self._ed_att_list)
+        self._push_att_visibility()
+
+    def _scene_att_global_index(self, item: QListWidgetItem | None = None) -> int:
+        it = item if item is not None else self.att_list.currentItem()
+        if it is None:
+            return -1
+        raw = it.data(_ATT_ROLE_INDEX)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return -1
+
+    def _select_scene_att(self, global_index: int) -> None:
+        """Switch mesh tab if needed, then select the row that maps to global_index."""
+        if global_index < 0 or global_index >= len(self._scene.attachments):
+            return
+        a = self._scene.attachments[global_index]
+        keys = getattr(self, "_att_tab_keys", []) or self._mesh_keys_with_attachments(self._scene)
+        strip = getattr(self, "_att_strip", None)
+        owner = str(getattr(a, "mesh_key", "") or "")
+        if strip is not None and len(keys) > 1 and owner in keys:
+            idx = keys.index(owner)
+            if strip.current_index() != idx:
+                strip.set_index(idx, animate=False, emit=False)
+                self._att_tab_mesh_key = owner
+                self._fill_scene_att_list(self._scene)
+                self._push_att_visibility()
+        for r in range(self.att_list.count()):
+            it = self.att_list.item(r)
+            if it is not None and it.data(_ATT_ROLE_INDEX) == global_index:
+                if self.att_list.currentRow() != r:
+                    self.att_list.blockSignals(True)
+                    self.att_list.setCurrentRow(r)
+                    self.att_list.blockSignals(False)
+                break
 
     def _update_scene_cap_tip(self) -> None:
         kind = self._scene.kind
@@ -7872,7 +8521,7 @@ class MainWindow(QMainWindow):
             return
         from ..io.scene import Attachment as SceneAtt
 
-        sel = self.att_list.currentRow()
+        sel = self._scene_att_global_index()
         ed_sel = self._ed_att_list.currentRow()
         keep = ed_sel if ed_sel >= 0 else sel
         self._scene.attachments = [
@@ -7880,8 +8529,8 @@ class MainWindow(QMainWindow):
             for a in self._im_doc.atts
         ]
         self._refill_att_list(self._scene)
-        if 0 <= keep < self.att_list.count():
-            self.att_list.setCurrentRow(keep)
+        if 0 <= keep < len(self._scene.attachments):
+            self._select_scene_att(keep)
             self._ed_att_list.setCurrentRow(keep)
         if self.view is not None:
             # in-place — avoid set_scene camera/filter reset
@@ -7927,10 +8576,7 @@ class MainWindow(QMainWindow):
             return
         a = self._scene.attachments[index]
         # sync Scene list without triggering a fly-to (already looking at it)
-        if self.att_list.currentRow() != index:
-            self.att_list.blockSignals(True)
-            self.att_list.setCurrentRow(index)
-            self.att_list.blockSignals(False)
+        self._select_scene_att(index)
         if self._ed_att_list.currentRow() != index:
             self._ed_att_list.blockSignals(True)
             self._ed_att_list.setCurrentRow(index)
@@ -7965,11 +8611,10 @@ class MainWindow(QMainWindow):
         """Re-apply selection after Preview↔Editor so drag only arms on Editor."""
         if self.view is None:
             return
-        row = -1
         if self._in_editor_page():
             row = self._ed_att_list.currentRow()
         else:
-            row = self.att_list.currentRow()
+            row = self._scene_att_global_index()
         self._set_view_edit_attachment(row)
 
     def _on_att_select(self, cur: QListWidgetItem | None, _prev) -> None:
@@ -7980,7 +8625,9 @@ class MainWindow(QMainWindow):
         a = cur.data(Qt.ItemDataRole.UserRole)
         if a is None:
             return
-        row = self.att_list.currentRow()
+        row = self._scene_att_global_index(cur)
+        if row < 0:
+            return
         if self._ed_att_list.currentRow() != row:
             self._ed_att_list.blockSignals(True)
             self._ed_att_list.setCurrentRow(row)
@@ -8000,10 +8647,7 @@ class MainWindow(QMainWindow):
                 self.view.set_selected_attachment(None)
             return
         a = self._scene.attachments[row]
-        if self.att_list.currentRow() != row:
-            self.att_list.blockSignals(True)
-            self.att_list.setCurrentRow(row)
-            self.att_list.blockSignals(False)
+        self._select_scene_att(row)
         if self._ed_att_list.currentRow() != row:
             self._ed_att_list.blockSignals(True)
             self._ed_att_list.setCurrentRow(row)
@@ -8016,11 +8660,15 @@ class MainWindow(QMainWindow):
         """Live spinbox sync while dragging a.* in the 3D view."""
         if 0 <= index < len(self._scene.attachments):
             self._scene.attachments[index].pos = (x, y, z)
-            # keep list UserRole in sync
-            for lst in (self.att_list, self._ed_att_list):
-                item = lst.item(index)
-                if item is not None:
+            # keep list UserRole in sync (Scene list may be filtered by mesh tab)
+            for r in range(self.att_list.count()):
+                item = self.att_list.item(r)
+                if item is not None and item.data(_ATT_ROLE_INDEX) == index:
                     item.setData(Qt.ItemDataRole.UserRole, self._scene.attachments[index])
+                    break
+            ed_item = self._ed_att_list.item(index)
+            if ed_item is not None:
+                ed_item.setData(Qt.ItemDataRole.UserRole, self._scene.attachments[index])
         self._att_x.blockSignals(True)
         self._att_y.blockSignals(True)
         self._att_z.blockSignals(True)
@@ -8100,7 +8748,7 @@ class MainWindow(QMainWindow):
             return
         row = self._ed_att_list.currentRow()
         if row < 0:
-            row = self.att_list.currentRow()
+            row = self._scene_att_global_index()
         if row < 0 or row >= len(self._im_doc.atts):
             self._status.showMessage("Select an attachment first")
             return
@@ -8118,7 +8766,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Apply", str(e))
             return
         self._sync_scene_atts_from_im()
-        self.att_list.setCurrentRow(row)
+        self._select_scene_att(row)
         self._ed_att_list.setCurrentRow(row)
         self._status.showMessage(f"Applied {name} → {pos}")
 
@@ -8145,7 +8793,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Add", str(e))
             return
         self._sync_scene_atts_from_im()
-        self.att_list.setCurrentRow(idx)
+        self._select_scene_att(idx)
         self._ed_att_list.setCurrentRow(idx)
         self._status.showMessage(f"Added {name} at {pos}")
 
@@ -8155,7 +8803,7 @@ class MainWindow(QMainWindow):
             return
         row = self._ed_att_list.currentRow()
         if row < 0:
-            row = self.att_list.currentRow()
+            row = self._scene_att_global_index()
         if row < 0 or row >= len(self._im_doc.atts):
             self._status.showMessage("Select an attachment first")
             return

@@ -86,11 +86,9 @@ def main(argv: list[str] | None = None) -> int:
 
     initials = [Path(a) for a in argv[1:] if a and not str(a).startswith("-")]
 
-    from ..util.hw import prefer_light_boot_frost
-
     from PySide6.QtCore import Qt
 
-    # Cover → warm under frost → reveal HOME. Studios still fully warm before click.
+    # Cover → warm Mesh → reveal HOME. Sounds/Engine/Assets warm idle after.
     win.go_home()
     # MeshView must exist before first show — otherwise Windows recreates the HWND
     # when the first QOpenGLWidget lands (looks like close + reopen mid-warm).
@@ -104,32 +102,28 @@ def main(argv: list[str] | None = None) -> int:
     win._layout_viewer_pane()
     win._overlay.set_brand("Trainz Studio")
     win._overlay.set_stage("Starting…", 12)
+    # Skip frost grab at boot — grab+blur was a big first-paint tax; dim card is enough.
     win._overlay.set_frost(None)
     win._overlay.setGeometry(win.rect())
     win._overlay.show()
     win._overlay.raise_()
-    # Title bar above frost: drag / traffic lights while studios warm.
+    # Title bar above cover: drag / traffic lights while Mesh warms.
     win._raise_overlay_chrome()
     app.processEvents()
     if not win.isMaximized():
         win.showMaximized()
 
-    # One frost grab max — low-end skips (grab+blur was a big boot tax).
-    if not prefer_light_boot_frost():
-        win._overlay.set_frost(win._capture_overlay_frost())
-        app.processEvents()
-
-    win._overlay.set_stage("Warming studios…", 35)
+    win._overlay.set_stage("Warming Mesh Studio…", 35)
     app.processEvents()
 
-    # Finish background imports before building widget trees.
+    # Finish background imports before building Mesh chrome trees.
     join_hub_module_preload(timeout=12.0)
 
     _last_pe = [0.0]
 
     def _boot_stage(text: str, pct: int) -> None:
         win._overlay.set_stage(text, pct)
-        # Keep title bar above frost — processEvents / resize can bury it.
+        # Keep title bar above cover — processEvents / resize can bury it.
         win._raise_overlay_chrome()
         # Throttle processEvents — every stage was re-entering the event loop hard.
         import time
