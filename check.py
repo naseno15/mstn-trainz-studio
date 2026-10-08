@@ -65,6 +65,24 @@ def test_mesh_key_hidden() -> None:
     assert not is_mesh_key_hidden("cab.fbx", set())
 
 
+def test_attachment_owner_and_hidden() -> None:
+    """Multi-mesh a.* prefix maps to mesh_key; Atts-off hides that mesh's gizmos."""
+    from trainz_studio.render.view3d import (
+        attachment_owner_mesh_key,
+        is_attachment_hidden,
+    )
+
+    keys = ["body.trainzmesh", "cab.fbx"]
+    assert attachment_owner_mesh_key("body/a.bogie", keys) == "body.trainzmesh"
+    assert attachment_owner_mesh_key("cab/a.lamp", keys) == "cab.fbx"
+    assert attachment_owner_mesh_key("a.point", ["solo.im"]) == "solo.im"
+    assert attachment_owner_mesh_key("a.point", keys) == ""
+    hidden = {"cab.fbx"}
+    assert is_attachment_hidden("cab/a.lamp", hidden, keys)
+    assert not is_attachment_hidden("body/a.bogie", hidden, keys)
+    assert not is_attachment_hidden("cab/a.lamp", set(), keys)
+
+
 def test_highlight_pick() -> None:
     """Mesh row, mesh file, and Mat stem share one outline match."""
     from trainz_studio.render.view3d import highlight_pick
@@ -1374,6 +1392,9 @@ def test_status_toast_save_detect() -> None:
         format_drop_detail,
         is_save_notice,
         parse_progress_pct,
+        toast_rest_y,
+        _short_progress_detail,
+        _toast_lines,
     )
 
     assert is_save_notice("Saved mesh.trainzmesh")
@@ -1391,6 +1412,18 @@ def test_status_toast_save_detect() -> None:
     from pathlib import Path
 
     assert "b.im" in format_drop_detail([Path("a.fbx"), Path("b.im")])
+    # Compact: under topbar vs centered when no bar.
+    assert toast_rest_y(800, 40, 72) == 72
+    assert toast_rest_y(800, 40, None) == (800 - 40) // 2
+    assert _short_progress_detail("Baking lamps", "Baking lamps… 55%") == ""
+    assert _short_progress_detail("Load", "Load · stage B") == "Load · stage B"
+    assert _short_progress_detail(
+        "Done", "Handing off · 4\ntextures ready 100%"
+    ) == "Handing off · 4 textures ready"
+    assert _toast_lines("Done", "Handing off · 4 textures ready 100%") == (
+        "Done",
+        "Handing off · 4 textures ready",
+    )
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
@@ -1501,6 +1534,31 @@ def test_theme_palette_sets_base_both_modes() -> None:
     del app
 
 
+def test_pbr_hud_not_squeezed() -> None:
+    """Compact Lit…AO HUD clears paint_glass_chip shadow air (not a flat strip)."""
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.app import PBR_HUD_BTN_H, PBR_HUD_H, PBR_HUD_MIN_W, SegmentedControl
+
+    app = QApplication.instance() or QApplication([])
+    hud = SegmentedControl(compact=True)
+    hud.adjustSize()
+    assert hud.height() == PBR_HUD_H
+    assert PBR_HUD_H >= 54
+    assert PBR_HUD_BTN_H >= 32
+    # glass chip: top5 + bot12 — plate must stay taller than the buttons
+    assert PBR_HUD_H - 5 - 12 >= PBR_HUD_BTN_H
+    assert max(hud.sizeHint().width(), PBR_HUD_MIN_W) >= PBR_HUD_MIN_W
+    for b in hud._buttons:
+        assert b.height() == PBR_HUD_BTN_H
+        assert b.minimumWidth() >= 58
+    m = hud.layout().contentsMargins()
+    assert m.left() >= 12 and m.right() >= 12
+    assert m.bottom() >= m.top()  # extra bottom for shadow fade
+    hud.deleteLater()
+    del app
+
+
 def test_float_chrome_bookends() -> None:
     """Floating capsule: pages split left/right of centered Home (Theme is top menu)."""
     from PySide6.QtWidgets import QApplication, QHBoxLayout, QPushButton, QWidget
@@ -1572,7 +1630,22 @@ def test_float_chrome_bookends() -> None:
     assets = AssetsStudioHost(on_home=lambda: None, on_theme=lambda: None)
     assert assets._main_split.indexOf(assets.sidebar) == 0
     assert assets._main_split.indexOf(assets._right_dock_host) == 2
-    assert assets._right_dock.count() == 4  # Texture Params · Mesh Lods · Editor · Denoiser
+    # Texture · Mesh Lods · Editor · Denoiser · Packages Viewer
+    assert assets._right_dock.count() == 5
+    # Packages owns the dock by default (full-height Viewer, Mesh Editor style).
+    assert not assets._right_dock_host.isHidden()
+    assert assets._right_dock.currentIndex() == assets._pkg_dock_index
+    assert (
+        assets._right_dock.indexOf(assets.packages_page.viewer_panel)
+        == assets._pkg_dock_index
+    )
+    lay = assets.packages_page.viewer_panel.layout()
+    assert lay is not None
+    assert (lay.contentsMargins().left(), lay.contentsMargins().top()) == (28, 24)
+    assets._on_page("config")
+    # Settle without waiting on the silk dock lerp (no event-loop pump here).
+    assets._dock_animating = False
+    assets._sync_right_dock(animate=False)
     assert assets._right_dock_host.isHidden()
     assets.set_suite("texmesh")
     assert assets._suite == "texmesh"
@@ -1592,6 +1665,8 @@ def test_float_chrome_bookends() -> None:
     assert not assets._right_dock_host.isHidden()
     assets.set_suite("assets")
     assert assets._page == "packages"
+    assert not assets._right_dock_host.isHidden()
+    assert assets._right_dock.currentIndex() == assets._pkg_dock_index
     assets.deleteLater()
 
     host.deleteLater()
@@ -1698,6 +1773,49 @@ def test_material_icons_font() -> None:
     assert act.objectName() == "accentIconBtn"
     act.deleteLater()
     btn.deleteLater()
+    del app
+
+
+def test_mode_pie_glass_reveal() -> None:
+    """Tab ModePie opens with glass reveal + bubbles; commit returns key and closes."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QImage
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    from trainz_studio.ui.app import ModePie
+    from trainz_studio.ui.frost import set_glass_dark
+
+    app = QApplication.instance() or QApplication([])
+    host = QWidget()
+    host.resize(640, 480)
+    host.show()
+    app.processEvents()
+    pie = ModePie(
+        (("Wire", "wire"), ("Solid", "solid"), ("Material", "mat"), ("Rendered", "rend")),
+        title="Shading",
+        default_hover=3,
+        parent=host,
+    )
+    set_glass_dark(pie, True)
+    pie.popup_at(host.mapToGlobal(QPoint(320, 240)))
+    app.processEvents()
+    assert pie.isVisible()
+    assert pie._tick.isActive()
+    assert len(pie._bubbles) >= 8
+    # Drive reveal mid-open and ensure paint does not throw.
+    pie._reveal = 0.85
+    img = QImage(host.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0)
+    pie.render(img, QPoint())
+    assert pie._sector_at(QPoint(int(pie._cx), int(pie._cy) - 80)) == 0
+    mode = pie.commit()
+    assert mode == "rend"
+    # Close anim keeps widget visible briefly; finish must hide.
+    pie._finish_close()
+    assert not pie.isVisible()
+    assert not pie._tick.isActive()
+    host.close()
+    host.deleteLater()
     del app
 
 
@@ -1883,6 +2001,102 @@ def test_frost_shadow_room() -> None:
         layers=14,
     )
     p.end()
+    frame.deleteLater()
+    del app
+
+
+def test_qml_shell_loads() -> None:
+    """Phase-1 HOME + title QML must compile and expose the five studios."""
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.qml_host import QmlHomeHost, QmlTitleBar
+
+    app = QApplication.instance() or QApplication([])
+    home = QmlHomeHost(
+        on_mesh=lambda: None,
+        on_sounds=lambda: None,
+        on_engine=lambda: None,
+        on_assets=lambda: None,
+        on_texmesh=lambda: None,
+        on_drop=lambda _paths: None,
+    )
+    assert home.ok
+    ids = [c["studioId"] for c in home._bridge._cards]
+    assert ids == ["mesh", "sounds", "engine", "assets", "texmesh"]
+    bar = QmlTitleBar()
+    assert bar.ok
+    labels = [m["label"] for m in bar._bridge._menus]
+    assert labels[:6] == ["File", "Edit", "View", "Tools", "Theme", "Lang"]
+    home.deleteLater()
+    bar.deleteLater()
+    del app
+
+
+def test_qml_sounds_loads() -> None:
+    """Sounds page QML loads and the clip list bridge accepts a row."""
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.sounds.studio import SoundsStudioHost
+
+    app = QApplication.instance() or QApplication([])
+    host = SoundsStudioHost(on_home=lambda: None)
+    assert host._bridge is not None
+    assert host._view.status().name == "Ready"
+
+    class _Item:
+        def text(self) -> str:
+            return "[OK] clip.wav"
+
+    host.library.addItem(_Item())
+    assert host._bridge.clip_labels() == ["[OK] clip.wav"]
+    host.deleteLater()
+    del app
+
+
+def test_qml_engine_loads() -> None:
+    """Engine Tuner QML chrome loads; page changes still hit the widget stack."""
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.engine.studio import EngineTunerHost
+
+    app = QApplication.instance() or QApplication([])
+    host = EngineTunerHost(on_home=lambda: None)
+    assert host._eng_bridge is not None
+    assert host._engine_view.status().name == "Ready"
+    host._eng_bridge.setPage("simulation")
+    assert host._stack.currentIndex() == 1
+    host.deleteLater()
+    del app
+
+
+def test_frost_motion_lod() -> None:
+    """Silk slides: bake plate once, blit while lod, full glass after end."""
+    from PySide6.QtGui import QColor, QImage, QPixmap
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.frost import FrostGlassFrame
+
+    app = QApplication.instance() or QApplication([])
+    frame = FrostGlassFrame()
+    frame.resize(180, 240)
+    pm = QPixmap(64, 64)
+    pm.fill(QColor("#334455"))
+    frame.set_frost(pm, dark=True)
+    frame.begin_motion_lod()
+    assert frame.in_motion_lod()
+    assert frame._lod_pm is not None and not frame._lod_pm.isNull()
+    img = QImage(frame.size(), QImage.Format.Format_ARGB32)
+    img.fill(0)
+    frame.render(img)
+    assert not img.isNull()
+    # Mid-slide frost update must not drop lod plate.
+    pm2 = QPixmap(64, 64)
+    pm2.fill(QColor("#556677"))
+    frame.set_frost(pm2, dark=True)
+    assert frame.in_motion_lod()
+    frame.end_motion_lod()
+    assert not frame.in_motion_lod()
+    assert frame._lod_pm is None
     frame.deleteLater()
     del app
 
@@ -3179,6 +3393,7 @@ def main() -> int:
     test_fps_hud_text()
     test_fps_hud_top_right()
     test_mesh_key_hidden()
+    test_attachment_owner_and_hidden()
     test_highlight_pick()
     test_mesh_preview_argv()
     test_draw_batch_vbo_slots()
@@ -3205,6 +3420,10 @@ def main() -> int:
     test_mat_names()
     test_frost_clears_on_set_dark()
     test_frost_shadow_room()
+    test_frost_motion_lod()
+    test_qml_shell_loads()
+    test_qml_sounds_loads()
+    test_qml_engine_loads()
     test_damped_scroll_passes_when_table_cant_scroll()
     test_island_light_positions()
     test_multi_mesh_keys()
@@ -3213,8 +3432,10 @@ def main() -> int:
     test_theme_palette_sets_base_both_modes()
     test_theme_warm_cache()
     test_material_icons_font()
+    test_mode_pie_glass_reveal()
     test_home_glass_hub()
     test_hover_bubble_row_slide()
+    test_pbr_hud_not_squeezed()
     test_float_chrome_bookends()
     test_float_title_bar_chrome()
     test_animate_window_quit()
@@ -3283,7 +3504,7 @@ def main() -> int:
     if is_low_end():
         assert hub_reveal_ms(warm=True) == 0
     else:
-        assert 500 <= hub_reveal_ms(warm=True) <= 800
+        assert 200 <= hub_reveal_ms(warm=True) <= 400
     start_hub_module_preload()
     assert join_hub_module_preload(timeout=30.0)
     assert hub_modules_ready()
