@@ -1629,7 +1629,11 @@ def test_float_chrome_bookends() -> None:
     # Right props dock is a main-split sibling of left sidebar (not under path/nav).
     assets = AssetsStudioHost(on_home=lambda: None, on_theme=lambda: None)
     assert assets._main_split.indexOf(assets.sidebar) == 0
-    assert assets._main_split.indexOf(assets._right_dock_host) == 2
+    qml = getattr(assets, "_assets_view", None)
+    assert qml is not None and assets._assets_bridge.page == "packages"
+    assert assets._assets_bridge.dockOn
+    if qml is None:
+        assert assets._main_split.indexOf(assets._right_dock_host) == 2
     # Texture · Mesh Lods · Editor · Denoiser · Packages Viewer
     assert assets._right_dock.count() == 5
     # Packages owns the dock by default (full-height Viewer, Mesh Editor style).
@@ -2065,6 +2069,28 @@ def test_qml_engine_loads() -> None:
     assert host._engine_view.status().name == "Ready"
     host._eng_bridge.setPage("simulation")
     assert host._stack.currentIndex() == 1
+    host.deleteLater()
+    del app
+
+
+def test_qml_assets_loads() -> None:
+    """Assets Tools QML chrome loads; suite nav still drives the widget stack."""
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.ui.assets.studio import AssetsStudioHost
+
+    app = QApplication.instance() or QApplication([])
+    host = AssetsStudioHost(on_home=lambda: None)
+    assert host._assets_bridge is not None
+    assert host._assets_view.status().name == "Ready"
+    assert host._assets_bridge.page == "packages"
+    assert host._assets_bridge.dockOn
+    host._assets_bridge.setPage("config")
+    assert host._stack.currentIndex() == 1
+    assert host._assets_bridge.dockOn is False
+    host.set_suite("texmesh")
+    assert host._assets_bridge.navTall
+    assert host._assets_bridge.page == "texture"
     host.deleteLater()
     del app
 
@@ -3424,6 +3450,7 @@ def main() -> int:
     test_qml_shell_loads()
     test_qml_sounds_loads()
     test_qml_engine_loads()
+    test_qml_assets_loads()
     test_damped_scroll_passes_when_table_cant_scroll()
     test_island_light_positions()
     test_multi_mesh_keys()
