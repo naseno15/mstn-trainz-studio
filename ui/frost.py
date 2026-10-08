@@ -306,6 +306,7 @@ class FrostGlassFrame(QFrame):
         self._dark = True
         self._motion_lod = False
         self._lod_pm: QPixmap | None = None
+        self._paint_plate = True
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
 
@@ -315,6 +316,11 @@ class FrostGlassFrame(QFrame):
         # Mid-slide: keep lod plate; fresh frost applies on end_motion_lod.
         if not self._motion_lod:
             self.update()
+
+    def set_paint_plate(self, on: bool) -> None:
+        """QML GlassPlate owns the dock face. Skip this widget's own plate."""
+        self._paint_plate = bool(on)
+        self.update()
 
     def set_dark(self, dark: bool) -> None:
         """Retint glass plate — drop stale frost so light/dark never mix."""
@@ -356,6 +362,8 @@ class FrostGlassFrame(QFrame):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         del event
+        if not self._paint_plate:
+            return
         if self._motion_lod and self._lod_pm is not None and not self._lod_pm.isNull():
             p = QPainter(self)
             p.drawPixmap(0, 0, self._lod_pm)

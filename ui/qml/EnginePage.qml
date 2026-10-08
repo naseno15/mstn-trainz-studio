@@ -107,10 +107,13 @@ Item {
 
     Item {
         id: nav
-        anchors.horizontalCenter: parent.horizontalCenter
+        // Center in the lane between the sidebar and the Auto Tune dock.
+        readonly property real laneLeft: stage.x + side.width
+        readonly property real laneRight: stage.x + stage.width - autoDock.width
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 14
-        width: Math.min(parent.width - 32, 640)
+        width: Math.min(Math.max(160, laneRight - laneLeft - 16), 640)
+        x: laneLeft + (laneRight - laneLeft - width) / 2
         height: 76
         z: 20
 

@@ -2864,6 +2864,14 @@ class MainWindow(QMainWindow):
             self._expose_hub_page(HUB_SOUNDS)
             self._ensure_engine_host()
             self._expose_hub_page(HUB_ENGINE)
+            self._ensure_assets_host()
+            self._expose_hub_page(HUB_ASSETS)
+            assets = getattr(self, "_assets_host", None)
+            if assets is not None:
+                assets.set_suite("texmesh")
+                self._expose_hub_page(HUB_ASSETS)
+                assets.set_suite("assets")
+            self._idle_warm_assets_preview()
         finally:
             self._boot_batch = False
             self._hub.setCurrentIndex(HUB_HOME)
@@ -2887,7 +2895,7 @@ class MainWindow(QMainWindow):
         QApplication.sendPostedEvents()
         view = None
         if host is not None:
-            view = getattr(host, "_engine_view", None) or getattr(host, "_view", None)
+            view = getattr(host, "_engine_view", None) or getattr(host, "_view", None) or getattr(host, "_assets_view", None)
         if view is not None:
             warm_quick(view)
         QApplication.processEvents()

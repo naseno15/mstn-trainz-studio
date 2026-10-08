@@ -882,6 +882,7 @@ class EngineTunerHost(QWidget):
         bridge = getattr(self, "_eng_bridge", None)
         if bridge is not None:
             bridge.set_dark(self._theme != "light")
+            self._drop_center_plate()
 
     def _build(self) -> None:
         from .autotune_dialog import AutotunePanel
@@ -910,6 +911,7 @@ class EngineTunerHost(QWidget):
 
         # ── center: pages · bottom nav ──
         right_host = QWidget()
+        self._center_host = right_host
         right = QVBoxLayout(right_host)
         right.setContentsMargins(10, 0, 0, 0)
         right.setSpacing(8)
@@ -1037,7 +1039,33 @@ class EngineTunerHost(QWidget):
         self.sidebar.setParent(self)
         self.sidebar.hide()
         self._split.setHandleWidth(0)
+        self._drop_center_plate()
         warm_quick(view)
+
+    def _clear_widget_fill(self, widget: QWidget, name: str) -> None:
+        widget.setObjectName(name)
+        widget.setAutoFillBackground(False)
+        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        rule = f"#{name} {{ background: transparent; border: none; }}"
+        sheet = widget.styleSheet()
+        if rule not in sheet:
+            widget.setStyleSheet((sheet + "\n" + rule).strip())
+
+    def _drop_center_plate(self) -> None:
+        """Center pages sit on the QML stage — no extra black plate."""
+        if getattr(self, "_engine_view", None) is None:
+            return
+        host = getattr(self, "_center_host", None)
+        if host is None:
+            return
+        self._clear_widget_fill(self._split, "engineSplit")
+        self._clear_widget_fill(host, "engineCenter")
+        self._clear_widget_fill(self._stack, "engineStack")
+        for index in range(self._stack.count()):
+            page = self._stack.widget(index)
+            if page is not None:
+                self._clear_widget_fill(page, f"enginePage{index}")
 
     def _bind_side_mirror(self) -> None:
         """Keep the widget sidebar as the data source; QML paints it."""
