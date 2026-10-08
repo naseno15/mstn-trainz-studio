@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -47,6 +47,242 @@ class SoundClip:
     fix_report: dict | None = None
 
 
+class _BindLabel:
+    def __init__(self, setter) -> None:  # noqa: ANN001
+        self._setter = setter
+
+    def setText(self, text: str) -> None:
+        self._setter(str(text))
+
+    def setPlainText(self, text: str) -> None:
+        self._setter(str(text))
+
+
+class _ClipRow:
+    def __init__(self, host: SoundsStudioHost, index: int) -> None:
+        self._host = host
+        self._index = index
+
+    def setText(self, text: str) -> None:
+        labels = list(self._host._bridge.clip_labels())
+        if 0 <= self._index < len(labels):
+            labels[self._index] = str(text)
+            self._host._bridge.set_clips(labels)
+
+
+class _ClipList:
+    """Stand-in for QListWidget so clip logic can stay put under the QML list."""
+
+    def __init__(self, host: SoundsStudioHost) -> None:
+        self._host = host
+        self._blocked = False
+
+    def blockSignals(self, on: bool) -> None:
+        self._blocked = bool(on)
+
+    def addItem(self, item) -> None:  # noqa: ANN001
+        labels = list(self._host._bridge.clip_labels())
+        labels.append(item.text())
+        self._host._bridge.set_clips(labels)
+
+    def setCurrentRow(self, row: int) -> None:
+        self._host._bridge.set_current(int(row))
+        if not self._blocked:
+            self._host._on_select(int(row))
+
+    def item(self, index: int) -> _ClipRow:
+        return _ClipRow(self._host, int(index))
+
+
+class SoundsBridge(QObject):
+    changed = Signal()
+
+    def __init__(self, host: SoundsStudioHost) -> None:
+        super().__init__()
+        self._host = host
+        self._dark = True
+        self._syncing = False
+        self._ffmpeg = ""
+        self._meta = "No clip"
+        self._amp = "Peak —   RMS —"
+        self._qc = ""
+        self._slots = ""
+        self._phase = ""
+        self._play = "Play"
+        self._loop = "Loop: Off"
+        self._clips: list[str] = []
+        self._current = -1
+        self._title = "Sounds Studio"
+        self._clips_title = "Clips"
+        self._qc_title = "Loop QC"
+        self._ffmpeg_btn = "ffmpeg…"
+        self._drop = "Drop WAV / audio / video here"
+        self._set_a = "Set A"
+        self._set_b = "Set B"
+        self._play_ab = "Play A→B"
+        self._stop = "Stop"
+        self._fix = "Fix"
+        self._tip = "Save As only · A→B = Trainz seam (no runtime overlap)"
+        self._home = "Home"
+        self._icon_font = ""
+        self._open_glyph = "📂"
+        self._save_glyph = "💾"
+
+    def _flag(self, name: str):  # noqa: ANN202
+        return lambda: getattr(self, name)
+
+    dark = Property(bool, lambda self: self._dark, notify=changed)
+    ffmpeg = Property(str, lambda self: self._ffmpeg, notify=changed)
+    meta = Property(str, lambda self: self._meta, notify=changed)
+    amp = Property(str, lambda self: self._amp, notify=changed)
+    qc = Property(str, lambda self: self._qc, notify=changed)
+    slots = Property(str, lambda self: self._slots, notify=changed)
+    phase = Property(str, lambda self: self._phase, notify=changed)
+    playLabel = Property(str, lambda self: self._play, notify=changed)
+    loopLabel = Property(str, lambda self: self._loop, notify=changed)
+    title = Property(str, lambda self: self._title, notify=changed)
+    clipsTitle = Property(str, lambda self: self._clips_title, notify=changed)
+    qcTitle = Property(str, lambda self: self._qc_title, notify=changed)
+    ffmpegBtn = Property(str, lambda self: self._ffmpeg_btn, notify=changed)
+    dropHint = Property(str, lambda self: self._drop, notify=changed)
+    setA = Property(str, lambda self: self._set_a, notify=changed)
+    setB = Property(str, lambda self: self._set_b, notify=changed)
+    playAB = Property(str, lambda self: self._play_ab, notify=changed)
+    stopLabel = Property(str, lambda self: self._stop, notify=changed)
+    fixLabel = Property(str, lambda self: self._fix, notify=changed)
+    barTip = Property(str, lambda self: self._tip, notify=changed)
+    homeLabel = Property(str, lambda self: self._home, notify=changed)
+    iconFont = Property(str, lambda self: self._icon_font, notify=changed)
+    openGlyph = Property(str, lambda self: self._open_glyph, notify=changed)
+    saveGlyph = Property(str, lambda self: self._save_glyph, notify=changed)
+    current = Property(int, lambda self: self._current, notify=changed)
+    clips = Property("QVariantList", lambda self: self._clips, notify=changed)
+
+    def clip_labels(self) -> list[str]:
+        return self._clips
+
+    def set_dark(self, dark: bool) -> None:
+        self._dark = bool(dark)
+        self.changed.emit()
+
+    def set_ffmpeg(self, text: str) -> None:
+        self._ffmpeg = text
+        self.changed.emit()
+
+    def set_meta(self, text: str) -> None:
+        self._meta = text
+        self.changed.emit()
+
+    def set_amp(self, text: str) -> None:
+        self._amp = text
+        self.changed.emit()
+
+    def set_qc(self, text: str) -> None:
+        self._qc = text
+        self.changed.emit()
+
+    def set_slots(self, text: str) -> None:
+        self._slots = text
+        self.changed.emit()
+
+    def set_phase(self, text: str) -> None:
+        self._phase = text
+        self.changed.emit()
+
+    def set_play(self, text: str) -> None:
+        self._play = text
+        self.changed.emit()
+
+    def set_loop(self, text: str) -> None:
+        self._loop = text
+        self.changed.emit()
+
+    def set_clips(self, labels: list[str]) -> None:
+        self._clips = list(labels)
+        self.changed.emit()
+
+    def set_current(self, row: int) -> None:
+        self._current = int(row)
+        self.changed.emit()
+
+    def apply_chrome(self, **text: str) -> None:
+        for key, value in text.items():
+            setattr(self, key, value)
+        self.changed.emit()
+
+    @Slot(int)
+    def selectClip(self, row: int) -> None:
+        if self._syncing:
+            return
+        self._host._on_select(int(row))
+
+    @Slot()
+    def browse(self) -> None:
+        self._host._browse()
+
+    @Slot()
+    def pickFfmpeg(self) -> None:
+        self._host._pick_ffmpeg()
+
+    @Slot()
+    def setSlotA(self) -> None:
+        self._host._set_slot("a")
+
+    @Slot()
+    def setSlotB(self) -> None:
+        self._host._set_slot("b")
+
+    @Slot()
+    def playAB(self) -> None:
+        self._host._play_ab()
+
+    @Slot()
+    def togglePlay(self) -> None:
+        self._host._toggle_play()
+
+    @Slot()
+    def stop(self) -> None:
+        self._host._stop()
+
+    @Slot()
+    def toggleLoop(self) -> None:
+        self._host._on_loop_toggled(not self._host._loop_on)
+
+    @Slot()
+    def fix(self) -> None:
+        self._host._fix_current()
+
+    @Slot()
+    def saveAs(self) -> None:
+        self._host._save_as()
+
+    @Slot()
+    def goHome(self) -> None:
+        self._host._on_home()
+
+    @Slot(list)
+    def dropUrls(self, urls: list) -> None:
+        from PySide6.QtCore import QUrl
+
+        paths: list[Path] = []
+        for raw in urls:
+            text = str(raw)
+            local = QUrl(text).toLocalFile() if text.startswith("file:") else text
+            if local:
+                paths.append(Path(local))
+        if paths:
+            self._host.import_paths(paths)
+
+    @Slot(float, float, float, float)
+    def waveRect(self, x: float, y: float, w: float, h: float) -> None:
+        wave = getattr(self._host, "wave", None)
+        if wave is None:
+            return
+        wave.setGeometry(int(x), int(y), max(1, int(w)), max(1, int(h)))
+        wave.show()
+        wave.raise_()
+
+
 class SoundsStudioHost(QWidget):
     """Sounds editor — Phase B editor + Phase C Track→Track / ffmpeg path."""
 
@@ -83,8 +319,80 @@ class SoundsStudioHost(QWidget):
         self._theme = mode
         self.setPalette(qpalette_for(mode if mode in ("dark", "light") else "dark"))
         self.wave.set_theme(mode)
+        bridge = getattr(self, "_bridge", None)
+        if bridge is not None:
+            bridge.set_dark(mode != "light")
         if getattr(self, "_chrome", None) is not None:
             self._chrome.set_theme(mode)
+
+    def retranslate(self) -> None:
+        """Refresh QML chrome strings after a language change."""
+        bridge = getattr(self, "_bridge", None)
+        if bridge is None:
+            return
+        from ..i18n import t
+        from ..icons import ensure_material_icons, glyph, icon_font
+
+        ensure_material_icons()
+        font = icon_font(18)
+        bridge.apply_chrome(
+            _title=t("Sounds Studio"),
+            _clips_title=t("Clips"),
+            _qc_title=t("Loop QC"),
+            _ffmpeg_btn=t("ffmpeg…"),
+            _drop=t("Drop WAV / audio / video here"),
+            _set_a=t("Set A"),
+            _set_b=t("Set B"),
+            _play_ab=t("Play A→B"),
+            _stop=t("Stop"),
+            _fix=t("Fix"),
+            _tip=t("Save As only · A→B = Trainz seam (no runtime overlap)"),
+            _home=t("Home"),
+            _icon_font=font.family() if font is not None else "",
+            _open_glyph=glyph("folder_open") or "●",
+            _save_glyph=glyph("save_as") or "●",
+        )
+
+    def _try_qml(self) -> bool:
+        from pathlib import Path as _Path
+
+        from PySide6.QtWidgets import QVBoxLayout
+
+        from ..qml_host import _qml_ok, _quick, warm_quick
+
+        self._bridge = SoundsBridge(self)
+        self._bridge.set_dark(self._theme != "light")
+        self.library = _ClipList(self)
+        self.meta = _BindLabel(self._bridge.set_meta)
+        self.amp = _BindLabel(self._bridge.set_amp)
+        self.qc = _BindLabel(self._bridge.set_qc)
+        self.ff_lab = _BindLabel(self._bridge.set_ffmpeg)
+        self.slots_lab = _BindLabel(self._bridge.set_slots)
+        self.phase_lab = _BindLabel(self._bridge.set_phase)
+        self.btn_play = _BindLabel(self._bridge.set_play)
+        self.btn_loop = _BindLabel(self._bridge.set_loop)
+        self.wave = WaveformWidget(self)
+        self.wave.set_theme(self._theme)
+        self.wave.hide()
+        qml = _Path(__file__).resolve().parents[1] / "qml" / "SoundsPage.qml"
+        self._view = _quick(qml, self._bridge)
+        if not _qml_ok(self._view):
+            self.wave.deleteLater()
+            self._view.deleteLater()
+            self._bridge = None
+            return False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._view)
+        warm_quick(self._view)
+        self.retranslate()
+        self._refresh_slots_label()
+        return True
+
+    def _build(self) -> None:
+        if self._try_qml():
+            return
+        self._build_widgets()
 
     def import_paths(self, paths: list[Path]) -> None:
         errors: list[str] = []
@@ -135,7 +443,7 @@ class SoundsStudioHost(QWidget):
     def _refresh_ffmpeg_tip(self) -> None:
         self.ff_lab.setText(ffmpeg_status())
 
-    def _build(self) -> None:
+    def _build_widgets(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
