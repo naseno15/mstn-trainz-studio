@@ -1,6 +1,63 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-08 (Asia/Bangkok) — Texture & Mesh Lods tools rename + editor docks
+**Last updated:** 2026-10-08 (Asia/Bangkok) — QML Engine Tuner chrome
+
+### QML Engine Tuner (2026-10-08)
+
+| Piece | Role |
+|--------|------|
+| `ui/qml/EnginePage.qml` | Sunk content well + raised nav (Tuner · Simulation · Parameters · Home · Auto Tune) |
+| `EngineTunerHost._mount_qml` | Sidebar, throttle/sim/parameter editors, and Auto Tune drawer stay widgets inside the well |
+| `ui/qml/EngineAuto.qml` | Right Auto Tune dock in QML. Hidden widget panel still runs Preview / Apply |
+| Buttons | `RaiseButton.qml` is raised glass. Fields and tables use `SunkField.qml` (sunk). Keep that for every QML control |
+| Warm | Sounds + Engine Tuner are built and painted once before the boot cover drops. Nothing heavy is scheduled after Home is shown |
+| `ui/qml/GlassPlate.qml` | Soft multi-ring floor shadow + inner lip on the glass (Home, Sounds, title) |
+| Fallback | Widget nav stays if the QML page fails to load |
+
+### QML shell phase 1 (2026-10-08)
+
+Studios (Mesh / Sounds / Engine / Assets / TexMesh) stay Qt Widgets. Only the hub home and the floating menu bar are Qt Quick so later pages can move one at a time.
+
+| Piece | Role |
+|--------|------|
+| `ui/qml/HomePage.qml` | Same hub: logo, 5 studio cards, drop zone |
+| `ui/qml/TitleBar.qml` + `MenuDrop.qml` | Traffic lights + File / Edit / View / Tools / Theme / Lang |
+| `ui/qml_host.py` | Bridge. Menu rows still `QAction.trigger()` — shortcuts and logic stay in `app.py` |
+| Fallback | If QML fails to load, widget `HomePage` / `FloatTitleBar` come back |
+| Paint | Qt Quick uses the **software** scene graph so it stays visible beside the mesh `QOpenGLWidget` (shared desktop GL was a black HOME) |
+
+Next phases: Engine Tuner, then Assets, Mesh Studio last. Layout stays as close as the widget version.
+
+### QML Sounds Studio (2026-10-08)
+
+| Piece | Role |
+|--------|------|
+| `ui/qml/SoundsPage.qml` | Clip list · QC · Track→Track · transport · Home |
+| `SoundsStudioHost._try_qml` | Same import / play / fix / save logic; waveform stays a widget in the center well |
+| Fallback | Widget layout if the QML page fails to load |
+
+### Silk motion pipeline (2026-10-08)
+
+Keep cinema glass look at rest; mid-slide paint must not re-run 14 soft-shadow rings every frame.
+
+| Piece | Role |
+|--------|------|
+| `FrostGlassFrame.begin/end_motion_lod` | Bake full glass once → blit cache during dock/sidebar slide → Full glass on finish |
+| `bake_frost_plate` | Offscreen full plate for lod |
+| `_set_side_panel` / `_set_editor_dock` | `begin_motion_lod` before `animate_geometry`; `end_motion_lod` in on_done; no mid-slide frost re-grab |
+| `animate_geometry` on_tick | Default **16ms** (~60Hz); low-end **32ms** (was 0 on normal PCs → layout storm) |
+| `apple_pop_pill` | No-op while `_slide_anim` in flight (don't fight geometry) |
+| Hub cover | Already one downscaled pixmap blit + opacity — no shadow rings |
+
+### PBR HUD (Lit…AO) — un-squeeze (2026-10-08)
+
+| Piece | Role |
+|--------|------|
+| Root cause | `paint_glass_chip` needs top5/bot12 shadow air; HUD was ~38px → plate ~21px (flat strip) |
+| `PBR_HUD_H` / `PBR_HUD_BTN_H` | **56** / **34** (same air as bake bar) |
+| Margins | `14,8,14,14` + spacing 4 — labels sit inside the glass plate |
+| Width | min **420** (was 320 — crushed six labels) |
+| Translucent | `WA_TranslucentBackground` so capsule shadow paints clean |
 
 ### Texture & Mesh Lods tools — nav + full-height editor docks (2026-10-08)
 
@@ -23,7 +80,17 @@
 | Fix (drag) | `begin_frameless_move` prefers `startSystemMove`, Win32 `SC_MOVE` fallback; title label + overlay card mouse-transparent; title bar above frost |
 | Root cause (not max) | Early HWND from GL prewarm / failed drag left window restored after frost |
 | Fix (max) | `setWindowState(Maximized)` on first show + `showMaximized()` again after `_hide_overlay` |
-| Boot order | `go_home` → `prewarm_mesh_gl` → `showMaximized` → frost → `warmup_hub_studios` → remmaximize |
+| Boot order | `go_home` → `prewarm_mesh_gl` → `showMaximized` → dim cover (no frost) → Mesh warm → hide → idle Sounds/Engine/Assets → remmaximize |
+
+### Packages Viewer — full-height right dock (2026-10-08)
+
+| Piece | Role |
+|--------|------|
+| Before | Viewer lived inside Packages mid stack → squeezed above bottom nav |
+| After | `viewer_panel` mounts on `AssetsStudioHost._right_dock` (index 4) — sibling of left sidebar, like Mesh Editor |
+| Padding | `FROST_CONTENT_MARGINS` 28/24/28/30 · spacing 10 (`editorDock`) |
+| Width | min **420** · default **560** · max **920**; expand grows dock / hides Finder |
+| Config / KUID | right dock closes; texmesh docks stay indices 0–3 |
 
 ### Packages Finder — Edited mark + config Save (2026-10-08)
 
@@ -100,19 +167,26 @@ Selecting a mesh row outlined the **next** geometry. Materials were zipped by li
 
 Also: `_sample_ok` rejected tiled UVs outside ±32 and dropped that chunk (int V≈±52). Limit is now |UV| < 1e5.
 
-### Faster boot + smoother UI (2026-10-07)
+### Faster boot + HOME fade (2026-10-08)
 
 | Piece | Role |
 |--------|------|
+| Boot cover | **No frost grab** — dim overlay card only (grab+blur was a big first-paint tax) |
+| Boot warm | Mesh chrome only under cover; Sounds/Engine/Assets via `_idle_warm_secondary_hubs` after HOME |
 | `util/preload.py` | Background import of Editor/Sounds/Engine/Assets while MainWindow builds |
-| Boot | Still **full** `warmup_hub_studios` before HOME clickable — no deferred studio warm |
-| Mesh GL | `prewarm_mesh_gl` **before** first show (HWND flash fix — see 2026-10-08) |
-| Cut | No 2nd theme/logo warm · one frost grab (skip on low-end) · throttle `processEvents` · one i18n snapshot |
-| Assets GL | `warm_fast_preview_infra` idle after overlay hide (shares MeshView context; no 2nd HWND recreate) |
-| Hub morph | `hub_reveal_ms` ~640–720ms (0 = skip on low-end) |
+| Mesh GL | `prewarm_mesh_gl` **before** first show (HWND flash fix) |
+| Hub transition | Soft fade + tiny popup lift (`HubRevealOverlay`) — no directional morph / caption |
+| `hub_reveal_ms` | ~260–300ms (0 = skip on low-end) |
 | View3D | Cam timer sleeps when hidden; **16ms while visible** (33ms idle was steppy) |
-| Panel slide | `animate_geometry` on_tick every frame on normal PCs (32ms throttle = low-end only) |
+| Panel slide | motion_lod + `animate_geometry` on_tick **16ms** (32ms = low-end); see Silk section above |
 | HOME cards | Instant lift on low-end (no per-card QVariantAnimation) |
+
+### Faster boot + smoother UI (2026-10-07) — superseded above for boot/hub
+
+| Piece | Role |
+|--------|------|
+| Cut | No 2nd theme/logo warm · throttle `processEvents` · one i18n snapshot |
+| Assets GL | `warm_fast_preview_infra` idle after overlay hide (shares MeshView context) |
 
 ### Viewport arrow walk (2026-10-07)
 
@@ -144,7 +218,7 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 
 | Piece | Role |
 |--------|------|
-| Boot | **Always** `warmup_hub_studios()` full (Mesh+Sounds+Engine+Assets) — never defer; first studio switch must stay snappy |
+| Boot | Mesh under cover; Sounds/Engine/Assets idle after HOME (`_idle_warm_secondary_hubs`) — modules preloaded |
 | `util/hw.py` | `is_low_end` / `prefer_instant_panels` / `prefer_short_hub_motion` / `prefer_light_boot_frost` / `hub_reveal_ms` (cpus≤4 or RAM≤8GiB; override `TRAINZ_STUDIO_LOW_END`) |
 | F3 | Handled in `eventFilter` + `keyPressEvent` (hidden menuBar QAction was flaky); ShortcutOverride avoids double-toggle |
 | FPS HUD | Glass chip, top-**right** of the clear viewport. Editor dock slides it left (`fps_hud_top_right`). F3 does **not** force idle GL redraws (that hitch was `update()` every 16ms). Chip is not a child of the GL widget. |
@@ -162,15 +236,17 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 | No meta | Checkbox off · backface cull on (test: KIHA int `int.trainzmesh`) |
 | UI | Editor Meshes · Double Sided + Texture two-sided row |
 
-### Overlay toast bubble + footer status log (2026-10-07)
+### Overlay toast bubble + footer status log (2026-10-08)
 
 | Piece | Role |
 |--------|------|
 | `ui/status_toast.py` | `ToastHost` · `GlassToastBubble` · `StudioStatusBar` · status-log dialog |
-| Bubble | Center-bottom frost overlay · slide-up + fade · kinds save/drop/progress/info |
+| Bubble | Short wide chip · hangs under title bar · **center** when no topbar · slide-down + fade |
+| Chrome | **Never** `#welcomeTitle` (theme 34px) — `#toastTitle` 12 / `#toastDetail` 10 · mark 18² · ≤2 lines · elide |
+| Progress text | Title + `%` only — `_toast_lines` / `_short_progress_detail` strip `%` + newlines |
 | Save | ✓ green · 5s · status `Saved`/`Wrote`/`Exported` (not Autosave/fail) |
 | Drop | ↓ orange · shows file names (`hub.drop` from `_handle_dropped_paths`) |
-| Progress | … blue · bar + `%` · sticky · load/bake · **finish** on 100% / plain status / hide overlay (was stuck at Handing off 99%) |
+| Progress | … blue · bar + `%` · sticky · load/bake · **finish** on 100% / plain status / hide overlay |
 | Footer left | Clickable `#statusLogMsg` → frost **Status log** (ring buffer ~400) |
 
 ### HOME — Texture / Mesh Tools card (2026-10-07)
@@ -252,13 +328,13 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 | `animate_window_quit` | Compositor `windowOpacity` + slight shrink — **not** `QGraphicsOpacityEffect` on MainWindow/GL |
 | `closeEvent` | Ignores first close → runs quit anim → `_quit_ready` then real close |
 | `#titleNavBtn` | FloatTitleBar File/Edit/View/Theme/Lang — compact pad (was `#navBtn` 10px + h=32 → clipped **g**) |
-| `#navBtn` / `#segBtn` / `#sideTab` | Lower vertical pad; compact seg 30px; shortcut/status bars 26px |
+| `#navBtn` / `#segBtn` / `#sideTab` | Lower vertical pad; PBR HUD seg 34px in 56px glass; shortcut/status bars 26px |
 
 ### Mesh Studio — clear + Show table (2026-10-07)
 
 | Piece | Role |
 |--------|------|
-| Scene **Meshes in scene** | `QTableWidget` **Show \| Faces \| Mesh file** (same column language as Assets Mesh Ops) |
+| Scene **Meshes in scene** | `QTableWidget` **Show \| Atts \| Mesh file** — Atts toggles a.* gizmos per mesh; multi-mesh Scene att list gets stem tabs |
 | Show ticks | Per-file viewport draw — multi-check OK; unchecked → `View3D.set_hidden_mesh_keys` |
 | **Clear meshes** | Sidebar + File menu (`Ctrl+Shift+Backspace`) — unload all for a fresh Open/drop |
 | **Remove selected** | Drop checked rows only (extended row select) |
@@ -365,12 +441,12 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 |--------|------|
 | `io/cdp_lzss.py` | LZSS decompress (cdptool MIT port) + level-0 store pack · `decode_asset_text` |
 | `io/cdp.py` | pack folders · extract · browse tree · delete asset/file · size bands |
-| `ui/assets/packages.py` | Finder · Viewer/Editor; `queue_rail` mounted in Assets sidebar |
+| `ui/assets/packages.py` | Finder mid column · `viewer_panel` (Viewer/Editor) for studio right dock; `queue_rail` in Assets sidebar |
 | Queue | Table drop only (no dashed rail) + Remove/Clear in **left sidebar** · CDP/TZarc icon footer |
 | Sidebar footer | Material icons + tooltips: Open/Pack/Extract CDP · TZarc · Copy KUIDs |
 | Finder | hierarchical folders first · drill-in · folder size · styled list |
-| Sidebar | Viewer\|Editor toggle · title = mode + file · back + expand icons (top-right) · A+/A− · Save CDP on action row |
-| Expand / Restore | Animated Finder splitter collapse (~420ms) · Editor tab disabled for view-only files |
+| Viewer dock | Viewer\|Editor toggle · title = mode + file · back + expand icons · A+/A− · Save CDP on action row · Mesh Editor frost inset |
+| Expand / Restore | Hides Finder + grows studio right dock · Editor tab disabled for view-only files |
 | Texture / Mesh dock | Right props ~600px (min 480) · silk open/shut (InOutCubic 560ms, freeze page paint, defer sidebar) |
 | CodeEdit | global font pt · `enable_code_scroll` coast **0.78** · **middle-click toggle autoscroll** (move ↑↓ to scroll; middle/left/Esc/wheel stops) |
 | LZSS fix | mode-0: u32 `mask` wrap + flag bits **span** words (`_FlagBits`) — was garbling `.lm.txt` / long text |
@@ -596,6 +672,16 @@ Helpers: `io/history.py` · `io/project.py`.
 - Gizmo arrows/cube: **Editor + Move only** (Preview / Editor View = thin RGB axes highlight).
 - Orbit target does **not** chase the point while dragging (camera stays put).
 - Alt+LMB still picks a.* on both pages.
+
+### Tab ModePie glassmorphism — 2026-10-08
+
+| Piece | Role |
+|--------|------|
+| `ModePie` paint | Frost donut wedges + specular sheen + warm hover plate (theme via `glassDark`) |
+| Open / close | Paint-time `_reveal` scale (OutBack open · InCubic close) — **no** opacity on MainWindow/GL |
+| Bubbles | Orbiting glass orbs while armed (`QTimer` 16ms); seed on `popup_at` |
+| Center hub | Frosted disc + accent title; soft radial veil instead of flat black slab |
+| Theme | `_retint_glass_chips` also tints `_shading_pie` / `_edit_pie` |
 
 ### Face Orientation (2026-10-07)
 
