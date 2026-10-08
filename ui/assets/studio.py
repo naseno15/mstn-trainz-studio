@@ -113,13 +113,14 @@ from ..motion import (
     stop_slide,
 )
 
-# Texture & Mesh Lods right props column — Maps viewer needs room for channels.
-_RIGHT_DOCK_MIN = 560
-_RIGHT_DOCK_MAX = 920  # Mesh Lods
-_RIGHT_DOCK_DEFAULT = 700  # Mesh Lods
-# Texture Params / Maps / Resize — wider by default (user wants near-max).
-_RIGHT_DOCK_TEX_MAX = 1100
-_RIGHT_DOCK_TEX_DEFAULT = 1040
+# Mesh Lods uses the same dock width as Texture Denoiser.
+_RIGHT_DOCK_MIN = 320
+_RIGHT_DOCK_DEFAULT = 400
+_RIGHT_DOCK_MAX = 520
+# Texture Params form is one column. Drag the edge to open Maps wider.
+_RIGHT_DOCK_TEX_MIN = 360
+_RIGHT_DOCK_TEX_DEFAULT = 420
+_RIGHT_DOCK_TEX_MAX = 920
 # Texture Editor / Texture Denoiser — Mesh Editor-style width.
 _RIGHT_DOCK_EDIT_MIN = 320
 _RIGHT_DOCK_EDIT_DEFAULT = 400
@@ -983,7 +984,7 @@ class AssetsStudioHost(QWidget):
         """Sunk stage + raised nav in QML. Center pages, queue, and docks stay widgets."""
         from PySide6.QtQuickWidgets import QQuickWidget
 
-        from ..qml_host import _quick, warm_quick
+        from ..qml_host import _quick
         from .bridge import AssetsBridge
         from .sidebar import _logo_pixmap
 
@@ -1036,7 +1037,6 @@ class AssetsStudioHost(QWidget):
         )
         _dmin, dpref, _dmax = self._dock_width_budget()
         self._assets_bridge.set_dock(open_dock, dpref if open_dock else 0)
-        warm_quick(view)
 
     def _clear_widget_fill(self, widget: QWidget, name: str) -> None:
         widget.setObjectName(name)
@@ -1648,7 +1648,8 @@ class AssetsStudioHost(QWidget):
         return page
 
     def _tex_on_side_tab(self, index: int) -> None:
-        idx = int(index)
+        idx = max(0, min(int(index), 2))
+        self._tex_side_index = idx
         stack = self._tex_side_stack
         # Instant swap — fade_stack_page + QGraphicsOpacityEffect on frost
         # side panels crashes Win / leaves options stuck invisible (opacity 0).
@@ -1980,7 +1981,7 @@ class AssetsStudioHost(QWidget):
             )
         sub = getattr(self, "_sub_page", "texture")
         if sub == "texture":
-            return _RIGHT_DOCK_MIN, _RIGHT_DOCK_TEX_DEFAULT, _RIGHT_DOCK_TEX_MAX
+            return _RIGHT_DOCK_TEX_MIN, _RIGHT_DOCK_TEX_DEFAULT, _RIGHT_DOCK_TEX_MAX
         if sub in ("parameter", "denoise"):
             return _RIGHT_DOCK_EDIT_MIN, _RIGHT_DOCK_EDIT_DEFAULT, _RIGHT_DOCK_EDIT_MAX
         return _RIGHT_DOCK_MIN, _RIGHT_DOCK_DEFAULT, _RIGHT_DOCK_MAX

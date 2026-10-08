@@ -15,6 +15,7 @@ Item {
 
     Item {
         id: stage
+        property bool dockDrag: false
         anchors.fill: parent
         anchors.leftMargin: 10
         anchors.rightMargin: 10
@@ -68,7 +69,9 @@ Item {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: bridge.dockOn ? bridge.dockW : 0
+            property bool widthReady: false
             Behavior on width {
+                enabled: dockSlot.widthReady && !stage.dockDrag
                 NumberAnimation { duration: 280; easing.type: Easing.OutCubic }
             }
 
@@ -160,7 +163,10 @@ Item {
             onYChanged: sync()
             onWidthChanged: sync()
             onHeightChanged: sync()
-            Component.onCompleted: sync()
+            Component.onCompleted: {
+                widthReady = true
+                sync()
+            }
         }
 
         Item {
@@ -168,7 +174,7 @@ Item {
             anchors.left: side.right
             anchors.leftMargin: 8
             anchors.right: dockSlot.left
-            anchors.rightMargin: dockSlot.width > 8 ? 8 : 0
+            anchors.rightMargin: dockSlot.width > 8 ? 12 : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.bottomMargin: nav.height + 8
@@ -205,22 +211,29 @@ Item {
         }
 
         MouseArea {
-            z: 3
+            z: 30
             enabled: bridge.dockOn && dockSlot.width > 40
-            x: dockSlot.x - 4
+            x: dockSlot.x - 10
             y: 0
-            width: 10
+            width: 16
             height: parent.height
             cursorShape: Qt.SplitHCursor
+            preventStealing: true
             property real lastX: 0
-            onPressed: lastX = mapToItem(stage, mouseX, 0).x
+            property real grabW: 0
+            onPressed: {
+                stage.dockDrag = true
+                lastX = mapToItem(stage, mouseX, 0).x
+                grabW = bridge.dockW
+            }
             onPositionChanged: {
                 if (!pressed)
                     return
                 var now = mapToItem(stage, mouseX, 0).x
-                bridge.setDockW(dockSlot.width - (now - lastX))
-                lastX = now
+                bridge.setDockW(grabW - (now - lastX))
             }
+            onReleased: stage.dockDrag = false
+            onCanceled: stage.dockDrag = false
         }
     }
 
@@ -247,9 +260,7 @@ Item {
         }
         height: bridge.navTall ? 100 : 76
         z: 20
-        Behavior on x {
-            NumberAnimation { duration: 280; easing.type: Easing.OutCubic }
-        }
+        // Dock width already eases. A second ease on x restarts every frame and stutters.
 
         GlassPlate {
             anchors.fill: parent
@@ -285,6 +296,15 @@ Item {
                 return chip ? chip.pageKey : ""
             }
 
+            function chipRow(chip) {
+                var i
+                for (i = 0; i < leftRep.count; i++) {
+                    if (leftRep.itemAt(i) === chip)
+                        return leftRow
+                }
+                return rightRow
+            }
+
             function placePill(page, animate) {
                 var chip = findChip(page)
                 if (!chip || chip.width < 8) {
@@ -292,21 +312,41 @@ Item {
                         pillRetry.restart()
                     return
                 }
+                var row = chipRow(chip)
+                if (row.width < 40) {
+                    if (pillTries < 15)
+                        pillRetry.restart()
+                    return
+                }
                 var at = chip.mapToItem(cluster, 0, 0)
-                // Repeater items report a width before the row has placed them.
-                if (page !== firstKey() && at.x < 24) {
+                var rowAt = row.mapToItem(cluster, 0, 0)
+                // Row still at the pre-layout origin — accepting that parks the pill off the label.
+                if (Math.abs(at.y - rowAt.y) > 1 || rowAt.y < 1) {
+                    if (pillTries < 15)
+                        pillRetry.restart()
+                    return
+                }
+                // A later chip stays at x 0 until the Row places it. That lands the pill on Mesh Lods.
+                var firstInRow = row === leftRow
+                        ? (leftRep.count > 0 && leftRep.itemAt(0) === chip)
+                        : (rightRep.count > 0 && rightRep.itemAt(0) === chip)
+                if (!firstInRow && chip.x < 8) {
                     if (pillTries < 15)
                         pillRetry.restart()
                     return
                 }
                 pillTries = 0
+                pill.visible = true
                 if (!animate) {
+                    if (pillSliding)
+                        return
                     pill.x = at.x
                     pill.y = at.y + 4
                     pill.width = chip.width
                     pill.height = Math.max(28, chip.height - 8)
                     return
                 }
+                pillSliding = true
                 slideX.to = at.x
                 slideY.to = at.y + 4
                 slideW.to = chip.width
@@ -318,6 +358,7 @@ Item {
             }
 
             property int pillTries: 0
+            property bool pillSliding: false
             Timer {
                 id: pillRetry
                 interval: 40
@@ -380,6 +421,7 @@ Item {
             Rectangle {
                 id: pill
                 z: 1
+                visible: false
                 y: 6
                 x: 6
                 width: 100
@@ -402,7 +444,18 @@ Item {
                     origin.y: pill.height / 2
                 }
             }
-            NumberAnimation { id: slideX; target: pill; property: "x"; duration: 280; easing.type: Easing.OutCubic; onFinished: pillPop.restart() }
+            NumberAnimation {
+                id: slideX
+                target: pill
+                property: "x"
+                duration: 280
+                easing.type: Easing.OutCubic
+                onFinished: {
+                    cluster.pillSliding = false
+                    cluster.placePill(bridge.page, false)
+                    pillPop.restart()
+                }
+            }
             NumberAnimation { id: slideY; target: pill; property: "y"; duration: 280; easing.type: Easing.OutCubic }
             NumberAnimation { id: slideW; target: pill; property: "width"; duration: 280; easing.type: Easing.OutCubic }
             NumberAnimation { id: slideH; target: pill; property: "height"; duration: 280; easing.type: Easing.OutCubic }
@@ -450,13 +503,12 @@ Item {
                 x: leftWell.x + (leftWell.width - width) / 2
                 y: leftWell.y + (leftWell.height - height) / 2
                 spacing: 0
-                onWidthChanged: if (cluster.slideArmed) Qt.callLater(function() { cluster.placePill(bridge.page, false) })
+                onXChanged: if (!cluster.pillSliding) Qt.callLater(function() { cluster.placePill(bridge.page, false) })
+                onYChanged: if (!cluster.pillSliding) Qt.callLater(function() { cluster.placePill(bridge.page, false) })
+                onWidthChanged: if (!cluster.pillSliding) Qt.callLater(function() { cluster.placePill(bridge.page, false) })
                 Repeater {
                     id: leftRep
-                    model: {
-                        try { return JSON.parse(bridge.leftNavJson) }
-                        catch (e) { return [] }
-                    }
+                    model: cluster.leftModel
                     delegate: NavChip {
                         required property var modelData
                         pageKey: modelData.key
@@ -472,12 +524,12 @@ Item {
                 x: rightWell.x + (rightWell.width - width) / 2
                 y: rightWell.y + (rightWell.height - height) / 2
                 spacing: 0
+                onXChanged: if (!cluster.pillSliding) Qt.callLater(function() { cluster.placePill(bridge.page, false) })
+                onYChanged: if (!cluster.pillSliding) Qt.callLater(function() { cluster.placePill(bridge.page, false) })
+                onWidthChanged: if (!cluster.pillSliding) Qt.callLater(function() { cluster.placePill(bridge.page, false) })
                 Repeater {
                     id: rightRep
-                    model: {
-                        try { return JSON.parse(bridge.rightNavJson) }
-                        catch (e) { return [] }
-                    }
+                    model: cluster.rightModel
                     delegate: NavChip {
                         required property var modelData
                         pageKey: modelData.key
@@ -488,12 +540,26 @@ Item {
             }
 
             property string tracked: bridge.page + "|" + bridge.suite
+            property string leftRaw: bridge.leftNavJson
+            property string rightRaw: bridge.rightNavJson
+            property var leftModel: []
+            property var rightModel: []
+            onLeftRawChanged: {
+                try { leftModel = JSON.parse(leftRaw) }
+                catch (e) { leftModel = [] }
+            }
+            onRightRawChanged: {
+                try { rightModel = JSON.parse(rightRaw) }
+                catch (e) { rightModel = [] }
+            }
             property bool slideArmed: false
             onTrackedChanged: if (slideArmed) {
                 pillTries = 0
                 Qt.callLater(function() { placePill(bridge.page, true) })
             }
             Component.onCompleted: Qt.callLater(function() {
+                cluster.onLeftRawChanged()
+                cluster.onRightRawChanged()
                 placePill(bridge.page, false)
                 slideArmed = true
             })

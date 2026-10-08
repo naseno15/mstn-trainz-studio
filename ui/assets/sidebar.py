@@ -99,7 +99,29 @@ _ACTIONS: dict[str, list[tuple[str, str, bool]]] = {
     ],
 }
 
-# (icon, action_id, tooltip, accent?)
+# action_id → Material icon, only where the glyph is unambiguous.
+# The label stays the tooltip. Rule-specific actions stay text buttons.
+_ACTION_ICONS: dict[str, str] = {
+    "open_chump": "file_open",
+    "save_chump": "save",
+    "tex_from_image": "add_photo_alternate",
+    "tex_save": "save",
+    "tex_save_all": "save_as",
+    "param_open": "file_open",
+    "param_save": "save",
+    "param_undo": "undo",
+    "param_redo": "redo",
+    "param_revert": "history",
+    "denoise_open": "file_open",
+    "denoise_run": "play_arrow",
+    "denoise_save": "save",
+    "denoise_revert": "history",
+    "lm_add": "add",
+    "lm_remove": "delete",
+    "lm_load": "file_open",
+    "lm_save": "save",
+    "copy_kuids": "content_copy",
+}
 _PACKAGE_FOOTER: list[tuple[str, str, str, bool]] = [
     ("file_open", "open_cdp", "Open CDP", True),
     ("archive", "pack_cdp", "Pack CDP", True),

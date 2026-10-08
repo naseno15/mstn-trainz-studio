@@ -19,8 +19,13 @@ GlassPlate {
         source: bridge.iconFontUrl
     }
 
-    Item {
+        Item {
         anchors.fill: parent
+
+        GlassTip {
+            id: glassTip
+            dark: bridge.dark
+        }
 
         Column {
             id: head
@@ -75,17 +80,54 @@ GlassPlate {
             contentHeight: actionCol.height
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            onContentYChanged: glassTip.hide()
 
             Column {
                 id: actionCol
                 width: parent.width
                 spacing: 8
 
-                Repeater {
-                    model: {
-                        try { return JSON.parse(bridge.actionsJson) }
-                        catch (e) { return [] }
+                Flow {
+                    width: parent.width
+                    spacing: 8
+                    visible: iconRep.count > 0
+
+                    Repeater {
+                        id: iconRep
+                        model: actionCol.icons()
+                        delegate: Item {
+                            required property var modelData
+                            width: 40
+                            height: 40
+                            RaiseButton {
+                                anchors.fill: parent
+                                accent: !!modelData.accent
+                                enabled: modelData.enabled !== false
+                                opacity: enabled ? 1 : 0.4
+                                glyph: modelData.glyph
+                                fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
+                                onClicked: bridge.runAction(modelData.id)
+                            }
+                            HoverHandler {
+                                onHoveredChanged: {
+                                    tipWait.stop()
+                                    if (hovered && modelData.tip)
+                                        tipWait.restart()
+                                    else
+                                        glassTip.hide()
+                                }
+                            }
+                            Timer {
+                                id: tipWait
+                                interval: 360
+                                onTriggered: glassTip.showFor(parent, modelData.tip)
+                            }
+                        }
                     }
+                }
+
+                Repeater {
+                    model: actionCol.labels()
                     delegate: RaiseButton {
                         required property var modelData
                         width: actionCol.width
@@ -96,6 +138,17 @@ GlassPlate {
                         opacity: enabled ? 1 : 0.4
                         onClicked: bridge.runAction(modelData.id)
                     }
+                }
+
+                function rows() {
+                    try { return JSON.parse(bridge.actionsJson) }
+                    catch (e) { return [] }
+                }
+                function icons() {
+                    return rows().filter(function (row) { return !!row.glyph })
+                }
+                function labels() {
+                    return rows().filter(function (row) { return !row.glyph })
                 }
             }
         }
@@ -112,6 +165,42 @@ GlassPlate {
                 width: parent.width
                 height: 1
                 color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.35)
+            }
+            Row {
+                visible: bridge.showQueue
+                spacing: 6
+
+                Repeater {
+                    model: {
+                        try { return JSON.parse(bridge.queueBtnJson) }
+                        catch (e) { return [] }
+                    }
+                    delegate: Item {
+                        required property var modelData
+                        width: 40
+                        height: 40
+                        RaiseButton {
+                            anchors.fill: parent
+                            glyph: modelData.glyph
+                            fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
+                            onClicked: modelData.id === "clear" ? bridge.queueClear() : bridge.queueRemove()
+                        }
+                        HoverHandler {
+                            onHoveredChanged: {
+                                queueTipWait.stop()
+                                if (hovered && modelData.tip)
+                                    queueTipWait.restart()
+                                else
+                                    glassTip.hide()
+                            }
+                        }
+                        Timer {
+                            id: queueTipWait
+                            interval: 360
+                            onTriggered: glassTip.showFor(parent, modelData.tip)
+                        }
+                    }
+                }
             }
             Text {
                 visible: bridge.showQueue
@@ -130,14 +219,31 @@ GlassPlate {
                         try { return JSON.parse(bridge.footerJson) }
                         catch (e) { return [] }
                     }
-                    delegate: RaiseButton {
+                    delegate: Item {
                         required property var modelData
                         width: 40
                         height: 40
-                        accent: !!modelData.accent
-                        glyph: modelData.glyph
-                        fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
-                        onClicked: bridge.runAction(modelData.id)
+                        RaiseButton {
+                            anchors.fill: parent
+                            accent: !!modelData.accent
+                            glyph: modelData.glyph
+                            fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
+                            onClicked: bridge.runAction(modelData.id)
+                        }
+                        HoverHandler {
+                            onHoveredChanged: {
+                                footTipWait.stop()
+                                if (hovered && modelData.tip)
+                                    footTipWait.restart()
+                                else
+                                    glassTip.hide()
+                            }
+                        }
+                        Timer {
+                            id: footTipWait
+                            interval: 360
+                            onTriggered: glassTip.showFor(parent, modelData.tip)
+                        }
                     }
                 }
             }

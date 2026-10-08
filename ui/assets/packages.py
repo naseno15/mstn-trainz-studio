@@ -642,17 +642,6 @@ class PackagesPage(QWidget):
         self.size_lab.setObjectName("mutedTip")
         self.size_lab.setWordWrap(True)
         ll.addWidget(self.size_lab)
-        qbtn = QHBoxLayout()
-        rem = QPushButton()
-        apply_icon(rem, "delete", tip="Remove", kind="icon", size=20, square=36)
-        rem.clicked.connect(self.remove_selected_queue)
-        clr = QPushButton()
-        apply_icon(clr, "clear", tip="Clear queue", kind="icon", size=20, square=36)
-        clr.clicked.connect(self.clear_queue)
-        qbtn.addWidget(rem)
-        qbtn.addWidget(clr)
-        qbtn.addStretch(1)
-        ll.addLayout(qbtn)
 
         # ── Finder (full main column) ─────────────────────────
         right = QFrame()

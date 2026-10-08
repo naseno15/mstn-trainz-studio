@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, Property, QPoint, QUrl, Signal, Slot
 from PySide6.QtWidgets import QWidget
 
 from ..icons import ensure_material_icons, glyph
-from .sidebar import _ACTIONS, _PACKAGE_FOOTER, _PAGE_TITLES
+from .sidebar import _ACTIONS, _ACTION_ICONS, _PACKAGE_FOOTER, _PAGE_TITLES
 
 _ASSETS_LEFT = (("packages", "Packages", 108), ("config", "Config", 100))
 _ASSETS_RIGHT = (("kuid", "KUID", 96),)
@@ -39,6 +39,7 @@ class AssetsBridge(QObject):
         self._blurb = ""
         self._actions = "[]"
         self._footer = "[]"
+        self._queue_btns = "[]"
         self._left = "[]"
         self._right = "[]"
         self._show_queue = True
@@ -62,6 +63,7 @@ class AssetsBridge(QObject):
         self._view_mesh_label = "Open in Mesh Studio"
         self._view_repl = "Replace…"
         self._view_fbx = "Delete all .fbx in CDP…"
+        self._view_tips = "{}"
         self._glyph_back = glyph("arrow_back")
         self._glyph_expand = glyph("fullscreen")
         self._glyph_save = glyph("save")
@@ -116,14 +118,18 @@ class AssetsBridge(QObject):
         flags = getattr(side, "_action_enabled", {})
         rows = []
         for label, action, accent in _ACTIONS.get(page, []):
-            rows.append(
-                {
-                    "id": action,
-                    "label": t(label),
-                    "accent": bool(accent),
-                    "enabled": bool(flags.get(action, True)),
-                }
-            )
+            icon_name = _ACTION_ICONS.get(action, "")
+            mark = glyph(icon_name) if icon_name else ""
+            row = {
+                "id": action,
+                "label": t(label),
+                "accent": bool(accent),
+                "enabled": bool(flags.get(action, True)),
+            }
+            if mark:
+                row["glyph"] = mark
+                row["tip"] = t(label)
+            rows.append(row)
         self._actions = json.dumps(rows)
         foot = []
         if page == "packages":
@@ -137,6 +143,12 @@ class AssetsBridge(QObject):
                     }
                 )
         self._footer = json.dumps(foot)
+        self._queue_btns = json.dumps(
+            [
+                {"id": "remove", "glyph": glyph("delete"), "tip": t("Remove"), "accent": False},
+                {"id": "clear", "glyph": glyph("clear"), "tip": t("Clear queue"), "accent": False},
+            ]
+        )
         self._bump()
 
     def set_dock(self, on: bool, width: int) -> None:
@@ -196,6 +208,7 @@ class AssetsBridge(QObject):
     blurb = Property(str, lambda self: self._blurb, notify=changed)
     actionsJson = Property(str, lambda self: self._actions, notify=changed)
     footerJson = Property(str, lambda self: self._footer, notify=changed)
+    queueBtnJson = Property(str, lambda self: self._queue_btns, notify=changed)
     leftNavJson = Property(str, lambda self: self._left, notify=changed)
     rightNavJson = Property(str, lambda self: self._right, notify=changed)
     footerCap = Property(str, lambda self: self._footer_cap, notify=changed)
@@ -224,6 +237,7 @@ class AssetsBridge(QObject):
     glyphExpand = Property(str, lambda self: self._glyph_expand, notify=changed)
     glyphSave = Property(str, lambda self: self._glyph_save, notify=changed)
     glyphDelete = Property(str, lambda self: self._glyph_delete, notify=changed)
+    viewTips = Property(str, lambda self: self._view_tips, notify=changed)
     formOn = Property(bool, lambda self: self._form_on, notify=changed)
     formTitle = Property(str, lambda self: self._form_title, notify=changed)
     formTabs = Property(str, lambda self: self._form_tabs, notify=changed)
@@ -243,6 +257,14 @@ class AssetsBridge(QObject):
     def runAction(self, action: str) -> None:
         self._host.sidebar.native_action.emit(str(action))
 
+    @Slot()
+    def queueRemove(self) -> None:
+        self._host.packages_page.remove_selected_queue()
+
+    @Slot()
+    def queueClear(self) -> None:
+        self._host.packages_page.clear_queue()
+
     @Slot(float)
     def setSideW(self, w: float) -> None:
         self._side_w = max(320, min(560, int(w)))
@@ -253,6 +275,10 @@ class AssetsBridge(QObject):
         if not self._dock_on:
             return
         dmin, _pref, dmax = self._host._dock_width_budget()
+        window_w = int(self._host.width())
+        if window_w > 900:
+            room = window_w - self._side_w - 40 - 280
+            dmax = min(dmax, max(dmin, room))
         self._dock_w = max(dmin, min(dmax, int(w)))
         self._host._dock_width_saved = self._dock_w
         self._bump()
@@ -307,6 +333,23 @@ class AssetsBridge(QObject):
         self._view_repl = page.btn_repl.text()
         self._view_fbx = page.btn_del_all_fbx.text()
         self._glyph_expand = glyph("fullscreen_exit" if self._view_expanded else "fullscreen")
+        from ..i18n import t
+
+        self._view_tips = json.dumps(
+            {
+                "back": t("Back to parent CDP"),
+                "expand": t(
+                    "Restore Finder"
+                    if self._view_expanded
+                    else "Expand viewer — hide Finder (queue stays in sidebar)"
+                ),
+                "smaller": t("Smaller text (Ctrl+-)"),
+                "larger": t("Larger text (Ctrl+=)"),
+                "saveText": t("Save text…"),
+                "delete": t("Delete"),
+                "saveCdp": t("Save CDP…"),
+            }
+        )
         self._bump()
 
     def _page(self):
@@ -411,7 +454,7 @@ class AssetsBridge(QObject):
         if kind == "texture":
             title = host._tex_props_title.text()
             tabs = ["Params", "Maps", "Resize"]
-            tab = int(host._tex_side_stack.currentIndex())
+            tab = int(getattr(host, "_tex_side_index", host._tex_side_stack.currentIndex()))
             tool = tab == 1
             if tab == 0:
                 blocks = self._texture_param_blocks()
@@ -762,6 +805,18 @@ class AssetsBridge(QObject):
         if not self._form_tool:
             panel.hide()
             return
+        stack = getattr(self._host, "_tex_side_stack", None)
+        if stack is not None and stack.indexOf(panel) >= 0:
+            # Pulling the canvas out must not shift Resize off index 2.
+            idx = stack.indexOf(panel)
+            hold = getattr(self._host, "_tex_map_hold", None)
+            if hold is None:
+                hold = QWidget()
+                hold.setObjectName("texMapHold")
+                self._host._tex_map_hold = hold
+            stack.removeWidget(panel)
+            if stack.indexOf(hold) < 0:
+                stack.insertWidget(idx, hold)
         if panel.parent() is not self._host:
             panel.setParent(self._host)
         self._place(panel, x, y, w, h, hide_small=True)
