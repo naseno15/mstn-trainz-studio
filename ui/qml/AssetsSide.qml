@@ -8,8 +8,11 @@ GlassPlate {
     plateRadius: 16
     foot: 8
     property real footPad: 0
-    property real headH: head.height + 8
-    property real footH: foot.height + 8
+    // Plate face + body inset. The queue widget is placed against the outer plate, so these keep it off the header and the buttons.
+    readonly property real contentTop: 16
+    readonly property real contentBottom: 24
+    property real headH: contentTop + head.height + 10
+    property real footH: contentBottom + foot.height + 14
 
     readonly property color ink: bridge.dark ? "#f2f4f8" : "#1d1d1f"
     readonly property color mute: bridge.dark ? "#8b93a1" : "#5c6570"
