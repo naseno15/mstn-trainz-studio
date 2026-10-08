@@ -959,11 +959,13 @@ def apple_pop_pill(pill: QWidget, ms: int = 380) -> None:
 
     ponytail: no QGraphicsBlurEffect — blur blanks pills that are children of
     QOpenGLWidget (top/bottom chrome), leaving a black selector.
+    Skip while a slide is in flight — pop+slide fighting geometry feels stuttery.
     """
+    if getattr(pill, "_slide_anim", None) is not None:
+        return
     geo = pill.geometry()
     if geo.width() < 4 or geo.height() < 4:
         return
-    stop_slide(pill)
     stop_pop(pill)
     if pill.graphicsEffect() is not None:
         pill.setGraphicsEffect(None)
@@ -1014,8 +1016,8 @@ def animate_geometry(
 ) -> QPropertyAnimation:
     """Slide a floating panel (Editor dock overlay) — does not resize GL.
 
-    ``on_tick`` throttled only on low-end — on normal PCs every frame so chrome
-    tracks the dock (32ms throttle made slides look desynced/stuttery).
+    ``on_tick`` capped ~60Hz (16ms) so chrome tracks without layout storms.
+    Low-end stays at 32ms. Per-frame (0) was silky on paper but janked frost hosts.
     """
     from time import monotonic
 
@@ -1023,9 +1025,9 @@ def animate_geometry(
         try:
             from ..util.hw import prefer_instant_panels
 
-            min_frame_ms = 32 if prefer_instant_panels() else 0
+            min_frame_ms = 32 if prefer_instant_panels() else 16
         except Exception:
-            min_frame_ms = 0
+            min_frame_ms = 16
 
     prev = getattr(widget, "_geo_anim", None)
     if prev is not None:
@@ -1202,31 +1204,11 @@ def fade_overlay(overlay: QWidget, show: bool, ms: int = 200) -> None:
         anim.finished.connect(_hide)
 
 
-# Hub page directions — leave HOME toward editor / return reverse.
+# Hub page directions — kept for call-site / test API; fade cover ignores them.
 HUB_DIR_LEFT = "left"
 HUB_DIR_RIGHT = "right"
 HUB_DIR_UP = "up"
 HUB_DIR_DOWN = "down"
-
-
-def _draw_tracked_text(
-    p: QPainter,
-    text: str,
-    center: QRectF,
-    *,
-    tracking: float,
-) -> None:
-    """Draw centered text with optical letter-spacing (premium caption)."""
-    if not text:
-        return
-    fm = p.fontMetrics()
-    widths = [fm.horizontalAdvance(ch) for ch in text]
-    total = sum(widths) + tracking * max(0, len(text) - 1)
-    x = center.center().x() - total * 0.5
-    y = center.center().y() + (fm.ascent() - fm.descent()) * 0.5
-    for ch, w in zip(text, widths):
-        p.drawText(int(round(x)), int(round(y)), ch)
-        x += w + tracking
 
 
 def _downscale_snap(pm: QPixmap, max_edge: int = 1440) -> QPixmap:
@@ -1246,56 +1228,12 @@ def _downscale_snap(pm: QPixmap, max_edge: int = 1440) -> QPixmap:
     )
 
 
-def _make_caption_plate(
-    label: str,
-    *,
-    ink: QColor,
-    accent: QColor,
-    dark: bool,
-    width: int,
-) -> QPixmap:
-    """Bake tracked caption once — avoid per-frame glyph layout."""
-    if not label.strip():
-        return QPixmap()
-    text = label.strip().upper()
-    w = max(200, min(900, int(width * 0.55)))
-    h = 72
-    pm = QPixmap(w, h)
-    pm.fill(Qt.GlobalColor.transparent)
-    qp = QPainter(pm)
-    qp.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    qp.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-    font = QFont()
-    font.setPixelSize(18)
-    font.setWeight(QFont.Weight.DemiBold)
-    qp.setFont(font)
-    tracking = 3.2
-    qp.setPen(QPen(ink))
-    box = QRectF(0, 0, w, h * 0.72)
-    _draw_tracked_text(qp, text, box, tracking=tracking)
-    fm = qp.fontMetrics()
-    text_w = sum(fm.horizontalAdvance(ch) for ch in text) + tracking * max(0, len(text) - 1)
-    lx = (w - text_w) * 0.5
-    ly = h * 0.78
-    lg = QLinearGradient(lx, 0, lx + text_w, 0)
-    lg.setColorAt(0.0, QColor(accent.red(), accent.green(), accent.blue(), 0))
-    lg.setColorAt(0.5, QColor(accent.red(), accent.green(), accent.blue(), 200))
-    lg.setColorAt(1.0, QColor(accent.red(), accent.green(), accent.blue(), 0))
-    qp.fillRect(QRectF(lx, ly, text_w, 1.2), lg)
-    glow = QRadialGradient(QRectF(0, 0, w, h).center(), w * 0.35)
-    glow.setColorAt(0.0, QColor(accent.red(), accent.green(), accent.blue(), 36 if dark else 28))
-    glow.setColorAt(1.0, QColor(accent.red(), accent.green(), accent.blue(), 0))
-    qp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOver)
-    qp.fillRect(0, 0, w, h, glow)
-    qp.end()
-    return pm
-
-
 class HubRevealOverlay(QWidget):
-    """Premium HOME↔studio morph — light paint path for buttery frames.
+    """HOME↔studio cover — soft fade (optional tiny popup lift).
 
     ponytail: never put QGraphicsOpacityEffect on MainWindow / stacks that host
-    QOpenGLWidget. Sibling cover only: grab → switch under → cinematic reveal.
+    QOpenGLWidget. Sibling cover only: grab → switch under → fade cover away.
+    Silk: paint is one downscaled pixmap blit + opacity (no soft-shadow rings).
     """
 
     def __init__(self, parent: QWidget) -> None:
@@ -1306,13 +1244,7 @@ class HubRevealOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.hide()
         self._from_pm = QPixmap()
-        self._caption_pm = QPixmap()
         self._progress = 0.0
-        self._direction = HUB_DIR_LEFT
-        self._label = ""
-        self._accent = QColor("#ff5a1f")
-        self._ink = QColor("#f5f5f7")
-        self._dark = True
         self._anim: QVariantAnimation | None = None
         self._on_done: Callable[[], None] | None = None
 
@@ -1326,48 +1258,29 @@ class HubRevealOverlay(QWidget):
             self._anim = None
         self.hide()
         self._from_pm = QPixmap()
-        self._caption_pm = QPixmap()
         self._progress = 0.0
 
     def play(
         self,
         from_pm: QPixmap,
         *,
-        direction: str = HUB_DIR_LEFT,
-        label: str = "",
-        accent: QColor | None = None,
-        ink: QColor | None = None,
-        dark: bool = True,
-        ms: int = 720,
+        direction: str = HUB_DIR_LEFT,  # noqa: ARG002 — API compat; fade ignores dir
+        label: str = "",  # noqa: ARG002 — API compat; no caption plate
+        accent: QColor | None = None,  # noqa: ARG002
+        ink: QColor | None = None,  # noqa: ARG002
+        dark: bool = True,  # noqa: ARG002
+        ms: int = 260,
         on_done: Callable[[], None] | None = None,
     ) -> None:
-        """Cover with ``from_pm``, then morph it away to reveal the page under."""
+        """Cover with ``from_pm``, then fade it away to reveal the page under."""
+        del direction, label, accent, ink, dark
         if from_pm.isNull() or from_pm.width() < 8:
             if on_done is not None:
                 on_done()
             return
         self.stop()
-        if accent is not None:
-            self._accent = QColor(accent)
-        if ink is not None:
-            self._ink = QColor(ink)
-        self._dark = bool(dark)
-        self._label = label.strip()
-        self._direction = direction if direction in (
-            HUB_DIR_LEFT,
-            HUB_DIR_RIGHT,
-            HUB_DIR_UP,
-            HUB_DIR_DOWN,
-        ) else HUB_DIR_LEFT
         # Downscale once — painting full 4K grab every tick is the stutter.
         self._from_pm = _downscale_snap(from_pm)
-        self._caption_pm = _make_caption_plate(
-            self._label,
-            ink=self._ink,
-            accent=self._accent,
-            dark=self._dark,
-            width=max(from_pm.width(), 400),
-        )
         self._on_done = on_done
         self._progress = 0.0
         if self.width() < 8:
@@ -1379,11 +1292,10 @@ class HubRevealOverlay(QWidget):
         self.update()
 
         anim = QVariantAnimation(self)
-        anim.setDuration(max(280, int(ms)))
+        anim.setDuration(max(160, int(ms)))
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
-        # One smooth curve — multi-stage ease stacks felt like hitching.
-        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.valueChanged.connect(self._on_tick)
         anim.finished.connect(self._finish)
         self._anim = anim
@@ -1399,7 +1311,6 @@ class HubRevealOverlay(QWidget):
         self._on_done = None
         self.hide()
         self._from_pm = QPixmap()
-        self._caption_pm = QPixmap()
         self._progress = 0.0
         if cb is not None:
             cb()
@@ -1411,138 +1322,26 @@ class HubRevealOverlay(QWidget):
         if self._from_pm.isNull():
             return
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
         t = max(0.0, min(1.0, self._progress))
-        drift = t
-        fade = t * t
-        mid = 4.0 * t * (1.0 - t)
+        op = 1.0 - t
+        if op < 0.01:
+            return
         w, h = float(self.width()), float(self.height())
         if w < 2 or h < 2:
             return
-        full = QRectF(0, 0, w, h)
-        ac = self._accent
-
-        under_a = int(55 * (1.0 - fade))
-        if under_a > 2:
-            under = QRadialGradient(full.center(), max(w, h) * 0.7)
-            if self._dark:
-                under.setColorAt(0.0, QColor(22, 26, 32, under_a // 2))
-                under.setColorAt(1.0, QColor(0, 0, 0, under_a))
-            else:
-                under.setColorAt(0.0, QColor(255, 255, 255, under_a // 2))
-                under.setColorAt(1.0, QColor(200, 208, 216, under_a))
-            p.fillRect(full, under)
-
-        scale = 1.0 - 0.06 * drift
+        # Soft popup dismiss: tiny lift + scale while fading (not a directional wipe).
+        scale = 1.0 + 0.018 * t
         sw, sh = w * scale, h * scale
         ox = (w - sw) * 0.5
-        oy = (h - sh) * 0.5 - h * 0.01 * drift
-        travel = 0.88
-        if self._direction == HUB_DIR_LEFT:
-            ox -= w * travel * drift
-        elif self._direction == HUB_DIR_RIGHT:
-            ox += w * travel * drift
-        elif self._direction == HUB_DIR_UP:
-            oy -= h * travel * drift
-        else:
-            oy += h * travel * drift
-
-        plate = QRectF(ox, oy, sw, sh)
-        radius = 8.0 + 14.0 * drift
-        plate_op = max(0.0, 1.0 - 0.85 * fade)
-
-        if plate_op > 0.05:
-            sh_a = int(48 * plate_op)
-            shadow = QRectF(plate).adjusted(-12, 8, 12, 22)
-            sg = QRadialGradient(shadow.center(), max(shadow.width(), shadow.height()) * 0.5)
-            sg.setColorAt(0.0, QColor(0, 0, 0, sh_a))
-            sg.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(shadow, sg)
-
-        if plate_op > 0.02:
-            path = QPainterPath()
-            path.addRoundedRect(plate, radius, radius)
-            p.save()
-            p.setOpacity(plate_op)
-            p.setClipPath(path)
-            p.drawPixmap(plate, self._from_pm, QRectF(self._from_pm.rect()))
-            veil = QLinearGradient(plate.topLeft(), plate.bottomLeft())
-            if self._dark:
-                veil.setColorAt(0.0, QColor(255, 255, 255, int(14 + 18 * drift)))
-                veil.setColorAt(1.0, QColor(0, 0, 0, int(36 * drift)))
-            else:
-                veil.setColorAt(0.0, QColor(255, 255, 255, int(30 + 24 * drift)))
-                veil.setColorAt(1.0, QColor(190, 200, 210, int(28 * drift)))
-            p.fillRect(plate, veil)
-            p.restore()
-
-            rim = QPen(QColor(255, 255, 255, int((55 if self._dark else 90) * plate_op)))
-            rim.setWidthF(1.0)
-            p.setPen(rim)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(plate.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
-
-        if mid > 0.05 and plate_op > 0.05:
-            feather = max(36.0, min(w, h) * 0.08)
-            edge_a = int(70 * mid * plate_op)
-            if self._direction == HUB_DIR_LEFT:
-                x = plate.right()
-                eg = QLinearGradient(x - feather * 0.15, 0, x + feather, 0)
-                er = QRectF(x - feather * 0.15, plate.top(), feather * 1.15, plate.height())
-            elif self._direction == HUB_DIR_RIGHT:
-                x = plate.left()
-                eg = QLinearGradient(x - feather, 0, x + feather * 0.15, 0)
-                er = QRectF(x - feather, plate.top(), feather * 1.15, plate.height())
-            elif self._direction == HUB_DIR_UP:
-                y = plate.bottom()
-                eg = QLinearGradient(0, y - feather * 0.15, 0, y + feather)
-                er = QRectF(plate.left(), y - feather * 0.15, plate.width(), feather * 1.15)
-            else:
-                y = plate.top()
-                eg = QLinearGradient(0, y - feather, 0, y + feather * 0.15)
-                er = QRectF(plate.left(), y - feather, plate.width(), feather * 1.15)
-            eg.setColorAt(0.0, QColor(255, 255, 255, 0))
-            eg.setColorAt(0.4, QColor(255, 255, 255, edge_a))
-            eg.setColorAt(0.55, QColor(ac.red(), ac.green(), ac.blue(), int(edge_a * 0.45)))
-            eg.setColorAt(1.0, QColor(255, 255, 255, 0))
-            p.fillRect(er, eg)
-
-        if mid > 0.08:
-            band = max(40.0, min(w, h) * 0.09)
-            ba = int((22 if self._dark else 36) * mid)
-            if self._direction in (HUB_DIR_LEFT, HUB_DIR_RIGHT):
-                cx = w * (t if self._direction == HUB_DIR_LEFT else 1.0 - t)
-                sg = QLinearGradient(cx - band, 0, cx + band, 0)
-                sg.setColorAt(0.0, QColor(255, 255, 255, 0))
-                sg.setColorAt(0.5, QColor(255, 255, 255, ba))
-                sg.setColorAt(1.0, QColor(255, 255, 255, 0))
-                p.fillRect(QRectF(cx - band, 0, band * 2, h), sg)
-            else:
-                cy = h * (t if self._direction == HUB_DIR_UP else 1.0 - t)
-                sg = QLinearGradient(0, cy - band, 0, cy + band)
-                sg.setColorAt(0.0, QColor(255, 255, 255, 0))
-                sg.setColorAt(0.5, QColor(255, 255, 255, ba))
-                sg.setColorAt(1.0, QColor(255, 255, 255, 0))
-                p.fillRect(QRectF(0, cy - band, w, band * 2), sg)
-
-        if not self._caption_pm.isNull() and mid > 0.05:
-            cap_op = min(1.0, mid * 1.2) * (1.0 - 0.4 * fade)
-            cw = self._caption_pm.width()
-            ch = self._caption_pm.height()
-            dest = QRectF((w - cw) * 0.5, (h - ch) * 0.5, cw, ch)
-            p.setOpacity(cap_op)
-            p.drawPixmap(dest, self._caption_pm, QRectF(self._caption_pm.rect()))
-            p.setOpacity(1.0)
-
-        vig_a = int(70 * mid * (1.0 - fade))
-        if vig_a > 2:
-            vig = QRadialGradient(full.center(), max(w, h) * 0.8)
-            vig.setColorAt(0.0, QColor(0, 0, 0, 0))
-            vig.setColorAt(0.7, QColor(0, 0, 0, 0))
-            vig.setColorAt(1.0, QColor(0, 0, 0, vig_a if self._dark else vig_a // 2))
-            p.fillRect(full, vig)
+        oy = (h - sh) * 0.5 - h * 0.006 * t
+        p.setOpacity(op)
+        p.drawPixmap(
+            QRectF(ox, oy, sw, sh),
+            self._from_pm,
+            QRectF(self._from_pm.rect()),
+        )
 
 
 def animate_window_quit(
