@@ -358,7 +358,7 @@ class SoundsStudioHost(QWidget):
 
         from PySide6.QtWidgets import QVBoxLayout
 
-        from ..qml_host import _qml_ok, _quick, warm_quick
+        from ..qml_host import _qml_ok, _quick
 
         self._bridge = SoundsBridge(self)
         self._bridge.set_dark(self._theme != "light")
@@ -384,7 +384,6 @@ class SoundsStudioHost(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._view)
-        warm_quick(self._view)
         self.retranslate()
         self._refresh_slots_label()
         return True

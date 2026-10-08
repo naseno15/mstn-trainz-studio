@@ -2860,17 +2860,27 @@ class MainWindow(QMainWindow):
         # was still the cold paint, and the old idle timer froze HOME after entry.
         self._boot_batch = True
         try:
+            if on_stage is not None:
+                on_stage("Loading Sounds Studio", 62)
             self._ensure_sounds_host()
             self._expose_hub_page(HUB_SOUNDS)
+            if on_stage is not None:
+                on_stage("Loading Engine Tuner", 74)
             self._ensure_engine_host()
             self._expose_hub_page(HUB_ENGINE)
+            if on_stage is not None:
+                on_stage("Loading Assets Tools", 86)
             self._ensure_assets_host()
             self._expose_hub_page(HUB_ASSETS)
             assets = getattr(self, "_assets_host", None)
             if assets is not None:
+                if on_stage is not None:
+                    on_stage("Loading Texture / Mesh", 94)
                 assets.set_suite("texmesh")
                 self._expose_hub_page(HUB_ASSETS)
                 assets.set_suite("assets")
+            if on_stage is not None:
+                on_stage("Loading mesh preview", 98)
             self._idle_warm_assets_preview()
         finally:
             self._boot_batch = False

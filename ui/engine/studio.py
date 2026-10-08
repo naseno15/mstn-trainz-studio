@@ -500,6 +500,24 @@ class EngineBridge(QObject):
         self._simulation = "Simulation"
         self._parameters = "Parameters"
         self._auto_tune = "Auto Tune"
+        self._file_tips = "{}"
+        self._sync_file_tips()
+
+    def _sync_file_tips(self) -> None:
+        import json
+
+        from ..i18n import t
+
+        self._file_tips = json.dumps(
+            {
+                "open": t("Open enginespec…"),
+                "back": t("Return to Assets / CDP without writing (Save writes back)"),
+                "save": t("Save"),
+                "saveAs": t("Save As…"),
+                "undo": t("Undo"),
+                "redo": t("Redo"),
+            }
+        )
 
     def _bump(self) -> None:
         self.changed.emit()
@@ -509,6 +527,7 @@ class EngineBridge(QObject):
 
     def set_dark(self, on: bool) -> None:
         self._dark = bool(on)
+        self._sync_file_tips()
         self._bump()
 
     def get_page(self) -> str:
@@ -628,6 +647,7 @@ class EngineBridge(QObject):
     saveAsGlyph = Property(str, lambda self: self._save_as_glyph, notify=changed)
     undoGlyph = Property(str, lambda self: self._undo_glyph, notify=changed)
     redoGlyph = Property(str, lambda self: self._redo_glyph, notify=changed)
+    fileTips = Property(str, lambda self: self._file_tips, notify=changed)
     tuner = Property(str, get_tuner, notify=changed)
     simulation = Property(str, get_simulation, notify=changed)
     parameters = Property(str, get_parameters, notify=changed)
@@ -1010,7 +1030,7 @@ class EngineTunerHost(QWidget):
         """Sunk well + raised nav in QML. Sidebar, editors, and Auto Tune stay widgets."""
         from PySide6.QtQuickWidgets import QQuickWidget
 
-        from ..qml_host import _quick, warm_quick
+        from ..qml_host import _quick
         from .sidebar import _logo_pixmap
 
         qml = Path(__file__).resolve().parents[1] / "qml" / "EnginePage.qml"
@@ -1040,7 +1060,6 @@ class EngineTunerHost(QWidget):
         self.sidebar.hide()
         self._split.setHandleWidth(0)
         self._drop_center_plate()
-        warm_quick(view)
 
     def _clear_widget_fill(self, widget: QWidget, name: str) -> None:
         widget.setObjectName(name)

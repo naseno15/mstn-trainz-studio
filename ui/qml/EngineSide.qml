@@ -9,6 +9,15 @@ GlassPlate {
     foot: 8
     property real footPad: 0
 
+    function tip(key) {
+        try {
+            var bag = JSON.parse(bridge.fileTips)
+            return bag[key] || ""
+        } catch (e) {
+            return ""
+        }
+    }
+
     readonly property color ink: bridge.dark ? "#f2f4f8" : "#1d1d1f"
     readonly property color mute: bridge.dark ? "#8b93a1" : "#5c6570"
 
@@ -46,6 +55,7 @@ GlassPlate {
                 height: 40
                 accent: true
                 glyph: bridge.showBack ? bridge.backGlyph : bridge.openGlyph
+                tip: bridge.showBack ? side.tip("back") : side.tip("open")
                 fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                 onClicked: bridge.showBack ? bridge.goBack() : bridge.openFile()
             }
@@ -76,6 +86,7 @@ GlassPlate {
                     height: 36
                     accent: true
                     glyph: bridge.saveGlyph
+                    tip: side.tip("save")
                     fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                     onClicked: bridge.saveFile()
                 }
@@ -83,6 +94,7 @@ GlassPlate {
                     width: 36
                     height: 36
                     glyph: bridge.saveAsGlyph
+                    tip: side.tip("saveAs")
                     fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                     enabled: bridge.saveAsOn
                     onClicked: bridge.saveFileAs()
@@ -91,6 +103,7 @@ GlassPlate {
                     width: 36
                     height: 36
                     glyph: bridge.undoGlyph
+                    tip: side.tip("undo")
                     fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                     onClicked: bridge.undoEdit()
                 }
@@ -98,6 +111,7 @@ GlassPlate {
                     width: 36
                     height: 36
                     glyph: bridge.redoGlyph
+                    tip: side.tip("redo")
                     fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                     onClicked: bridge.redoEdit()
                 }
