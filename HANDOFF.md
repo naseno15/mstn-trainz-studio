@@ -1,6 +1,19 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-08 (Asia/Bangkok) — QML Engine Tuner chrome
+**Last updated:** 2026-10-08 (Asia/Bangkok) — QML right docks for Texture & Mesh
+
+### QML Assets Tools (2026-10-08)
+
+| Piece | Role |
+|--------|------|
+| `ui/qml/AssetsPage.qml` | Stage gradient, raised nav (Assets or Texture & Mesh Lods), sidebar + dock wells |
+| `ui/qml/AssetsSide.qml` | Logo, page title, action buttons, CDP icon row. Packages queue stays a widget in the well |
+| `ui/qml/AssetsViewer.qml` | Packages Viewer/Editor dock chrome. Preview stack stays a widget in the well |
+| `ui/qml/AssetsDock.qml` | Mesh Lods, Texture Params, Texture Editor, Texture Denoiser. Maps canvas and Packages preview stay widgets in the well |
+| `ui/assets/bridge.py` | Nav, actions, dock width, and the form the right dock paints |
+| Buttons | Same `RaiseButton` / `GlassPlate` as Engine Tuner |
+| Paint | Entering Texture & Mesh froze the page stack for the old dock lerp. QML skips that lerp and turns painting back on |
+| Widget nav | Hidden while QML is up — one bottom bar |
 
 ### QML Engine Tuner (2026-10-08)
 
@@ -10,7 +23,7 @@
 | `EngineTunerHost._mount_qml` | Sidebar, throttle/sim/parameter editors, and Auto Tune drawer stay widgets inside the well |
 | `ui/qml/EngineAuto.qml` | Right Auto Tune dock in QML. Hidden widget panel still runs Preview / Apply |
 | Buttons | `RaiseButton.qml` is raised glass. Fields and tables use `SunkField.qml` (sunk). Keep that for every QML control |
-| Warm | Sounds + Engine Tuner are built and painted once before the boot cover drops. Nothing heavy is scheduled after Home is shown |
+| Warm | Sounds, Engine Tuner, Assets Tools, and Texture/Mesh are built and painted once before the boot cover drops |
 | `ui/qml/GlassPlate.qml` | Soft multi-ring floor shadow + inner lip on the glass (Home, Sounds, title) |
 | Fallback | Widget nav stays if the QML page fails to load |
 
