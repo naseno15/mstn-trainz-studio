@@ -189,23 +189,186 @@ def view_param_channels(
     """Preview composite or solo channel as grayscale RGB."""
     src = np.asarray(rgba, dtype=np.uint8)
     if solo in CHANNEL_KEYS:
-        gray = src[..., CHANNEL_INDEX[solo]]
-        out = np.empty_like(src)
-        out[..., 0] = gray
-        out[..., 1] = gray
-        out[..., 2] = gray
-        out[..., 3] = 255
-        return out
-    out = src.copy()
-    if not r:
-        out[..., 0] = 0
-    if not g:
-        out[..., 1] = 0
-    if not b:
-        out[..., 2] = 0
-    if not a:
-        out[..., 3] = 255
+        return view_channel_color(src, solo)
+    return view_param_composite(src, r=r, g=g, b=b, a=a)
+
+
+def view_param_composite(
+    rgba: np.ndarray,
+    *,
+    r: bool = True,
+    g: bool = True,
+    b: bool = True,
+    a: bool = True,
+) -> np.ndarray:
+    """Opaque RGB of the ticked channels. Metallic screens on so A stays visible."""
+    src = np.asarray(rgba, dtype=np.uint8)
+    rgb = np.zeros(src.shape[:2] + (3,), dtype=np.float32)
+    if r:
+        rgb[..., 0] = src[..., 0]
+    if g:
+        rgb[..., 1] = src[..., 1]
+    if b:
+        rgb[..., 2] = src[..., 2]
+    if a:
+        # Half-strength screen — full metal would wipe the color to white.
+        metal = src[..., 3].astype(np.float32) / 255.0 * 0.55
+        rgb += (255.0 - rgb) * metal[..., None]
+    out = np.empty_like(src)
+    out[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+    out[..., 3] = 255
     return out
+
+
+def luminance(src: np.ndarray) -> np.ndarray:
+    """One gray plane. A color image uses Rec.601. A gray image stays as-is."""
+    rgba = _as_rgba(src)
+    r = rgba[..., 0].astype(np.float32)
+    g = rgba[..., 1].astype(np.float32)
+    b = rgba[..., 2].astype(np.float32)
+    return (0.299 * r + 0.587 * g + 0.114 * b).astype(np.uint8)
+
+
+def view_plane(plane: np.ndarray, key: str, *, gray: bool) -> np.ndarray:
+    """Preview one channel. ``gray`` forces black-and-white for every channel."""
+    src = np.asarray(plane, dtype=np.uint8)
+    out = np.zeros(src.shape + (4,), dtype=np.uint8)
+    if gray or key == "A":
+        out[..., 0] = src
+        out[..., 1] = src
+        out[..., 2] = src
+    elif key == "R":
+        out[..., 0] = src
+    elif key == "G":
+        out[..., 1] = src
+    else:
+        out[..., 2] = src
+    out[..., 3] = 255
+    return out
+
+
+def downscale_rgba(rgba: np.ndarray, max_edge: int) -> np.ndarray:
+    """Shrink so the long side is at most ``max_edge``. Preview only."""
+    src = np.asarray(rgba, dtype=np.uint8)
+    height, width = src.shape[:2]
+    long_side = max(height, width, 1)
+    if long_side <= max_edge:
+        return src
+    scale = max_edge / long_side
+    return cv2.resize(
+        src,
+        (max(1, int(width * scale)), max(1, int(height * scale))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
+def view_channel_color(rgba: np.ndarray, key: str) -> np.ndarray:
+    """One channel in its own color. A is white."""
+    src = np.asarray(rgba, dtype=np.uint8)
+    gray = src[..., CHANNEL_INDEX[key]]
+    out = np.zeros_like(src)
+    slots = {"R": (0,), "G": (1,), "B": (2,), "A": (0, 1, 2)}[key]
+    for slot in slots:
+        out[..., slot] = gray
+    out[..., 3] = 255
+    return out
+
+
+def magic_mask(
+    rgba: np.ndarray,
+    x: float,
+    y: float,
+    tol: int = 24,
+    contiguous: bool = True,
+) -> np.ndarray:
+    """Pixels whose RGBA is within ``tol`` of the seed. Contiguous = one island."""
+    src = np.asarray(rgba, dtype=np.uint8)
+    height, width = src.shape[:2]
+    xi = int(np.clip(round(x), 0, width - 1))
+    yi = int(np.clip(round(y), 0, height - 1))
+    seed = src[yi, xi].astype(np.int16)
+    near = np.max(np.abs(src.astype(np.int16) - seed), axis=2) <= int(tol)
+    if not contiguous:
+        return near
+    _count, labels = cv2.connectedComponents(near.astype(np.uint8), connectivity=4)
+    island = int(labels[yi, xi])
+    if island == 0:
+        picked = np.zeros((height, width), dtype=bool)
+        picked[yi, xi] = True
+        return picked
+    return labels == island
+
+
+def apply_stamp_at(
+    rgba: np.ndarray,
+    selected: set[str],
+    src: np.ndarray,
+    x: float,
+    y: float,
+    mode: str = "blend",
+    opacity: float = 1.0,
+    source_channel: str = "gray",
+    mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Paste ``src`` with its top-left at pixel (x, y)."""
+    out = np.asarray(rgba, dtype=np.uint8).copy()
+    if not selected:
+        return out
+    src_rgba = _as_rgba(src)
+    sh, sw = src_rgba.shape[:2]
+    height, width = out.shape[:2]
+    x0, y0 = int(round(x)), int(round(y))
+    x1, y1 = x0 + sw, y0 + sh
+    sx0 = sy0 = 0
+    if x0 < 0:
+        sx0 = -x0
+        x0 = 0
+    if y0 < 0:
+        sy0 = -y0
+        y0 = 0
+    if x1 > width:
+        x1 = width
+    if y1 > height:
+        y1 = height
+    if x0 >= x1 or y0 >= y1:
+        return out
+    crop = src_rgba[sy0 : sy0 + (y1 - y0), sx0 : sx0 + (x1 - x0)]
+    stamped = apply_overlay(
+        out[y0:y1, x0:x1],
+        selected,
+        crop,
+        mode=mode,
+        opacity=opacity,
+        source_channel=source_channel,
+    )
+    if mask is not None:
+        keep = mask[y0:y1, x0:x1].astype(np.float32)[..., None]
+        orig = out[y0:y1, x0:x1].astype(np.float32)
+        stamped = np.clip(
+            orig * (1.0 - keep) + stamped.astype(np.float32) * keep, 0, 255
+        ).astype(np.uint8)
+    out[y0:y1, x0:x1] = stamped
+    return out
+
+
+def _self_check() -> None:
+    img = np.zeros((4, 4, 4), np.uint8)
+    img[..., 0] = 200
+    img[..., 3] = 255
+    view = view_param_composite(img, r=True, g=False, b=False, a=True)
+    assert int(view[0, 0, 0]) > 200
+    assert int(view[0, 0, 1]) > 100
+    img[1, 1] = (10, 10, 10, 10)
+    img[1, 2] = (12, 12, 12, 12)
+    img[2, 2] = (200, 0, 0, 0)
+    picked = magic_mask(img, 1, 1, tol=8, contiguous=True)
+    assert bool(picked[1, 2]) and not bool(picked[2, 2])
+    gray = luminance(np.array([[[255, 0, 0, 255]]], np.uint8))
+    assert int(gray[0, 0]) == 76
+    small = downscale_rgba(np.zeros((80, 40, 4), np.uint8), 20)
+    assert max(small.shape[:2]) <= 20
+    stamped = apply_stamp_at(img, {"R"}, np.full((2, 2, 4), 80, np.uint8), 1, 1)
+    assert int(stamped[1, 1, 0]) != int(img[1, 1, 0])
 
 
 def _brush_mask(radius: int, hardness: float) -> np.ndarray:
@@ -232,6 +395,7 @@ def paint_dab(
     value: int,
     hardness: float = 0.6,
     opacity: float = 1.0,
+    mask: np.ndarray | None = None,
 ) -> None:
     """Paint one dab in-place onto selected RGBA channels."""
     if not selected or rgba is None:
@@ -260,6 +424,8 @@ def paint_dab(
         return
 
     strength = kernel[ky0:ky1, kx0:kx1]
+    if mask is not None:
+        strength = strength * mask[y0:y1, x0:x1].astype(np.float32)
     v = float(np.clip(value, 0, 255))
     for key in selected:
         i = CHANNEL_INDEX[key]
@@ -280,6 +446,7 @@ def paint_line(
     value: int,
     hardness: float = 0.6,
     opacity: float = 1.0,
+    mask: np.ndarray | None = None,
 ) -> None:
     dx = x1 - x0
     dy = y1 - y0
@@ -297,6 +464,7 @@ def paint_line(
             value,
             hardness=hardness,
             opacity=opacity,
+            mask=mask,
         )
 
 
