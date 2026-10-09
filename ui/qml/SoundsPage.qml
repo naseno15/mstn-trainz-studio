@@ -21,7 +21,7 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             Text {
-                text: bridge.title
+                text: (typeof bridge.title === "string" ? qsTr(bridge.title) : bridge.title)
                 color: root.ink
                 font.pixelSize: 18
                 font.bold: true
@@ -37,7 +37,7 @@ Item {
                 Text {
                     id: ffLabel
                     anchors.centerIn: parent
-                    text: bridge.ffmpegBtn
+                    text: (typeof bridge.ffmpegBtn === "string" ? qsTr(bridge.ffmpegBtn) : bridge.ffmpegBtn)
                     color: ffHover.hovered ? "#ffffff" : root.ink
                     font.pixelSize: 13
                 }
@@ -48,7 +48,7 @@ Item {
 
         Text {
             Layout.fillWidth: true
-            text: bridge.ffmpeg
+            text: (typeof bridge.ffmpeg === "string" ? qsTr(bridge.ffmpeg) : bridge.ffmpeg)
             color: root.mute
             font.pixelSize: 12
             elide: Text.ElideRight
@@ -88,7 +88,7 @@ Item {
                                 anchors.left: parent.left
                                 anchors.leftMargin: 8
                                 anchors.right: parent.right
-                                text: modelData
+                                text: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                                 color: index === clips.currentIndex ? "#ffffff" : root.ink
                                 font.pixelSize: 12
                                 elide: Text.ElideRight
@@ -105,7 +105,7 @@ Item {
                         color: openHover.hovered ? "#ff5a1f" : (bridge.dark ? "#2a3340" : "#ffffff")
                         Text {
                             anchors.centerIn: parent
-                            text: bridge.openGlyph
+                            text: (typeof bridge.openGlyph === "string" ? qsTr(bridge.openGlyph) : bridge.openGlyph)
                             font.family: bridge.iconFont
                             font.pixelSize: 20
                             color: "#ff5a1f"
@@ -115,13 +115,13 @@ Item {
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: bridge.dropHint
+                        text: (typeof bridge.dropHint === "string" ? qsTr(bridge.dropHint) : bridge.dropHint)
                         color: root.mute
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
                     }
                 }
-                DropArea {
+                DropZone {
                     anchors.fill: parent
                     onDropped: function (drop) {
                         var urls = []
@@ -143,7 +143,7 @@ Item {
                     anchors.margins: 8
                     Text {
                         Layout.fillWidth: true
-                        text: bridge.meta
+                        text: (typeof bridge.meta === "string" ? qsTr(bridge.meta) : bridge.meta)
                         color: root.mute
                         font.pixelSize: 12
                         elide: Text.ElideRight
@@ -164,7 +164,7 @@ Item {
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: bridge.amp
+                        text: (typeof bridge.amp === "string" ? qsTr(bridge.amp) : bridge.amp)
                         color: root.mute
                         font.pixelSize: 12
                     }
@@ -189,7 +189,7 @@ Item {
                         Text {
                             id: qcText
                             width: parent.width
-                            text: bridge.qc
+                            text: (typeof bridge.qc === "string" ? qsTr(bridge.qc) : bridge.qc)
                             color: root.ink
                             font.pixelSize: 12
                             font.family: "Consolas"
@@ -228,7 +228,7 @@ Item {
                         Text {
                             id: lab
                             anchors.centerIn: parent
-                            text: modelData.label
+                            text: (typeof modelData.label === "string" ? qsTr(modelData.label) : modelData.label)
                             color: modelData.act === "ab" ? "#ffffff" : root.ink
                             font.pixelSize: 13
                         }
@@ -276,7 +276,7 @@ Item {
                         Text {
                             id: t
                             anchors.centerIn: parent
-                            text: modelData.label
+                            text: (typeof modelData.label === "string" ? qsTr(modelData.label) : modelData.label)
                             color: modelData.accent ? "#ffffff" : root.ink
                             font.pixelSize: 13
                         }
@@ -298,7 +298,7 @@ Item {
                     color: "#ff5a1f"
                     Text {
                         anchors.centerIn: parent
-                        text: bridge.saveGlyph
+                        text: (typeof bridge.saveGlyph === "string" ? qsTr(bridge.saveGlyph) : bridge.saveGlyph)
                         font.family: bridge.iconFont
                         font.pixelSize: 16
                         color: "#ffffff"
@@ -306,7 +306,7 @@ Item {
                     TapHandler { onTapped: bridge.saveAs() }
                 }
                 Text {
-                    text: bridge.barTip
+                    text: (typeof bridge.barTip === "string" ? qsTr(bridge.barTip) : bridge.barTip)
                     color: root.mute
                     font.pixelSize: 11
                     Layout.fillWidth: true
@@ -326,7 +326,7 @@ Item {
             Text {
                 id: homeLab
                 anchors.centerIn: parent
-                text: bridge.homeLabel
+                text: (typeof bridge.homeLabel === "string" ? qsTr(bridge.homeLabel) : bridge.homeLabel)
                 color: homeHover.hovered ? "#ffffff" : root.ink
                 font.pixelSize: 13
                 font.bold: true
