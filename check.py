@@ -502,11 +502,13 @@ def test_param_map_and_bake_denoise() -> None:
         apply_offset,
         apply_scale,
         channel_stats,
+        _self_check,
         paint_dab,
         save_parameter,
     )
     from trainz_studio import PKG_ROOT
 
+    _self_check()
     rgba = np.zeros((16, 16, 4), dtype=np.uint8)
     rgba[..., 0] = 10
     rgba[..., 1] = 80
@@ -1779,9 +1781,20 @@ def test_float_chrome_bookends() -> None:
     assert not assets._right_dock_host.isHidden()
     assets._on_page("meshops")
     assert assets._right_dock.currentIndex() == 1
+    from trainz_studio.io.param_map_edit import _self_check
+
+    _self_check()
     assets._on_page("parameter")
     assert assets._sub_page == "parameter"
     assert hasattr(assets, "param_page")
+    assert assets.param_page.strip_rail is not None
+    assets._assets_bridge.sync_form()
+    assert "Paint" in assets._assets_bridge.formTabs
+    assets._assets_bridge.setFormTab(2)
+    assert assets.param_page._tool_tab == 2
+    assert assets.param_page._top._mode == "brush"
+    assets._assets_bridge.setDockField("paintTool", "Magic")
+    assert assets.param_page._top._mode == "magic"
     assert assets._right_dock.currentIndex() == 2
     assert not assets._right_dock_host.isHidden()
     assets._on_page("denoise")
