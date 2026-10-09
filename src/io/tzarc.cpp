@@ -102,9 +102,14 @@ const Entry* config_entry(const std::vector<Entry>& entries) {
     return best;
 }
 
-}  // namespace
+struct View {
+    std::vector<uint8_t> blob;
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+    std::vector<Entry> entries;
+};
 
-std::vector<uint8_t> read_tzarc_config(const uint8_t* data, size_t size) {
+View open_view(const uint8_t* data, size_t size) {
     need(size, 12, "not a tzarc");
     if (std::memcmp(data, "TZac", 4) != 0) throw std::runtime_error("not a tzarc");
     uint32_t be = rd_u32be(data + 4);
@@ -119,21 +124,57 @@ std::vector<uint8_t> read_tzarc_config(const uint8_t* data, size_t size) {
     } else {
         throw std::runtime_error("tzarc version not supported");
     }
-    std::vector<uint8_t> blob;
-    const uint8_t* view = data;
-    size_t view_size = size;
+    View out;
     if (version == 2) {
-        blob = inflate_v2(data, size);
-        view = blob.data();
-        view_size = blob.size();
+        out.blob = inflate_v2(data, size);
+        out.data = out.blob.data();
+        out.size = out.blob.size();
         big = true;
     } else {
-        view = data + 8;
-        view_size = size - 8;
+        out.data = data + 8;
+        out.size = size - 8;
     }
-    std::vector<Entry> entries = parse_directory(view, view_size, big);
-    const Entry* hit = config_entry(entries);
+    out.entries = parse_directory(out.data, out.size, big);
+    return out;
+}
+
+std::vector<uint8_t> slice(const View& view, const Entry* hit) {
     if (hit == nullptr) return {};
-    if (hit->offset + hit->size > view_size) throw std::runtime_error("tzarc payloads overrun blob");
-    return std::vector<uint8_t>(view + hit->offset, view + hit->offset + hit->size);
+    if (hit->offset + hit->size > view.size) throw std::runtime_error("tzarc payloads overrun blob");
+    return std::vector<uint8_t>(view.data + hit->offset, view.data + hit->offset + hit->size);
+}
+
+}  // namespace
+
+std::vector<uint8_t> read_tzarc_config(const uint8_t* data, size_t size) {
+    const View view = open_view(data, size);
+    return slice(view, config_entry(view.entries));
+}
+
+std::vector<std::pair<std::string, std::vector<uint8_t>>> read_tzarc_all(const uint8_t* data, size_t size) {
+    const View view = open_view(data, size);
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> out;
+    for (const Entry& entry : view.entries) out.emplace_back(entry.name, slice(view, &entry));
+    return out;
+}
+
+std::vector<uint8_t> read_tzarc_named(const uint8_t* data, size_t size, const std::vector<std::string>& names) {
+    const View view = open_view(data, size);
+    for (const std::string& wanted : names) {
+        std::string path = wanted;
+        for (char& c : path) {
+            if (c == '\\') c = '/';
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        }
+        const std::string base = base_name(wanted);
+        for (const Entry& entry : view.entries) {
+            std::string full = entry.name;
+            for (char& c : full) {
+                if (c == '\\') c = '/';
+                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            }
+            if (full == path || base_name(entry.name) == base) return slice(view, &entry);
+        }
+    }
+    return {};
 }
