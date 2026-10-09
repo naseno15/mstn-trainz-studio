@@ -380,9 +380,24 @@ def test_i18n_catalogs_and_fonts() -> None:
         assert gid in catalog_th.GLOSSARY
         assert gid in catalog_ja.GLOSSARY
         assert gid in catalog_id.GLOSSARY
+    from PySide6.QtGui import QFont, QFontInfo
+
+    from trainz_studio.ui.i18n import ui_font
+
     ensure_ui_fonts()
-    assert "Noto" in family_for("en") or "Sans" in family_for("en")
+    assert family_for("en") == "Noto Sans"
+    assert "Thai Looped" in family_for("th")
     assert "CJK" in family_for("ja") or "JP" in family_for("ja")
+    en_font = ui_font("en", 13)
+    assert en_font.families()[:1] == ["Noto Sans"]
+    assert "Noto Sans CJK JP" in en_font.families()
+    assert "Noto Sans Thai Looped" in en_font.families()
+    en = QFontInfo(en_font)
+    assert en.family() == "Noto Sans" and en.weight() == 400
+    assert "Thin" not in en.styleName() and "Condensed" not in en.styleName()
+    en_bold = QFontInfo(ui_font("en", 13, QFont.Weight.Bold))
+    assert en_bold.family() == "Noto Sans" and en_bold.weight() == 700
+    assert "Thai Looped" in QFontInfo(ui_font("th", 13)).family()
     set_language("en", persist=False)
     assert t("File") == "File"
     set_language("th", persist=False)
@@ -399,6 +414,7 @@ def test_i18n_catalogs_and_fonts() -> None:
     from trainz_studio.ui.theme import font_stack, stylesheet, palette as theme_palette
 
     assert "Noto Sans" in font_stack("id")
+    assert "CJK" in font_stack("th")
     assert "CJK" in font_stack("ja") or "JP" in font_stack("ja")
     sheet = stylesheet(theme_palette("dark"))
     assert "font-family:" in sheet and "Noto" in sheet
@@ -1017,6 +1033,47 @@ def test_boot_prewarms_gl_before_show() -> None:
     assert callable(getattr(LoadingOverlay, "mousePressEvent", None))
     assert callable(begin_frameless_move)
     assert begin_frameless_move(None) is False
+    assert "preload_progress" in src
+    assert "overlay.log" in src
+    warm = inspect.getsource(MainWindow.warmup_hub_studios)
+    assert "_expose_hub_page" not in warm
+    assert "_ensure_sounds_host" not in warm
+    assert "_ensure_trainzutil_host" not in warm
+    assert "_finish_build_cover" in inspect.getsource(MainWindow._ensure_sounds_host)
+
+
+def test_boot_overlay_log_and_easing_bar() -> None:
+    """Boot card names the call, and the bar target is ahead of the eased fill."""
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    from trainz_studio.ui.app import LoadingOverlay
+    from trainz_studio.util.preload import _HUB_MODULES, preload_progress
+
+    app = QApplication.instance() or QApplication([])
+    host = QWidget()
+    overlay = LoadingOverlay(host)
+    overlay.log("import trainz_studio.ui.engine")
+    overlay.set_stage("Calling build_sounds_studio", 62)
+    text = overlay.log_text()
+    assert "import trainz_studio.ui.engine" in text
+    assert "Calling build_sounds_studio" in text
+    from trainz_studio.util.preload import boot_log, set_boot_logger
+
+    lines: list[str] = []
+    set_boot_logger(lines.append)
+    boot_log("Mesh · EditorWorkspace")
+    assert any("EditorWorkspace" in line and "s  " in line for line in lines)
+    set_boot_logger(None)
+    assert overlay.bar.value() == 62
+    assert overlay.bar.shown() < 62
+    from PySide6.QtWidgets import QSizePolicy
+
+    assert overlay._card.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
+    assert overlay.log_view.maximumHeight() <= 92
+    _name, _done, total = preload_progress()
+    assert total == len(_HUB_MODULES)
+    host.deleteLater()
+    del app
 
 
 def test_hub_reveal_overlay_plays() -> None:
@@ -1317,6 +1374,36 @@ def test_glass_tip_wraps_long_text() -> None:
     assert tip.height() > line_h + GlassTipBubble._PAD_Y * 2 + GlassTipBubble._CARET
 
 
+def test_qt_tooltip_uses_glass_bubble() -> None:
+    """setToolTip must pop a GlassTipBubble and not the native flat tip."""
+    from PySide6.QtCore import QEvent, QPoint
+    from PySide6.QtGui import QHelpEvent
+    from PySide6.QtWidgets import QApplication, QPushButton, QWidget
+
+    from trainz_studio.ui.motion import GlassTipBubble, install_button_hover_chrome
+
+    app = QApplication.instance() or QApplication([])
+    chrome = install_button_hover_chrome(app)
+    win = QWidget()
+    win.resize(320, 200)
+    btn = QPushButton("Save", win)
+    btn.setToolTip("Write the file — extra note")
+    btn.setGeometry(40, 80, 80, 28)
+    win.show()
+    app.processEvents()
+    pos = btn.rect().center()
+    ev = QHelpEvent(QEvent.Type.ToolTip, pos, btn.mapToGlobal(pos))
+    assert app.sendEvent(btn, ev) is True
+    tip = getattr(win, "_icon_glass_tip", None)
+    assert isinstance(tip, GlassTipBubble)
+    assert tip.isVisible()
+    assert tip._text == "Write the file"
+    assert chrome._qt_tip_owner is btn
+    chrome.clear()
+    assert not tip.isVisible()
+    win.close()
+
+
 def test_button_hover_chrome_install() -> None:
     from PySide6.QtWidgets import QApplication
 
@@ -1354,7 +1441,8 @@ def test_animate_window_quit() -> None:
 
     loop = QEventLoop()
     animate_window_quit(win, _finish, ms=80)
-    QTimer.singleShot(600, loop.quit)
+    # Watchdog only — after the full suite the GUI queue can take >600ms to start this 80ms fade.
+    QTimer.singleShot(3000, loop.quit)
     loop.exec()
     assert done["ok"]
     assert win.graphicsEffect() is None
@@ -1380,6 +1468,8 @@ def test_crash_dialog_quit_flag() -> None:
     )
     assert err._quit_on_ok is True
     assert warn._quit_on_ok is False
+    assert err.ok, [str(item) for item in err._view.errors()]
+    assert warn.ok
     err.deleteLater()
     warn.deleteLater()
     del app
@@ -1403,6 +1493,7 @@ def test_status_toast_save_detect() -> None:
     assert is_save_notice("Exported → config.txt")
     assert is_save_notice("บันทึกแล้ว — CDP")
     assert not is_save_notice("Autosaved · demo.mtzs")
+    assert not is_save_notice("Edited — unsaved")
     assert not is_save_notice("Save .trainzmesh failed")
     assert not is_save_notice("Applied — Save to write")
     assert parse_progress_pct("Loading mesh… 42%") == 42
@@ -1424,9 +1515,23 @@ def test_status_toast_save_detect() -> None:
         "Done",
         "Handing off · 4 textures ready",
     )
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    from trainz_studio.ui.status_toast import GlassToastBubble
 
     app = QApplication.instance() or QApplication([])
+    host = QWidget()
+    host.resize(900, 600)
+    bubble = GlassToastBubble(
+        host, kind="save", title="Saved", detail="config.txt", ms=0
+    )
+    app.processEvents()
+    assert bubble.width() >= 300
+    assert bubble.height() >= 48
+    assert bubble._title.height() >= 14
+    assert bubble._detail.height() >= 14
+    bubble.deleteLater()
+    host.deleteLater()
     bar = StudioStatusBar()
     noticed: list[str] = []
     prog: list[tuple[str, int]] = []
@@ -1611,7 +1716,22 @@ def test_float_chrome_bookends() -> None:
     from trainz_studio.ui.assets.nav import AssetsPageNav, AssetsSubNav
     from trainz_studio.ui.assets.studio import AssetsStudioHost
 
-    assert AssetsPageNav.SUITE_PAGES["assets"][0] == ("packages", "config", "kuid")
+    assert AssetsPageNav.SUITE_PAGES["assets"][0] == (
+        "packages",
+        "config",
+        "kuid",
+        "export",
+    )
+    from trainz_studio.io.cdp_export import _self_check as _cdp_export_check
+    from trainz_studio.ui.assets.kuid import extract_kuids
+
+    _cdp_export_check()
+    pasted = "<kuid:1:2>,<kuid:3:4> <kuid:5:6>\n<kuid:1:2>"
+    assert [k.format() for k in extract_kuids(pasted)] == [
+        "<kuid:1:2>",
+        "<kuid:3:4>",
+        "<kuid:5:6>",
+    ]
     assert AssetsPageNav.SUITE_PAGES["texmesh"][0] == (
         "meshops",
         "texture",
@@ -1631,6 +1751,8 @@ def test_float_chrome_bookends() -> None:
     assert assets._main_split.indexOf(assets.sidebar) == 0
     qml = getattr(assets, "_assets_view", None)
     assert qml is not None and assets._assets_bridge.page == "packages"
+    assert isinstance(assets._assets_bridge._page, str)
+    assets._assets_bridge.setViewerPane(0)
     assert assets._assets_bridge.dockOn
     if qml is None:
         assert assets._main_split.indexOf(assets._right_dock_host) == 2
@@ -1839,11 +1961,12 @@ def test_home_glass_hub() -> None:
         on_engine=lambda: hits.append("engine"),
         on_assets=lambda: hits.append("assets"),
         on_texmesh=lambda: hits.append("texmesh"),
+        on_trainzutil=lambda: hits.append("trainzutil"),
         on_drop=lambda _p: None,
         theme_mode="dark",
     )
     cards = page.findChildren(HomeStudioCard)
-    assert len(cards) == 5
+    assert len(cards) == 6
     assert page.findChildren(QPushButton) == []
     assert cards[0]._icon_lab.width() >= 64
     titles = [c._title_src for c in cards]
@@ -2009,8 +2132,379 @@ def test_frost_shadow_room() -> None:
     del app
 
 
+def test_old_meta_cache_is_a_hit() -> None:
+    """A 3-field author cache must not reopen the tzarc. That reopen stuttered the app."""
+    import json
+    import struct
+
+    from trainz_studio.io.trainz_install import scan_archive_meta
+
+    root = Path(tempfile.mkdtemp(prefix="mstn-tu-meta-"))
+    packed = bytearray(b"TZac")
+    packed += struct.pack(">I", 1)
+    payload = 'author "Boonnop"\ntrainz-build 4.6\nusername "キハ40"\n'.encode("utf-8")
+    name = b"config.txt"
+    packed += struct.pack(">I", 1)
+    packed += bytes([len(name)]) + name + struct.pack(">Q", len(payload))
+    packed += b"\x00\x00\x00\x00"
+    packed += payload
+    tzarc = root / "local" / "hash-00" / "kuid 9 9.tzarc"
+    tzarc.parent.mkdir(parents=True)
+    tzarc.write_bytes(packed)
+    cache = root / "meta-old.json"
+    cache.write_text(
+        json.dumps({"<kuid:9:9>": ["Boonnop", "4.6", tzarc.stat().st_mtime_ns]}),
+        encoding="utf-8",
+    )
+    seen: list[tuple] = []
+    scan_archive_meta(
+        [root],
+        on_batch=lambda authors, builds, names, finished: seen.append((authors, builds, names, finished)),
+        cache_path=cache,
+    )
+    assert any(batch[0].get("<kuid:9:9>") == "Boonnop" for batch in seen)
+    assert all(batch[2].get("<kuid:9:9>", "") == "" for batch in seen)
+    from trainz_studio.io.trainz_install import _read_cores
+    from trainz_studio.util.hw import cpu_count
+
+    assert _read_cores(10_000) == cpu_count()
+
+
+def test_trainz_install_scan() -> None:
+    """Zip members become install jobs. Unsafe paths and a missing launcher stay out."""
+    import io
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QApplication
+
+    from trainz_studio.io.trainz_install import (
+        decode_status,
+        launcher_blocked,
+        scan_nested_zip,
+        scan_path,
+        stage_job,
+        trainzutil_under_common,
+    )
+    from trainz_studio.ui.trainzutil_host import TrainzUtilHost
+
+    app = QApplication.instance() or QApplication([])
+    del app
+    root = Path(tempfile.mkdtemp(prefix="mstn-tu-test-"))
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as nested:
+        nested.writestr("wagon/config.txt", 'kuid <kuid:1:3>\n')
+    with zipfile.ZipFile(root / "pack.zip", "w") as zf:
+        zf.writestr("loco/config.txt", 'kuid <kuid:1:2>\n')
+        zf.writestr("loco/body.im", b"x")
+        zf.writestr("extra.cdp", b"cdp-bytes")
+        zf.writestr("../evil.cdp", b"nope")
+        zf.writestr("nested.zip", inner.getvalue())
+    scanned = scan_path(root / "pack.zip")
+    kinds = {job.kind for job in scanned.jobs}
+    assert {"zip-folder", "zip-cdp", "zip-nested"} <= kinds
+    assert all(".." not in job.member for job in scanned.jobs)
+    folder = next(job for job in scanned.jobs if job.kind == "zip-folder")
+    kind, staged = stage_job(folder, root / "stage")
+    assert kind == "folder"
+    assert (staged / "config.txt").is_file()
+    nested_job = next(job for job in scanned.jobs if job.kind == "zip-nested")
+    inside = scan_nested_zip(nested_job.source, nested_job.chain, nested_job.member)
+    assert any(job.kind == "zip-folder" and job.member == "wagon" for job in inside)
+    common = root / "steamapps" / "common"
+    (common / "Trainz A New Era").mkdir(parents=True)
+    (common / "Trainz A New Era" / "TrainzUtil.exe").write_bytes(b"")
+    (common / "Trainz Railroad Simulator 2022").mkdir()
+    newer = common / "Trainz Railroad Simulator 2022" / "TrainzUtil.exe"
+    newer.write_bytes(b"")
+    (common / "Some Other Game").mkdir()
+    (common / "Some Other Game" / "TrainzUtil.exe").write_bytes(b"")
+    assert trainzutil_under_common(common) == newer
+    assert trainzutil_under_common(root / "missing") is None
+    from trainz_studio import REPO_ROOT
+    from trainz_studio.io.trainz_install import trainz_data_dir
+
+    assert trainz_data_dir() == REPO_ROOT
+    from trainz_studio.io.trainz_install import parse_installation_data_path
+
+    sample = "; <NULL> : getinstallationdatapath\n  + <NULL> : D:\\Games\\Trainz Data\nOK\n"
+    assert parse_installation_data_path(sample) == Path(r"D:\Games\Trainz Data")
+    assert parse_installation_data_path("- <NULL> : Invalid command syntax: nope") is None
+    from trainz_studio.io.trainz_install import task_outcome
+
+    ok, line = task_outcome("  + <NULL> : Saved\nOK (0 Errors, 0 Warnings)\n")
+    assert ok and line == "Saved"
+    bad, err = task_outcome("- <NULL> : VE197\nOK (1 Errors, 0 Warnings)\n")
+    assert not bad and err == "VE197"
+    from trainz_studio.io.trainz_install import classify_trainz_line
+
+    assert classify_trainz_line("  - <NULL> : VE197 missing") == ("error", "VE197 missing")
+    assert classify_trainz_line("  + <NULL> : Saved") == ("ok", "Saved")
+    assert classify_trainz_line("  ! <NULL> : obsolete kuid") == ("warn", "obsolete kuid")
+    assert classify_trainz_line("OK (0 Errors, 1 Warnings)")[0] == "warn"
+    assert classify_trainz_line("Running…") == ("normal", "Running…")
+    from trainz_studio.io.trainz_install import parse_installed_library
+
+    listed = parse_installed_library(
+        "\n".join(
+            [
+                '+ <kuid:1:2> : abcdeFgILmop : VE : Broken loco',
+                '+ <kuid2:3:4:1> : aBcdefGIlmopuXY : TK : Good track',
+                '- <kuid:9:9> : Unknown KUID: <kuid:9:9>',
+                '+ <kuid:8:8> : abcdefgLmop : MESH : Not installed',
+            ]
+        )
+    )
+    assert [row.name for row in listed] == ["Broken loco", "Good track"]
+    assert listed[0].faulty and not listed[1].faulty
+    from trainz_studio.io.trainz_install import read_library_cache, write_library_cache
+
+    fake_exe = root / "TrainzUtil.exe"
+    fake_exe.write_bytes(b"")
+    write_library_cache(fake_exe, listed, root=root / "cache")
+    cached = read_library_cache(fake_exe, root=root / "cache")
+    assert [row.kuid for row in cached] == [row.kuid for row in listed]
+    assert cached[0].faulty and cached[1].name == "Good track"
+    assert read_library_cache(root / "missing.exe", root=root / "cache") == []
+    from trainz_studio.io.trainz_install import config_credits
+
+    credits = config_credits(
+        "\n".join(
+            [
+                '  ; <NULL> : trainz-build                            4.6',
+                '  ; <NULL> : author                                  "Boonnop"',
+                '  ; <NULL> : organisation                            "SMT (Srt Mods Trainz)"',
+                '  ; <NULL> : username                                "Not the author"',
+            ]
+        )
+    )
+    assert credits == "Boonnop · SMT (Srt Mods Trainz) · 4.6"
+    from trainz_studio.io.trainz_install import tidy_trainzutil
+
+    assert tidy_trainzutil("  ; <NULL> : installed, faulty") == "installed, faulty"
+    from trainz_studio.io.trainz_install import read_install_pulse
+
+    pct, status, seen = read_install_pulse("Installing <kuid:1:2>", 0, 4)
+    assert seen == 1 and pct == 8 + int(1 / 4 * 87) and "kuid" in status
+    pct, status, seen = read_install_pulse("Installing 40%", 1, 4)
+    assert pct == 40 and seen == 2
+    assert read_install_pulse("hello", 1, 4)[0] is None
+    from trainz_studio.io.trainz_install import _encrypt_self_check
+
+    _encrypt_self_check()
+    assert launcher_blocked("- Trainz is not running.")
+    assert "not installed" in decode_status("+ <kuid:1:2> : iEAb : name")
+    up = decode_status("+ <kuid:1:2> : IEAb : name")
+    assert "not installed" not in up and "installed" in up
+    host = TrainzUtilHost(on_home=lambda: None, start_probe=False)
+    assert host.ok, [str(err) for err in host._view_quick.errors()]
+    assert host._bridge.page == "library"
+    library = host._bridge._library
+    library.set_assets(listed)
+    library.toggle_picked(listed[0].kuid)
+    assert library.selected_kuids() == [listed[0].kuid]
+    assert "1 selected" in library.summary()
+    library.toggle_picked(listed[1].kuid)
+    assert [card["kuid"] for card in host._bridge._detail_cards] == library.selected_kuids()
+    assert len(host._bridge._detail_cards) == 2
+    host.focus_asset(listed[1].kuid)
+    assert host._bridge._detail_kuid == listed[1].kuid
+    assert len(host._bridge._detail_cards) == 2
+    library.set_visible_picked(False)
+    assert host._bridge._detail_cards == []
+    from trainz_studio.io.trainz_install import category_is_enginespec, config_in_editing
+
+    assert category_is_enginespec("TR;CMP;ESPC")
+    assert not category_is_enginespec("TR;TV;LOC;DIES")
+    editing = root / "editing" / "openasset"
+    editing.mkdir(parents=True)
+    (editing / "config.txt").write_text('kuid <kuid:972300:100075>\nkind "enginespec"\n', encoding="utf-8")
+    assert config_in_editing(root / "editing", "<kuid:972300:100075>") == editing / "config.txt"
+    assert config_in_editing(root / "editing", "<kuid:1:2>") is None
+    from trainz_studio.io.trainz_install import asset_browse_dir
+
+    assert asset_browse_dir(root, "<kuid:972300:100075>", {}) == editing
+    assert asset_browse_dir(root, "<kuid:1:2>", {}) is None
+    shot = editing / "$screenshot$.jpg"
+    shot.write_bytes(b"\xff\xd8\xff" + b"x" * 40)
+    from trainz_studio.io.trainz_install import archive_index, asset_cover_path
+
+    assert asset_cover_path(root, "<kuid:972300:100075>") == shot
+    index_root = Path(tempfile.mkdtemp(prefix="mstn-tu-cover-"))
+    bucket = index_root / "local" / "abcd"
+    bucket.mkdir(parents=True)
+    (bucket / "kuid 9 9.tzarc").write_bytes(b"not-a-tzarc")
+    assert archive_index(index_root)["<kuid:9:9>"] == bucket / "kuid 9 9.tzarc"
+    assert asset_cover_path(index_root, "<kuid:9:9>", archive_index(index_root)) is None
+    from trainz_studio.io.trainz_install import thumbnail_image_names
+
+    text = 'thumbnails\n{\n  image "panel.png"\n}\nmesh-table\n{\n  image "nope.jpg"\n}\n'
+    assert thumbnail_image_names(text.encode()) == ["panel.png"]
+
+    def _pair(name: str, kind: int, payload: bytes) -> bytes:
+        raw_name = name.encode() + b"\x00"
+        body = bytes([len(raw_name)]) + raw_name + bytes([kind]) + payload
+        return struct.pack("<I", len(body)) + body
+
+    image = _pair("image", 3, b"thumbnail.png\x00")
+    slot = _pair("0", 0, image)
+    thumbs = _pair("thumbnails", 0, slot)
+    chump = b"ACS$\x01\x00\x00\x00" + struct.pack("<I", len(thumbs)) + thumbs
+    assert thumbnail_image_names(chump) == ["thumbnail.png"]
+    from trainz_studio.io.trainz_install import kuid_from_archive_name, read_asset_dates, status_bits
+
+    assert kuid_from_archive_name("kuid 1144998 100169.tzarc") == "<kuid:1144998:100169>"
+    assert kuid_from_archive_name("kuid2 124060 21035 3.tzarc") == "<kuid2:124060:21035:3>"
+    assert kuid_from_archive_name("kuid 1144998 100002 MSTN KIHA") == "<kuid:1144998:100002>"
+    from trainz_studio.io.trainz_install import find_asset_backups
+
+    backup_root = root / "data"
+    day = backup_root / "backups" / "26-10-09"
+    day.mkdir(parents=True)
+    (day / "kuid 1144998 100079 MSTN KIHA_1").mkdir()
+    (day / "kuid 1144998 100079.tzarc_99").write_bytes(b"abc")
+    (day / "kuid 1 2 other").mkdir()
+    (day / "s6gh667q216").mkdir()
+    (backup_root / "backups" / "not-a-day").mkdir()
+    copies = find_asset_backups(backup_root, "<kuid:1144998:100079>")
+    assert len(copies) == 2
+    assert {row.kind for row in copies} == {"Folder", "tzarc"}
+    assert find_asset_backups(backup_root, "10007")[0].kuid == "<kuid:1144998:100079>"
+    assert len(find_asset_backups(backup_root, "KIHA")) == 1
+    assert find_asset_backups(backup_root, "") and all("s6gh" not in row.name for row in find_asset_backups(backup_root, ""))
+    assert all(row.kind != "Folder" or "s6gh" not in row.name for row in find_asset_backups(backup_root, "kuid"))
+    assert status_bits("abcdefgILmopuXY", open_for_edit=True)[0] == "Edit"
+    bucket = root / "original" / "hash-00"
+    bucket.mkdir(parents=True)
+    (bucket / "kuid 1 2.tzarc").write_bytes(b"orig")
+    local_bucket = root / "local" / "hash-00"
+    local_bucket.mkdir(parents=True)
+    (local_bucket / "kuid 1 2.tzarc").write_bytes(b"local")
+    dates = read_asset_dates([root])
+    assert "<kuid:1:2>" in dates["installed"] and "<kuid:1:2>" in dates["modified"]
+    assert dates["sizes"]["<kuid:1:2>"] > 0
+    library.set_assets(listed)
+    library.set_dates(dates["installed"], dates["modified"], {})
+    library.set_sort("name")
+    assert [row.name for row in library._rows] == ["Broken loco", "Good track"]
+    library.set_query("ood tra")
+    assert [row.name for row in library._rows] == ["Good track"]
+    library.set_query("")
+    library.set_sort("status")
+    assert library._rows[0].faulty
+    library.set_dates({}, {"<kuid:1:2>": 10, "<kuid2:3:4:1>": 40}, {})
+    library.set_sort("modified")
+    assert library.sort_mark() == "modified:desc"
+    assert library._rows[0].kuid == "<kuid2:3:4:1>"
+    library.begin_drag_pick(library._rows[0].kuid)
+    library.drag_pick(library._rows[1].kuid)
+    assert set(library.selected_kuids()) == {"<kuid:1:2>", "<kuid2:3:4:1>"}
+    library.click_pick(library._rows[0].kuid, shift=False, ctrl=False)
+    library.click_pick(library._rows[1].kuid, shift=True, ctrl=False)
+    assert set(library.selected_kuids()) == {"<kuid:1:2>", "<kuid2:3:4:1>"}
+    library.click_pick(library._rows[0].kuid, shift=False, ctrl=True)
+    assert library.selected_kuids() == ["<kuid:1:2>"]
+    library.click_pick(library._rows[1].kuid, shift=False, ctrl=False)
+    assert library.selected_kuids() == ["<kuid:1:2>"]
+    from trainz_studio.io.trainz_install import dependency_kuids
+
+    assert dependency_kuids(
+        "+ <kuid:1:2>\n+ <kuid:9:9>\n+ <kuid:1:2>",
+        skip="<kuid:1:2>",
+    ) == ["<kuid:9:9>"]
+    from trainz_studio.io.trainz_install import author_and_build, category_label
+    from trainz_studio.io.tzarc import read_tzarc_config
+
+    import time
+
+    assert category_label("TR;CMP;ESPC") == "Engine Spec"
+    assert category_label("SLIB") == "Script Library"
+    assert category_label("BD;RRD;SY;SCEN") == "Building · Railroad"
+    assert category_label("TR;TV;LOC;DIES;LOCO") == "Locomotive · Diesel"
+    assert category_label("SY;SCEN") == "Scenery"
+    assert category_label("TX;NEV;TXGRP;CMP") == "Texture · General · Texture Group"
+    assert author_and_build('author "Boonnop"\ntrainz-build 4.6\n') == ("Boonnop", "4.6")
+    from trainz_studio.io.trainz_install import author_label
+
+    assert author_label("NightNyZ15", "5") == "NightNyZ15"
+    assert author_label("3.7", "3.7") == ""
+    assert author_label("3.7", "") == ""
+    assert author_label("3801", "4.6") == "3801"
+    from trainz_studio.io.trainz_install import credit_from_config_bytes
+
+    def _chump_text(name: str, value: str) -> bytes:
+        payload = value.encode("utf-8") + b"\x00"
+        name_b = name.encode("utf-8") + b"\x00"
+        pair_len = len(name_b) + 2 + len(payload)
+        return struct.pack("<I", pair_len) + bytes([len(name_b)]) + name_b + bytes([3]) + payload
+
+    soup_body = _chump_text("inside", "nope")
+    soup_name = b"mesh-table\x00"
+    soup = struct.pack("<I", len(soup_name) + 2 + len(soup_body)) + bytes([len(soup_name)]) + soup_name + bytes([0]) + soup_body
+    body = soup + _chump_text("username", "キハ40") + _chump_text("author", "Boonnop") + _chump_text("trainz-build", "4.6")
+    chump = b"ACS$" + struct.pack("<III", 1, 0, len(body)) + body
+    assert credit_from_config_bytes(chump) == ("Boonnop", "4.6")
+    from trainz_studio.io.trainz_install import config_identity
+
+    assert config_identity(chump)[2] == "キハ40"
+    assert config_identity('username "キハ40系"\n'.encode("utf-8"))[2] == "キハ40系"
+    assert config_identity('username "キハ40系"\n'.encode("utf-16"))[2] == "キハ40系"
+    assert credit_from_config_bytes(b'author "Boonnop"\ntrainz-build 4.6\n') == ("Boonnop", "4.6")
+
+    packed = bytearray(b"TZac")
+    packed += struct.pack(">I", 1)
+    payload = 'author "Boonnop"\ntrainz-build 4.6\nusername "キハ40"\n'.encode("utf-8")
+    name = b"config.txt"
+    packed += struct.pack(">I", 1)
+    packed += bytes([len(name)]) + name + struct.pack(">Q", len(payload))
+    packed += b"\x00\x00\x00\x00"
+    packed += payload
+    tzarc = root / "local" / "hash-00" / "kuid 9 9.tzarc"
+    tzarc.write_bytes(packed)
+    assert read_tzarc_config(tzarc) == payload
+    seen: list[tuple] = []
+    from trainz_studio.io.trainz_install import scan_archive_meta
+
+    scan_archive_meta(
+        [root],
+        on_batch=lambda authors, builds, names, finished: seen.append((authors, builds, names, finished)),
+        cache_path=root / "meta.json",
+    )
+    assert any(batch[0].get("<kuid:9:9>") == "Boonnop" for batch in seen)
+    assert any(batch[2].get("<kuid:9:9>") == "キハ40" for batch in seen)
+    assert seen[-1][3] is True
+    library.merge_meta({"<kuid2:3:4:1>": "Boonnop"}, {"<kuid2:3:4:1>": "4.6"})
+    library.set_query("boonnop")
+    assert [row.kuid for row in library._rows] == ["<kuid2:3:4:1>"]
+    library.set_query("4.6")
+    assert library._rows[0].kuid == "<kuid2:3:4:1>"
+    from trainz_studio.io.trainz_install import LibraryAsset
+    from PySide6.QtCore import Qt
+
+    old = library._rows[0]
+    tagged = LibraryAsset(old.kuid, old.name, old.flags, "TR;CMP;ESPC", old.faulty)
+    library._all = [tagged if item.kuid == old.kuid else item for item in library._all]
+    library.set_query("4.6")
+    label = library.data(library.index(0, 0), int(Qt.ItemDataRole.UserRole) + 4)
+    assert label == "Engine Spec"
+    library.set_query("engine spec")
+    assert library._rows[0].kuid == "<kuid2:3:4:1>"
+    stamp = time.mktime(time.strptime("2020-05-02 08:30", "%Y-%m-%d %H:%M"))
+    library.set_dates({"<kuid2:3:4:1>": stamp}, {}, {})
+    library.set_query("2020-05-02")
+    assert [row.kuid for row in library._rows] == ["<kuid2:3:4:1>"]
+    library.set_query("")
+    library.merge_names({"<kuid:1:2>": "キハ40"})
+    assert library.name_for("<kuid:1:2>") == "キハ40"
+    library.set_assets([LibraryAsset("<kuid:1:2>", "MSTN | ??40? |", "IL", "YL", False)])
+    assert library.name_for("<kuid:1:2>") == "キハ40"
+    host.shutdown()
+    host.deleteLater()
+
+
 def test_qml_shell_loads() -> None:
-    """Phase-1 HOME + title QML must compile and expose the five studios."""
+    """Phase-1 HOME + title QML must compile and expose the studios."""
     from PySide6.QtWidgets import QApplication
 
     from trainz_studio.ui.qml_host import QmlHomeHost, QmlTitleBar
@@ -2022,11 +2516,12 @@ def test_qml_shell_loads() -> None:
         on_engine=lambda: None,
         on_assets=lambda: None,
         on_texmesh=lambda: None,
+        on_trainzutil=lambda: None,
         on_drop=lambda _paths: None,
     )
     assert home.ok
     ids = [c["studioId"] for c in home._bridge._cards]
-    assert ids == ["mesh", "sounds", "engine", "assets", "texmesh"]
+    assert ids == ["mesh", "sounds", "engine", "assets", "texmesh", "trainzutil"]
     bar = QmlTitleBar()
     assert bar.ok
     labels = [m["label"] for m in bar._bridge._menus]
@@ -2058,7 +2553,9 @@ def test_qml_sounds_loads() -> None:
 
 
 def test_qml_engine_loads() -> None:
-    """Engine Tuner QML chrome loads; page changes still hit the widget stack."""
+    """Engine Tuner QML chrome loads; center pages are QML, graphs stay canvases."""
+    import json
+
     from PySide6.QtWidgets import QApplication
 
     from trainz_studio.ui.engine.studio import EngineTunerHost
@@ -2067,8 +2564,16 @@ def test_qml_engine_loads() -> None:
     host = EngineTunerHost(on_home=lambda: None)
     assert host._eng_bridge is not None
     assert host._engine_view.status().name == "Ready"
+    assert host._split.isHidden()
+    bag = json.loads(host._eng_bridge.centerJson)
+    assert len(bag["notches"]) == 9
+    assert "motor" in bag["bags"] and "stats" in bag["sim"]
     host._eng_bridge.setPage("simulation")
     assert host._stack.currentIndex() == 1
+    host._eng_bridge.setSim("mass", "120")
+    assert host.sim_panel.mass.value() == 120
+    host._eng_bridge.addParam("motor")
+    assert any(k.startswith("new_key_") for k in host.motor_editor.data)
     host.deleteLater()
     del app
 
@@ -2085,12 +2590,27 @@ def test_qml_assets_loads() -> None:
     assert host._assets_view.status().name == "Ready"
     assert host._assets_bridge.page == "packages"
     assert host._assets_bridge.dockOn
+    assert host._assets_bridge.centerTitle
+    from PySide6.QtWidgets import QLabel
+
+    heads = [lab for lab in host._stack.findChildren(QLabel) if lab.objectName() == "pageHead"]
+    assert heads and all(not lab.isVisible() for lab in heads)
     host._assets_bridge.setPage("config")
     assert host._stack.currentIndex() == 1
     assert host._assets_bridge.dockOn is False
+    assert "chump" in host._assets_bridge.centerTip
     host.set_suite("texmesh")
     assert host._assets_bridge.navTall
     assert host._assets_bridge.page == "texture"
+    assert host._assets_bridge.centerKind == "split"
+    assert host._texmesh_lifted
+    host._assets_bridge.setPage("meshops")
+    assert host._assets_bridge.page == "meshops"
+    assert host._assets_bridge.centerKind == "split"
+    host._assets_bridge.setPage("parameter")
+    assert host._assets_bridge.centerKind == "canvas"
+    host._assets_bridge.setPage("denoise")
+    assert host._assets_bridge.centerKind == "canvas"
     host.deleteLater()
     del app
 
@@ -2708,6 +3228,60 @@ def _minimal_im_with_atch(atts: list) -> bytes:
     return bytes(out)
 
 
+def test_im_fast_preview_geom() -> None:
+    """Finder fast preview decodes a GEOM triangle out of a tiny .im."""
+    from trainz_studio.io.loaders import load_any
+
+    def jet(text: str) -> bytes:
+        raw = text.encode("utf-8") + b"\0"
+        pad = (4 - (len(raw) % 4)) % 4
+        body = raw + (b"\0" * pad)
+        return struct.pack("<I", len(body)) + body
+
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return tag + struct.pack("<I", len(body)) + body
+
+    geom = bytearray()
+    geom += struct.pack("<I", 201)
+    geom += struct.pack("<I", 4)
+    geom += struct.pack("<I", 0)
+    geom += struct.pack("<f", 0.5)
+    geom += struct.pack("<IIII", 3, 1, 3, 1)
+    geom += struct.pack("<I", 1)
+    geom += struct.pack("<I", 0)
+    geom += struct.pack("<fffff", 0, 0, 0, 0, 0)
+    geom += struct.pack("<fffff", 1, 0, 0, 1, 0)
+    geom += struct.pack("<fffff", 0, 1, 0, 0, 1)
+    geom += struct.pack("<HHH", 0, 1, 2)
+    geom += struct.pack("<fff", 0, 0, 1) * 3
+    geom += struct.pack("<fff", 0, 0, 1)
+    matl = struct.pack("<I", 103) + jet("body.m.onetex")
+    chnk = struct.pack("<II", 100, 0) + chunk(b"MATL", matl) + chunk(b"GEOM", bytes(geom))
+    payload = b"IDXM" + chunk(b"CHNK", chnk)
+    blob = b"JIRF" + struct.pack("<I", len(payload)) + payload
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "tri.im"
+        path.write_bytes(blob)
+        scene = load_any(path, preview_fast=True)
+    assert scene.kind == "im"
+    assert scene.vertex_count == 3
+    assert scene.face_count == 1
+    assert scene.parts[0].name == "body.m.onetex"
+    assert float(scene.parts[0].vertices[1, 0]) == 1.0
+    from trainz_studio.lib.im_editor.core import IDENTITY_ORIENT
+    from trainz_studio.lib.im_editor.core import Attachment as ImAtt
+
+    atch = _minimal_im_with_atch([ImAtt("a.cab", IDENTITY_ORIENT, (1.0, 2.0, 3.0))])
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "cab.im"
+        path.write_bytes(atch)
+        points = load_any(path, preview_fast=True)
+    assert points.vertex_count == 0
+    assert len(points.attachments) == 1
+    assert points.attachments[0].name == "a.cab"
+    assert points.attachments[0].pos == (1.0, 2.0, 3.0)
+
+
 def test_im_document_add_remove() -> None:
     from trainz_studio.lib.im_editor.core import (
         IDENTITY_ORIENT,
@@ -3262,6 +3836,13 @@ def test_assets_kuid_normalize() -> None:
             back = chump_to_text(read_chump(out))
             assert "<kuid:1125787:100056>" in back
 
+    from trainz_studio.io.chump import encode_chump
+
+    packed = encode_chump(text_to_chump('kuid  <kuid:1:2>\nkind  "traincar"\n'))
+    shown = chump_to_text(read_chump(packed))
+    assert "<kuid:1:2>" in shown and "traincar" in shown
+    assert packed[:4] == b"ACS$"
+
     # TRS22 tzarc v2 (zlib chunks) — small backup sample
     from trainz_studio.io.tzarc import extract_tzarc, list_tzarc, open_tzarc
 
@@ -3441,13 +4022,16 @@ def main() -> int:
     test_celestial_sphere_mesh()
     test_fade_stack_no_opacity()
     test_boot_prewarms_gl_before_show()
+    test_boot_overlay_log_and_easing_bar()
     test_hub_reveal_overlay_plays()
     test_assets_kuid_normalize()
     test_mat_names()
     test_frost_clears_on_set_dark()
     test_frost_shadow_room()
     test_frost_motion_lod()
+    test_old_meta_cache_is_a_hit()
     test_qml_shell_loads()
+    test_trainz_install_scan()
     test_qml_sounds_loads()
     test_qml_engine_loads()
     test_qml_assets_loads()
@@ -3496,6 +4080,7 @@ def main() -> int:
     test_merge_lamp_packs()
     test_resolve_primary()
     test_kin_scan()
+    test_im_fast_preview_geom()
     test_im_document_add_remove()
     test_named_two_sided_does_not_touch_other_parts()
     test_mesh_meta_two_sided()
@@ -3514,6 +4099,7 @@ def main() -> int:
         summary,
     )
     from trainz_studio.util.preload import (
+        _HUB_MODULES,
         hub_modules_ready,
         join_hub_module_preload,
         start_hub_module_preload,
@@ -3532,6 +4118,7 @@ def main() -> int:
         assert hub_reveal_ms(warm=True) == 0
     else:
         assert 200 <= hub_reveal_ms(warm=True) <= 400
+    assert "trainz_studio.ui.trainzutil_host" in _HUB_MODULES
     start_hub_module_preload()
     assert join_hub_module_preload(timeout=30.0)
     assert hub_modules_ready()
@@ -3539,6 +4126,7 @@ def main() -> int:
     test_rounded_table_rows_install()
     test_short_glass_tip()
     test_glass_tip_wraps_long_text()
+    test_qt_tooltip_uses_glass_bubble()
     test_button_hover_chrome_install()
     test_ease_out_cubic()
     test_loop_qc_and_fix()
