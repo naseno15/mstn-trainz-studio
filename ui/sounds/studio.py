@@ -294,23 +294,38 @@ class SoundsStudioHost(QWidget):
         on_home: Callable[[], None],
         on_theme: Callable[[], None] | None = None,
         theme_mode: str = "dark",
+        shell: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_home = on_home
         self._on_theme = on_theme
         self._theme = theme_mode
+        self._shell = shell
+        self._surface_ready = False
         self._clips: list[SoundClip] = []
         self._current: int = -1
         self._slot_a: int | None = None
         self._slot_b: int | None = None
         self._track_phase = PHASE_IDLE
+        from ...util.preload import boot_log
+
+        boot_log("Sounds · ClipPlayer")
         self._player = ClipPlayer()
         self._loop_on = False
         self._build()
         self._tick = QTimer(self)
         self._tick.setInterval(40)
         self._tick.timeout.connect(self._on_play_tick)
+        if not shell:
+            self._refresh_ffmpeg_tip()
+
+    def finish_surface(self) -> None:
+        """QML page, once. The player and clip list already exist from the shell."""
+        if self._surface_ready:
+            return
+        self._shell = False
+        self._build()
         self._refresh_ffmpeg_tip()
 
     def set_theme(self, mode: str) -> None:
@@ -371,9 +386,13 @@ class SoundsStudioHost(QWidget):
         self.phase_lab = _BindLabel(self._bridge.set_phase)
         self.btn_play = _BindLabel(self._bridge.set_play)
         self.btn_loop = _BindLabel(self._bridge.set_loop)
+        from ...util.preload import boot_log
+
+        boot_log("Sounds · WaveformWidget")
         self.wave = WaveformWidget(self)
         self.wave.set_theme(self._theme)
         self.wave.hide()
+        boot_log("Sounds · SoundsPage.qml")
         qml = _Path(__file__).resolve().parents[1] / "qml" / "SoundsPage.qml"
         self._view = _quick(qml, self._bridge)
         if not _qml_ok(self._view):
@@ -389,9 +408,13 @@ class SoundsStudioHost(QWidget):
         return True
 
     def _build(self) -> None:
+        if self._shell:
+            return
         if self._try_qml():
+            self._surface_ready = True
             return
         self._build_widgets()
+        self._surface_ready = True
 
     def import_paths(self, paths: list[Path]) -> None:
         errors: list[str] = []
@@ -866,9 +889,10 @@ def build_sounds_studio(
     on_home: Callable[[], None],
     on_theme: Callable[[], None] | None = None,
     theme_mode: str = "dark",
+    shell: bool = False,
 ) -> SoundsStudioHost:
     return SoundsStudioHost(
-        on_home=on_home, on_theme=on_theme, theme_mode=theme_mode
+        on_home=on_home, on_theme=on_theme, theme_mode=theme_mode, shell=shell
     )
 
 
