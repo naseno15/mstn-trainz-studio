@@ -2793,6 +2793,9 @@ class MainWindow(QMainWindow):
             from .i18n import snapshot_and_apply
 
             snapshot_and_apply(self)
+        from .mesh_qml import mount_mesh_qml
+
+        mount_mesh_qml(self)
         QTimer.singleShot(0, self._layout_side_panel)
         # Frost grab after first real GL frame — skip during boot batch.
         if not getattr(self, "_boot_batch", False):
@@ -4261,16 +4264,20 @@ class MainWindow(QMainWindow):
         ):
             if edge is not None and not mesh:
                 edge.hide()
+        qml = self._mesh_qml_on()
         nav = getattr(self, "_nav", None)
         if nav is not None:
-            nav.setVisible(mesh)
+            nav.setVisible(mesh and not qml)
         bar = getattr(self, "_shortcut_bar", None)
         if bar is not None:
-            bar.setVisible(mesh)
-        if not mesh and self.pbr_hud is not None:
+            bar.setVisible(mesh and not qml)
+        if (not mesh or qml) and self.pbr_hud is not None:
             self.pbr_hud.hide()
         layer = getattr(self, "_chrome_layer", None)
-        if layer is not None:
+        if layer is not None and qml:
+            layer.hide()
+            layer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        elif layer is not None:
             # AlwaysStackOnTop chrome must not sit over other hubs or cards won't click.
             layer.setVisible(mesh)
             layer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not mesh)
@@ -4380,6 +4387,9 @@ class MainWindow(QMainWindow):
             self._home_logo.setPixmap(_logo_pixmap(180, mode=mode))
         if hasattr(self, "_about_logo"):
             self._about_logo.setPixmap(_logo_pixmap(160, mode=mode))
+        bridge = getattr(self, "_mesh_bridge", None)
+        if bridge is not None:
+            bridge.sync()
         if hasattr(self, "_overlay") and hasattr(self._overlay, "logo"):
             self._overlay.logo.setPixmap(_logo_pixmap(140, mode=mode))
 
@@ -4819,6 +4829,9 @@ class MainWindow(QMainWindow):
             self.view.set_debug_mode(mode)
         label = next((n for n, m in PBR_MODES if m == mode), str(mode))
         self._status.showMessage(f"PBR mode: {label}")
+        bridge = getattr(self, "_mesh_bridge", None)
+        if bridge is not None:
+            bridge.sync()
 
     def _in_editor_page(self) -> bool:
         return getattr(self, "_page", "") in ("meshes", "attachs")
@@ -4915,6 +4928,55 @@ class MainWindow(QMainWindow):
             self.pbr_hud.hide()
         QTimer.singleShot(0, self._reposition_viewer_chrome)
 
+    def _mesh_qml_on(self) -> bool:
+        return getattr(self, "_mesh_bridge", None) is not None and getattr(self, "_mesh_view", None) is not None
+
+    def _raise_mesh_qml_stack(self) -> None:
+        """QML chrome under the widget wells; edge tabs and the Tab pie stay above."""
+        view = getattr(self, "_mesh_view", None)
+        if view is not None and view.isVisible():
+            view.raise_()
+        for widget in (
+            getattr(self, "_side_panel", None),
+            getattr(self, "editor", None),
+            getattr(self, "_settings_panel", None),
+            getattr(self, "_side_edge_btn", None),
+            getattr(self, "_editor_edge_btn", None),
+        ):
+            if widget is not None and widget.isVisible():
+                widget.raise_()
+        if getattr(self, "_tab_pie_armed", False):
+            pie = getattr(self, "_tab_pie", None) or (
+                self._active_tab_pie() if hasattr(self, "_active_tab_pie") else None
+            )
+            if pie is not None and pie.isVisible():
+                pie.raise_()
+
+    def _layout_mesh_qml(self) -> None:
+        view = getattr(self, "_mesh_view", None)
+        host = getattr(self, "_center_host", None)
+        bridge = getattr(self, "_mesh_bridge", None)
+        if view is None or host is None or bridge is None:
+            return
+        view.setGeometry(host.rect())
+        show = getattr(self, "_studio_mode", "") == "mesh"
+        view.setVisible(show)
+        bridge.sync()
+        page = self._hub.widget(HUB_MESH) if getattr(self, "_hub", None) is not None else None
+        if page is not None:
+            page.setVisible(not (show and bridge.welcome))
+        if show:
+            self._raise_mesh_qml_stack()
+        self._layout_panel_edge_btns()
+        self._place_fps_hud()
+        if getattr(self, "_tab_pie_armed", False):
+            pie = getattr(self, "_tab_pie", None) or (
+                self._active_tab_pie() if hasattr(self, "_active_tab_pie") else None
+            )
+            if pie is not None and pie.isVisible():
+                pie.setGeometry(host.rect())
+                pie.raise_()
+
     def _side_panel_rect(self, *, open_: bool | None = None) -> QRect:
         """Left frost sidebar over full-bleed viewport (or parked off-left)."""
         host = self._center_host
@@ -4930,6 +4992,11 @@ class MainWindow(QMainWindow):
     def _layout_side_panel(self) -> None:
         side = getattr(self, "_side_panel", None)
         if side is None:
+            return
+        if self._mesh_qml_on():
+            if getattr(self, "_studio_mode", "home") != "mesh":
+                side.hide()
+            self._layout_panel_edge_btns()
             return
         # HOME / Sounds: never show mesh sidebar (layout used to force it visible).
         if getattr(self, "_studio_mode", "home") != "mesh":
@@ -4994,7 +5061,7 @@ class MainWindow(QMainWindow):
             else:
                 ed_open = getattr(self, "_editor_dock_open", False)
                 right.setText("›" if ed_open else "‹")
-                if ed_open and self.editor.isVisible():
+                if ed_open and (self.editor.isVisible() or self._mesh_qml_on()):
                     g = self.editor.geometry()
                     right.move(g.left() - PANEL_EDGE_W // 2, mid_y)
                 else:
@@ -5024,6 +5091,11 @@ class MainWindow(QMainWindow):
 
     def _set_side_panel(self, open_: bool, *, animated: bool) -> None:
         open_ = bool(open_)
+        if self._mesh_qml_on():
+            self._side_open = open_
+            self._mesh_bridge.sync()
+            self._layout_panel_edge_btns()
+            return
         if open_ == getattr(self, "_side_open", True):
             self._layout_side_panel()
             return
@@ -5160,6 +5232,10 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "_settings_panel", None)
         if panel is None:
             return
+        if self._mesh_qml_on():
+            self._settings_open = bool(open_)
+            self._mesh_bridge.sync()
+            return
         if open_ == getattr(self, "_settings_open", False):
             if open_:
                 panel.setGeometry(self._center_host.rect())
@@ -5186,6 +5262,10 @@ class MainWindow(QMainWindow):
 
     def _set_editor_dock(self, open_: bool, *, animated: bool) -> None:
         """Slide Editor over the viewport — crop feel, GL widget never resizes."""
+        if self._mesh_qml_on():
+            self._editor_dock_open = bool(open_)
+            self._mesh_bridge.sync()
+            return
         if open_ == getattr(self, "_editor_dock_open", False):
             if open_:
                 self.editor.setGeometry(self._editor_dock_rect(open_=True))
@@ -5293,6 +5373,9 @@ class MainWindow(QMainWindow):
         # Always size hub/GL stack — HOME centering needs this before chrome exists.
         self._layout_viewer_pane()
         if not getattr(self, "_chrome_ready", False):
+            return
+        if self._mesh_qml_on():
+            self._layout_mesh_qml()
             return
         self._layout_side_panel()
 
@@ -6855,10 +6938,11 @@ class MainWindow(QMainWindow):
         lamps = list(self._lamps)
         self._bake_busy = True
         self._bake_btn.setEnabled(False)
-        self._nav.hide()
         self._bake_bar.set_progress(f"Starting ({backend})…", 0, 0.0)
-        self._bake_bar.show()
-        self._bake_bar.reposition()
+        if not self._mesh_qml_on():
+            self._nav.hide()
+            self._bake_bar.show()
+            self._bake_bar.reposition()
         self._bake_worker = BakeWorker(self._scene, lamps, out_dir, settings, self)
         self._bake_worker.progress.connect(self._on_bake_progress)
         self._bake_worker.finished_ok.connect(self._on_bake_finished)
@@ -6882,10 +6966,13 @@ class MainWindow(QMainWindow):
 
         self._bake_busy = False
         self._bake_btn.setEnabled(True)
-        self._bake_bar.hide()
-        self._nav.show()
-        self._nav.reposition()
         self._bake_worker = None
+        if self._mesh_qml_on():
+            self._mesh_bridge.sync()
+        else:
+            self._bake_bar.hide()
+            self._nav.show()
+            self._nav.reposition()
         if not isinstance(result, BakeResult):
             return
         warns = [i.message for i in result.issues if i.level == "warn"]
@@ -6918,10 +7005,13 @@ class MainWindow(QMainWindow):
     def _on_bake_failed(self, err: str) -> None:
         self._bake_busy = False
         self._bake_btn.setEnabled(True)
-        self._bake_bar.hide()
-        self._nav.show()
-        self._nav.reposition()
         self._bake_worker = None
+        if self._mesh_qml_on():
+            self._mesh_bridge.sync()
+        else:
+            self._bake_bar.hide()
+            self._nav.show()
+            self._nav.reposition()
         QMessageBox.critical(self, "Bake error", err)
         self._status.showMessage("Bake error")
 
@@ -7290,6 +7380,9 @@ class MainWindow(QMainWindow):
             bar = getattr(self, "_title_bar", None)
             if bar is not None:
                 bar.sync_titles()
+            mesh = getattr(self, "_mesh_bridge", None)
+            if mesh is not None:
+                mesh.sync()
             if self._status is not None:
                 self._status.showMessage(self.windowTitle())
 
