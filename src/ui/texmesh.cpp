@@ -1,4 +1,5 @@
 #include "ui/texmesh.h"
+#include "ui/feedback.h"
 
 #include "io/lm_txt.h"
 #include "io/mat_name.h"
@@ -99,7 +100,7 @@ QStringList dropped_paths(const QMimeData* mime) {
 }
 
 void style_table(QTableWidget* table) {
-    table->setStyleSheet(QString::fromLatin1(k_style));
+    apply_themed_qss(table, QString::fromLatin1(k_style));
     table->setShowGrid(false);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -350,7 +351,7 @@ int magic_pick_count(const unsigned char* rgba, int width, int height, int x, in
 class MapEditor : public QWidget {
 public:
     explicit MapEditor(Texmesh* owner, QWidget* parent) : QWidget(parent), owner_(owner) {
-        setStyleSheet(QStringLiteral("QWidget{background:#1a1e26;color:#f2f4f8;} QPushButton{background:#2a3140;color:#f2f4f8;border:none;border-radius:8px;padding:4px 8px;} QPushButton:checked{background:#ff5a1f;} QLabel{background:#12161c;}"));
+        apply_themed_qss(this, QStringLiteral("QWidget{background:#1a1e26;color:#f2f4f8;} QPushButton{background:#2a3140;color:#f2f4f8;border:none;border-radius:8px;padding:4px 8px;} QPushButton:checked{background:#ff5a1f;} QLabel{background:#12161c;}"));
         auto* lay = new QVBoxLayout(this);
         lay->setContentsMargins(8, 8, 8, 8);
         lay->setSpacing(8);
@@ -566,7 +567,7 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(QStringLiteral("#12161c")));
+        painter.fillRect(rect(), QColor(ui_dark() ? QStringLiteral("#12161c") : QStringLiteral("#e9edf2")));
         painter.setPen(QColor(param_gray_cached() ? QStringLiteral("#ff5a1f") : QStringLiteral("#8b93a1")));
         painter.drawText(QRect(12, 8, 70, 22), Qt::AlignCenter, QStringLiteral("Color"));
         painter.setPen(QColor(!param_gray_cached() ? QStringLiteral("#ff5a1f") : QStringLiteral("#8b93a1")));
@@ -621,6 +622,11 @@ protected:
     void dropEvent(QDropEvent* event) override {
         const QStringList paths = dropped_paths(event->mimeData());
         if (paths.isEmpty()) return;
+        const QRect top(12, 36, width() - 24, std::max(40, (height() - 56) / 2));
+        if (owner_->param_image_.isNull() || event->position().toPoint().y() <= top.bottom()) {
+            owner_->drop_paths(paths);
+            return;
+        }
         const QImage dropped = load_image(paths.first());
         if (dropped.isNull()) return;
         const int cell_w = std::max(40, (width() - 24) / 4);
@@ -686,7 +692,7 @@ Texmesh::Texmesh(QWidget* host) : QObject(host), host_(host) {
     auto make_log = [&]() {
         auto* edit = new QPlainTextEdit(host_);
         edit->setReadOnly(true);
-        edit->setStyleSheet(QString::fromLatin1(k_style));
+        apply_themed_qss(edit, QString::fromLatin1(k_style));
         edit->hide();
         return edit;
     };
@@ -714,12 +720,12 @@ Texmesh::Texmesh(QWidget* host) : QObject(host), host_(host) {
     param_canvas_->setParent(host_);
     param_canvas_->hide();
     param_queue_ = new QListWidget(host_);
-    param_queue_->setStyleSheet(QString::fromLatin1(k_style));
+    apply_themed_qss(param_queue_, QString::fromLatin1(k_style));
     param_queue_->setAcceptDrops(true);
     param_queue_->hide();
     denoise_view_ = new QLabel(host_);
     denoise_view_->setAlignment(Qt::AlignCenter);
-    denoise_view_->setStyleSheet(QString::fromLatin1(k_style));
+    apply_themed_qss(denoise_view_, QString::fromLatin1(k_style));
     denoise_view_->hide();
     QObject::connect(tex_table_, &QTableWidget::itemSelectionChanged, this, [this] {
         const auto rows = tex_table_->selectionModel()->selectedRows();
@@ -743,9 +749,22 @@ Texmesh::Texmesh(QWidget* host) : QObject(host), host_(host) {
     refresh_texture();
 }
 
+QStringList Texmesh::ve_paths() const {
+    QStringList out;
+    for (const QTableWidget* table : {tex_table_, lm_table_})
+        for (int row = 0; row < table->rowCount(); ++row)
+            for (int col = 0; col < table->columnCount(); ++col)
+                if (const auto* item = table->item(row, col)) {
+                    const QString path = item->data(Qt::UserRole).toString();
+                    if (!path.isEmpty() && !out.contains(path)) out << path;
+                }
+    return out;
+}
+
 void Texmesh::set_active(bool on) {
     active_ = on;
     if (!on) hide_all();
+    else sync_canvas();
     emit changed();
 }
 
@@ -754,6 +773,7 @@ void Texmesh::set_page(const QString& page) {
     form_tab_ = 0;
     if (page == QLatin1String("texture")) refresh_texture();
     if (page == QLatin1String("meshops")) refresh_mesh();
+    sync_canvas();
     emit changed();
 }
 
@@ -798,9 +818,8 @@ QString Texmesh::footer_cap() const { return page_ == QLatin1String("parameter")
 QString Texmesh::foot_note() const { return status_.isEmpty() ? blurb() : status_; }
 bool Texmesh::show_queue() const { return page_ == QLatin1String("parameter"); }
 int Texmesh::dock_width() const {
-    if (page_ == QLatin1String("texture")) return 1040;
-    if (page_ == QLatin1String("meshops")) return 700;
-    return 560;
+    // Mesh Lods, Texture Params, Texture Editor, Texture Denoiser share one dock width.
+    return 440;
 }
 QString Texmesh::status_line() const { return status_; }
 
@@ -843,6 +862,74 @@ QString Texmesh::actions_json() const {
     return dump(rows);
 }
 
+static QString table_dump(QTableWidget* table) {
+    QJsonArray rows;
+    if (table == nullptr) return QStringLiteral("[]");
+    for (int row = 0; row < table->rowCount(); ++row) {
+        QStringList cells;
+        for (int column = 0; column < table->columnCount(); ++column) {
+            QTableWidgetItem* item = table->item(row, column);
+            if (item != nullptr && !item->text().isEmpty()) cells << item->text();
+        }
+        rows.append(QJsonObject{{QStringLiteral("row"), row}, {QStringLiteral("text"), cells.join(QStringLiteral("   "))}, {QStringLiteral("on"), row == table->currentRow()}});
+    }
+    return QString::fromUtf8(QJsonDocument(rows).toJson(QJsonDocument::Compact));
+}
+
+QString Texmesh::table_json() const {
+    if (page_ == QLatin1String("texture")) return table_dump(tex_table_);
+    if (page_ == QLatin1String("meshops")) return table_dump(lm_table_);
+    return QStringLiteral("[]");
+}
+
+QString Texmesh::queue_json() const {
+    QJsonArray rows;
+    if (param_queue_ == nullptr) return QStringLiteral("[]");
+    for (int row = 0; row < param_queue_->count(); ++row) {
+        QListWidgetItem* item = param_queue_->item(row);
+        rows.append(QJsonObject{{QStringLiteral("row"), row}, {QStringLiteral("kind"), QStringLiteral("Image")}, {QStringLiteral("name"), item == nullptr ? QString() : item->text()}, {QStringLiteral("size"), QString()}, {QStringLiteral("info"), QString()}, {QStringLiteral("on"), row == param_queue_->currentRow()}});
+    }
+    return QString::fromUtf8(QJsonDocument(rows).toJson(QJsonDocument::Compact));
+}
+
+QString Texmesh::well_left() const {
+    if (page_ == QLatin1String("texture") && tex_preview_ != nullptr) return tex_preview_->toPlainText();
+    if (page_ == QLatin1String("meshops") && lm_preview_ != nullptr) return lm_preview_->toPlainText();
+    return {};
+}
+
+QString Texmesh::well_right() const {
+    if (page_ == QLatin1String("texture") && tex_log_ != nullptr) return tex_log_->toPlainText();
+    if (page_ == QLatin1String("meshops") && lm_log_ != nullptr) return lm_log_->toPlainText();
+    return {};
+}
+
+void Texmesh::drop_paths(const QStringList& paths) {
+    const StatusWatch watch(status_);
+    QStringList local;
+    for (const QString& path : paths) {
+        const QUrl url(path);
+        local << (url.isLocalFile() ? url.toLocalFile() : path);
+    }
+    if (page_ == QLatin1String("meshops")) add_meshes(local);
+    else if (page_ == QLatin1String("parameter")) {
+        for (const QString& path : local) {
+            if (!is_image(path)) continue;
+            param_queue_->addItem(QFileInfo(path).fileName());
+            param_queue_->item(param_queue_->count() - 1)->setData(Qt::UserRole, path);
+        }
+        if (param_queue_->count() > 0) param_queue_->setCurrentRow(param_queue_->count() - 1);
+        emit changed();
+    } else add_images(local);
+}
+
+void Texmesh::pick_row(int row) {
+    QTableWidget* table = page_ == QLatin1String("meshops") ? lm_table_ : tex_table_;
+    if (table == nullptr || row < 0 || row >= table->rowCount()) return;
+    table->selectRow(row);
+    emit changed();
+}
+
 QString Texmesh::form_blocks() const {
     QJsonArray rows;
     if (page_ == QLatin1String("meshops")) {
@@ -879,51 +966,32 @@ QString Texmesh::form_blocks() const {
 }
 
 void Texmesh::place_well(const QString& key, int x, int y, int w, int h) {
-    auto place = [&](QWidget* widget, bool show) {
-        if (widget == nullptr) return;
-        if (!show || w < 8 || h < 8) {
-            widget->hide();
-            return;
-        }
-        widget->setGeometry(x, y, std::max(1, w), std::max(1, h));
-        widget->show();
-        widget->raise();
-    };
-    const bool split = active_ && (page_ == QLatin1String("texture") || page_ == QLatin1String("meshops"));
-    const bool canvas = active_ && (page_ == QLatin1String("parameter") || page_ == QLatin1String("denoise"));
-    if (key == QLatin1String("table")) {
-        place(tex_table_, split && page_ == QLatin1String("texture"));
-        place(lm_table_, split && page_ == QLatin1String("meshops"));
-    } else if (key == QLatin1String("left")) {
-        place(tex_preview_, split && page_ == QLatin1String("texture"));
-        place(lm_preview_, split && page_ == QLatin1String("meshops"));
-    } else if (key == QLatin1String("right")) {
-        place(tex_log_, split && page_ == QLatin1String("texture"));
-        place(lm_log_, split && page_ == QLatin1String("meshops"));
-    } else if (key == QLatin1String("canvas")) {
-        place(param_canvas_, canvas && page_ == QLatin1String("parameter"));
-        place(denoise_view_, canvas && page_ == QLatin1String("denoise"));
-    }
+    if (key != QLatin1String("canvas")) return;
+    canvas_rect_ = QRect(x, y, w, h);
+    sync_canvas();
 }
 
-void Texmesh::place_queue(int x, int y, int w, int h) {
-    if (!active_ || page_ != QLatin1String("parameter") || w < 8 || h < 8) {
-        param_queue_->hide();
+void Texmesh::sync_canvas() {
+    QWidget* surface = page_ == QLatin1String("parameter") ? param_canvas_ : page_ == QLatin1String("denoise") ? static_cast<QWidget*>(denoise_view_) : nullptr;
+    for (QWidget* widget : {param_canvas_, static_cast<QWidget*>(denoise_view_)})
+        if (widget && widget != surface) widget->hide();
+    if (surface == nullptr) return;
+    if (!active_ || canvas_rect_.width() < 8 || canvas_rect_.height() < 8) {
+        surface->hide();
         return;
     }
-    param_queue_->setGeometry(x, y, w, h);
-    param_queue_->show();
-    param_queue_->raise();
+    surface->setAttribute(Qt::WA_NativeWindow, true);
+    surface->setGeometry(canvas_rect_);
+    surface->show();
+    surface->raise();
 }
 
-void Texmesh::place_form_tool(int x, int y, int w, int h) {
-    if (!form_tool() || w < 8 || h < 8) {
-        map_view_->hide();
-        return;
-    }
-    map_view_->setGeometry(x, y, w, h);
-    map_view_->show();
-    map_view_->raise();
+void Texmesh::place_queue(int, int, int, int) {
+    if (param_queue_ != nullptr) param_queue_->hide();
+}
+
+void Texmesh::place_form_tool(int, int, int, int) {
+    if (map_view_ != nullptr) map_view_->hide();
 }
 
 void Texmesh::hide_all() {
@@ -1006,6 +1074,7 @@ void Texmesh::set_field(const QString& key, const QString& raw) {
 void Texmesh::run_dock(const QString& action) { run_action(action); }
 
 void Texmesh::run_action(const QString& action) {
+    const StatusWatch watch(status_);
     if (action == QLatin1String("tex_from_image") || action == QLatin1String("primaryPick")) {
         const QString path = QFileDialog::getOpenFileName(host_, QStringLiteral("Image"), {}, QStringLiteral("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
         if (!path.isEmpty()) add_images({path});
@@ -1146,7 +1215,10 @@ void Texmesh::add_images(const QStringList& paths) {
     for (const QString& path : paths)
         if (is_image(path)) images << path;
     if (images.isEmpty() && paths.isEmpty()) return;
+    BusyToast busy(images, QStringLiteral("Loading textures…"));
+    int done = 0;
     for (const QString& path : images) {
+        busy.step(QStringLiteral("Loading ") + QFileInfo(path).fileName() + QStringLiteral("…"), done++);
         bool known = false;
         for (int row = 0; row < tex_table_->rowCount(); ++row) {
             auto* item = tex_table_->item(row, 0);

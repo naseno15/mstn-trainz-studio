@@ -25,6 +25,7 @@ public:
 
     void set_active(bool on);
     void set_page(const QString& page);
+    QStringList ve_paths() const;
     bool form_on() const;
     QString form_title() const;
     QString form_tabs() const;
@@ -37,6 +38,12 @@ public:
     QString brand() const;
     QString blurb() const;
     QString actions_json() const;
+    QString table_json() const;
+    QString queue_json() const;
+    QString well_left() const;
+    QString well_right() const;
+    void drop_paths(const QStringList& paths);
+    void pick_row(int row);
     QString footer_cap() const;
     QString foot_note() const;
     bool show_queue() const;
@@ -113,6 +120,8 @@ private:
     QWidget* param_canvas_ = nullptr;
     QListWidget* param_queue_ = nullptr;
     QLabel* denoise_view_ = nullptr;
+    QRect canvas_rect_;
+    void sync_canvas();
 
     QString primary_;
     QString alpha_;

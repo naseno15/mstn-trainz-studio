@@ -1,19 +1,37 @@
 #pragma once
 
+#include <QElapsedTimer>
+#include <QMatrix4x4>
+#include <deque>
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLWidget>
 #include <QString>
 #include <cstdint>
 #include <vector>
 
+class QKeyEvent;
+class QLabel;
 class QMouseEvent;
+class QTimer;
 class QWheelEvent;
 
 struct ViewPart {
     QString name;
     std::vector<float> positions;
+    std::vector<float> normals;
     std::vector<float> uvs;
     std::vector<uint32_t> indices;
+    std::vector<unsigned char> rgba;
+    std::vector<unsigned char> nrgba;
+    std::vector<unsigned char> prgba;
+    int tex_w = 0;
+    int tex_h = 0;
+    int nrm_w = 0;
+    int nrm_h = 0;
+    int prm_w = 0;
+    int prm_h = 0;
+    bool two_sided = false;
+    QString material;
 };
 
 int studio_softbox_peak();
@@ -26,10 +44,23 @@ public:
 
     void setParts(std::vector<ViewPart> parts);
     void setDebugMode(int mode);
+    void setShade(int mode);
     void setEnvironment(int index);
     void setSun(bool on);
+    void setSunPose(float azimuth_deg, float elevation_deg, float intensity);
+    void setArrayLight(int index, bool on);
+    void setEmissiveScale(float scale);
+    void setMoon(bool on);
+    void setSunWarm(float warm);
     void setGround(bool on);
+    void setTwoSided(bool on);
+    void setPartTwo(int index, bool on);
+    void setFaceOrient(bool on);
+    void setShown(int index, bool on);
+    void setHighlight(std::vector<uint8_t> on);
     void resetCamera();
+    void setWalk(int key, bool down);
+    void toggleFps();
     int partCount() const { return static_cast<int>(parts_.size()); }
 
 protected:
@@ -38,7 +69,10 @@ protected:
     void paintGL() override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
 
 private:
     struct Lamp {
@@ -48,18 +82,43 @@ private:
     void upload();
     void draw_shadows();
     void draw_sky();
-    void draw_parts(bool depth_only);
+    void draw_disc(const QMatrix4x4& proj, const QMatrix4x4& view, const QVector3D& eye, const QVector3D& dir, float radius, float r, float g, float b, float a, bool additive);
+    void draw_guides(const QMatrix4x4& proj, const QMatrix4x4& view);
+    void rebuild_guides();
     void frame_camera();
+    void coast();
+    void kick_coast();
+    void cam_right(float* x, float* y) const;
+    void note_keys(int key, bool down, bool repeat);
+    void sync_fps();
+    void bind_widget_target();
+    void fb_size(int* w, int* h) const;
 
     std::vector<ViewPart> parts_;
+    std::vector<uint8_t> highlight_;
     std::vector<Lamp> lamps_;
     bool upload_pending_ = false;
     bool shadow_dirty_ = true;
     bool gl_ready_ = false;
     int debug_mode_ = 0;
+    int shade_ = 3;
     int env_index_ = 0;
-    bool sun_ = false;
+    bool sun_ = true;
+    float sun_az_ = 135.f;
+    float sun_el_ = 45.f;
+    float sun_int_ = 1.4f;
+    bool array_on_[5] = {true, true, true, true, true};
+    float emis_scale_ = 0.15f;
+    bool moon_ = false;
+    bool key_shadow_ = false;
+    float sun_warm_ = 0.f;
+    unsigned glow_prog_ = 0;
+    unsigned glow_vao_ = 0;
+    unsigned glow_vbo_ = 0;
     bool ground_ = false;
+    bool two_sided_ = false;
+    bool face_orient_ = false;
+    bool guides_dirty_ = true;
     float yaw_ = 35.f;
     float pitch_ = 25.f;
     float dist_ = 8.f;
@@ -67,6 +126,26 @@ private:
     float center_[3] = {0, 0, 0};
     float radius_ = 1.f;
     QPoint last_;
+    QTimer* coast_ = nullptr;
+    QElapsedTimer clock_;
+    float spin_yaw_ = 0.f;
+    float spin_pitch_ = 0.f;
+    float move_v_[3] = {0, 0, 0};
+    float elev_v_ = 0.f;
+    float zoom_v_ = 0.f;
+    bool key_up_ = false;
+    bool key_down_ = false;
+    bool key_left_ = false;
+    bool key_right_ = false;
+    bool key_pgup_ = false;
+    bool key_pgdn_ = false;
+    bool show_fps_ = false;
+    QLabel* fps_ = nullptr;
+    QElapsedTimer fps_clock_;
+    qint64 fps_last_ns_ = 0;
+    int frame_id_ = 0;
+    std::deque<float> fps_paint_;
+    std::deque<float> fps_wall_;
     unsigned mesh_prog_ = 0;
     unsigned sky_prog_ = 0;
     unsigned depth_prog_ = 0;
@@ -75,6 +154,9 @@ private:
     unsigned shadow_tex_ = 0;
     unsigned shadow_fbo_ = 0;
     unsigned shadow_depth_ = 0;
+    unsigned sun_tex_ = 0;
+    unsigned sun_fbo_ = 0;
+    unsigned sun_depth_ = 0;
     unsigned vao_ = 0;
     unsigned vbo_ = 0;
     unsigned ibo_ = 0;
@@ -82,6 +164,19 @@ private:
     unsigned ground_vbo_ = 0;
     unsigned sky_vao_ = 0;
     unsigned sky_vbo_ = 0;
+    unsigned line_prog_ = 0;
+    unsigned line_vao_ = 0;
+    unsigned line_vbo_ = 0;
+    unsigned gizmo_vao_ = 0;
+    unsigned gizmo_vbo_ = 0;
+    int guide_count_ = 0;
+    std::vector<uint8_t> shown_;
+    struct PartMaps {
+        unsigned albedo = 0;
+        unsigned normal = 0;
+        unsigned parameter = 0;
+    };
+    std::vector<PartMaps> part_maps_;
     float shadow_vp_[8][16] = {};
     int shadow_count_ = 0;
     std::vector<unsigned> part_first_;
