@@ -45,7 +45,7 @@ def _quick(source: Path, bridge: QObject, *, logo: Callable[[str], QPixmap] | No
 
     view = QQuickWidget()
     view.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
-    # QML Text ignores the app font and falls back to Segoe UI unless the widget font is set first.
+    # QML Text copies the app font at load. Lang swap rewrites families in rebase_quick_fonts.
     from .i18n.fonts import ui_font
 
     view.setFont(ui_font())
@@ -199,6 +199,7 @@ class QmlHomeHost(QWidget):
         on_engine: Callable[[], None],
         on_assets: Callable[[], None],
         on_texmesh: Callable[[], None],
+        on_trainzutil: Callable[[], None],
         on_drop: Callable[[list[Path]], None],
         theme_mode: str = "dark",
         logo: object = None,
@@ -214,6 +215,7 @@ class QmlHomeHost(QWidget):
             "engine": on_engine,
             "assets": on_assets,
             "texmesh": on_texmesh,
+            "trainzutil": on_trainzutil,
         }
         self._bridge = HomeBridge(on_drop)
         self._bridge.studioOpened.connect(self._open)
@@ -252,6 +254,7 @@ class QmlHomeHost(QWidget):
             ("engine", "Engine Tuner", "Curves · throttle · sim", "tune"),
             ("assets", "Assets Tools", "CDP · config · KUID", "inventory_2"),
             ("texmesh", "Texture & Mesh Lods", "LODs · maps · bake", "texture"),
+            ("trainzutil", "TrainzUtil", "Install · CDP · zip", "upload_file"),
         )
         cards = [
             {
