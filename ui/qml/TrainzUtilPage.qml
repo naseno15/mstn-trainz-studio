@@ -6,6 +6,7 @@ Item {
     property bool sideOpen: true
     property bool taskOpen: true
     property bool depsOpen: true
+    property string shutKuid: ""
     readonly property real sideWide: Math.min(420, Math.max(300, (stage.width - 160) * 0.26))
     readonly property real taskWide: Math.min(380, Math.max(280, (stage.width - 160) * 0.22))
     property real sideLayout: sideWide
@@ -47,18 +48,6 @@ Item {
             sideLayout = w2
             sideVisual = w2
         }
-    }
-
-    function openDependency(kuid) {
-        var index = bridge.rowIndex(kuid)
-        if (index < 0 && bridge.libraryHas(kuid)) {
-            findInput.text = ""
-            bridge.filterLibrary("")
-            index = bridge.rowIndex(kuid)
-        }
-        if (index >= 0)
-            libraryList.positionViewAtIndex(index, ListView.Contain)
-        bridge.focusAsset(kuid)
     }
 
     function setSideOpen(open) {
@@ -153,7 +142,7 @@ Item {
             anchors.right: parent.right
             anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
-            text: title + (bridge.sortMark === key ? " ▲" : (bridge.sortMark === key + ":desc" ? " ▼" : ""))
+            text: qsTr(title) + (bridge.sortMark === key ? " ▲" : (bridge.sortMark === key + ":desc" ? " ▼" : ""))
             color: (bridge.sortMark === key || bridge.sortMark === key + ":desc") ? "#ff5a1f" : "#9aa3b2"
             font.pixelSize: 11
             font.bold: true
@@ -221,7 +210,7 @@ Item {
         Text {
             id: chipText
             anchors.centerIn: parent
-            text: label
+            text: (typeof label === "string" ? qsTr(label) : label)
             color: root.statusInk(label)
             font.pixelSize: 11
             font.bold: true
@@ -267,7 +256,7 @@ Item {
             anchors.topMargin: 8
             spacing: 3
             Text {
-                text: cap
+                text: (typeof cap === "string" ? qsTr(cap) : cap)
                 color: bridge.dark ? "#8b93a1" : "#5c6570"
                 font.pixelSize: 10
                 font.bold: true
@@ -275,7 +264,7 @@ Item {
             }
             Text {
                 width: parent.width
-                text: val.length ? val : "—"
+                text: val.length ? val : qsTr("—")
                 color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
                 font.pixelSize: 13
                 font.bold: true
@@ -761,11 +750,11 @@ Item {
                 x: root.sideOpen ? parent.width - width : (parent.width - width) / 2
                 glyph: root.sideOpen ? bridge.glyphChevronLeft : bridge.glyphChevronRight
                 fontName: bridge.iconFont
-                tip: root.sideOpen ? "Collapse" : "Expand"
+                tip: root.sideOpen ? qsTr("Collapse") : qsTr("Expand")
                 onClicked: root.setSideOpen(!root.sideOpen)
             }
 
-            DropArea {
+            DropZone {
                 anchors.fill: parent
                 onDropped: function (drop) {
                     var urls = []
@@ -793,7 +782,7 @@ Item {
                 Text {
                     width: parent.width
                     horizontalAlignment: Text.AlignHCenter
-                    text: "Smart TrainzUtil"
+                    text: qsTr("Smart TrainzUtil")
                     color: side.ink
                     font.pixelSize: 15
                     font.bold: true
@@ -809,7 +798,7 @@ Item {
                         color: bridge.launcherOk ? "#3ddc84" : "#ff5a1f"
                     }
                     Text {
-                        text: bridge.launcherText
+                        text: (typeof bridge.launcherText === "string" ? qsTr(bridge.launcherText) : bridge.launcherText)
                         color: side.ink
                         font.pixelSize: 12
                         font.bold: true
@@ -823,9 +812,9 @@ Item {
                         height: 36
                         glyph: bridge.glyphFolder
                         fontName: bridge.iconFont
-                        label: "Data"
+                        label: qsTr("Data")
                         accent: true
-                        tip: "Open the Trainz data folder"
+                        tip: qsTr("Open the Trainz data folder")
                         onClicked: bridge.browseData()
                     }
                     RaiseButton {
@@ -834,7 +823,7 @@ Item {
                         height: 36
                         glyph: bridge.glyphFolder
                         fontName: bridge.iconFont
-                        tip: "Browse TrainzUtil.exe"
+                        tip: qsTr("Browse TrainzUtil.exe")
                         onClicked: bridge.browseUtil()
                     }
                     RaiseButton {
@@ -842,21 +831,21 @@ Item {
                         height: 36
                         glyph: bridge.glyphRefresh
                         fontName: bridge.iconFont
-                        tip: "Refresh"
+                        tip: qsTr("Refresh")
                         onClicked: bridge.refreshLauncher()
                     }
                     RaiseButton {
                         width: 40
                         height: 36
                         label: "+"
-                        tip: bridge.page === "encrypt" ? "Add .gs scripts" : "Add zip or CDP"
+                        tip: bridge.page === "encrypt" ? qsTr("Add .gs scripts") : qsTr("Add zip or CDP")
                         onClicked: bridge.addFiles()
                     }
                     RaiseButton {
                         width: 40
                         height: 36
-                        label: "×"
-                        tip: bridge.page === "encrypt" ? "Clear scripts" : "Clear packages"
+                        label: qsTr("×")
+                        tip: bridge.page === "encrypt" ? qsTr("Clear scripts") : qsTr("Clear packages")
                         onClicked: bridge.clearSources()
                     }
                 }
@@ -910,7 +899,7 @@ Item {
                                     Text {
                                         width: parent.width
                                         horizontalAlignment: Text.AlignHCenter
-                                        text: "View detail"
+                                        text: qsTr("View detail")
                                         color: side.ink
                                         font.pixelSize: 18
                                         font.bold: true
@@ -919,7 +908,7 @@ Item {
                                         width: parent.width
                                         horizontalAlignment: Text.AlignHCenter
                                         wrapMode: Text.Wrap
-                                        text: "Tick library rows to see each one here. Click a ticked row for its dependencies."
+                                        text: qsTr("Tick library rows to see each one here. Click a ticked row for its dependencies.")
                                         color: side.mute
                                         font.pixelSize: 12
                                     }
@@ -934,7 +923,7 @@ Item {
                                     Text {
                                         width: parent.width
                                         visible: bridge.detailCards.length > 1
-                                        text: bridge.detailCards.length + " selected"
+                                        text: bridge.detailCards.length + qsTr(" selected")
                                         color: side.mute
                                         font.pixelSize: 11
                                         font.bold: true
@@ -950,7 +939,7 @@ Item {
                                             glyph: bridge.glyphHistory
                                             fontName: bridge.iconFont
                                             accent: true
-                                            tip: "Find backups"
+                                            tip: qsTr("Find backups")
                                             onClicked: bridge.findSelectedBackups()
                                         }
                                         RaiseButton {
@@ -959,7 +948,7 @@ Item {
                                             enabled: !bridge.taskBusy
                                             glyph: bridge.glyphEdit
                                             fontName: bridge.iconFont
-                                            tip: "Open for editing"
+                                            tip: qsTr("Open for editing")
                                             onClicked: bridge.openForEditing()
                                         }
                                         RaiseButton {
@@ -968,7 +957,7 @@ Item {
                                             enabled: !bridge.taskBusy
                                             glyph: bridge.glyphPublish
                                             fontName: bridge.iconFont
-                                            tip: "Submit edit"
+                                            tip: qsTr("Submit edit")
                                             onClicked: bridge.submitEdit()
                                         }
                                         RaiseButton {
@@ -977,7 +966,7 @@ Item {
                                             enabled: !bridge.taskBusy
                                             glyph: bridge.glyphCheck
                                             fontName: bridge.iconFont
-                                            tip: "Validate"
+                                            tip: qsTr("Validate")
                                             onClicked: bridge.validateAssets()
                                         }
                                         RaiseButton {
@@ -985,7 +974,7 @@ Item {
                                             height: 36
                                             glyph: bridge.glyphAssets
                                             fontName: bridge.iconFont
-                                            tip: "Packages"
+                                            tip: qsTr("Packages")
                                             onClicked: bridge.openPackages()
                                         }
                                     }
@@ -996,85 +985,140 @@ Item {
                                             id: assetCard
                                             required property var modelData
                                             readonly property bool focused: modelData.kuid === bridge.detailKuid
+                                            readonly property bool open: focused && root.shutKuid !== modelData.kuid
+                                            readonly property bool many: bridge.detailCards.length > 1
                                             width: detailCol.width
-                                            height: cardCol.height + 16
+                                            height: cardHead.height + cardBody.height + 16
                                             radius: 12
-                                            color: bridge.detailCards.length > 1 && focused
+                                            color: many && focused
                                                    ? Qt.rgba(1, 0.35, 0.12, bridge.dark ? 0.16 : 0.1)
-                                                   : Qt.rgba(1, 1, 1, bridge.dark ? 0.04 : 0.4)
-                                            border.width: bridge.detailCards.length > 1 && focused ? 1 : 0
+                                                   : (headMouse.containsMouse
+                                                      ? Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.6)
+                                                      : Qt.rgba(1, 1, 1, bridge.dark ? 0.04 : 0.4))
+                                            border.width: many && focused ? 1 : 0
                                             border.color: "#ff5a1f"
+                                            Behavior on color { ColorAnimation { duration: 120 } }
 
-                                            Column {
-                                                id: cardCol
+                                            Item {
+                                                id: cardHead
                                                 x: 8
                                                 y: 8
                                                 width: parent.width - 16
+                                                height: headCol.height
+
+                                                Column {
+                                                    id: headCol
+                                                    width: parent.width - (assetCard.many ? 24 : 0)
+                                                    spacing: 6
+                                                    Text {
+                                                        width: parent.width
+                                                        text: assetCard.modelData.category || qsTr("Asset")
+                                                        color: "#ff7a45"
+                                                        font.pixelSize: 11
+                                                        font.bold: true
+                                                        font.capitalization: Font.AllUppercase
+                                                        elide: Text.ElideRight
+                                                    }
+                                                    Text {
+                                                        width: parent.width
+                                                        wrapMode: assetCard.open ? Text.Wrap : Text.NoWrap
+                                                        elide: Text.ElideRight
+                                                        text: assetCard.modelData.title || ""
+                                                        color: side.ink
+                                                        font.pixelSize: assetCard.open ? 20 : 14
+                                                        font.bold: true
+                                                        Behavior on font.pixelSize { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                                                    }
+                                                    Text {
+                                                        width: parent.width
+                                                        visible: !assetCard.open
+                                                        text: [assetCard.modelData.statusText || "", assetCard.modelData.kuid || ""].filter(function (s) { return s.length > 0 }).join("  ·  ")
+                                                        color: side.mute
+                                                        font.pixelSize: 11
+                                                        elide: Text.ElideRight
+                                                    }
+                                                }
+                                                Text {
+                                                    visible: assetCard.many
+                                                    anchors.right: parent.right
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: (typeof bridge.glyphChevronRight === "string" ? qsTr(bridge.glyphChevronRight) : bridge.glyphChevronRight)
+                                                    rotation: assetCard.open ? 90 : 0
+                                                    color: side.mute
+                                                    font.pixelSize: 16
+                                                    font.family: bridge.iconFont
+                                                    Behavior on rotation { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                                                }
+                                                MouseArea {
+                                                    id: headMouse
+                                                    anchors.fill: parent
+                                                    anchors.margins: -8
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        if (assetCard.focused) {
+                                                            root.shutKuid = assetCard.open ? assetCard.modelData.kuid : ""
+                                                            return
+                                                        }
+                                                        root.shutKuid = ""
+                                                        bridge.focusAsset(assetCard.modelData.kuid)
+                                                    }
+                                                }
+                                            }
+
+                                            Item {
+                                                id: cardBody
+                                                x: 8
+                                                anchors.top: cardHead.bottom
+                                                anchors.topMargin: assetCard.open ? 8 : 0
+                                                width: parent.width - 16
+                                                height: assetCard.open ? cardCol.implicitHeight : 0
+                                                opacity: assetCard.open ? 1 : 0
+                                                clip: true
+                                                Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                                                Behavior on opacity { NumberAnimation { duration: 180 } }
+
+                                            Column {
+                                                id: cardCol
+                                                width: parent.width
                                                 spacing: 8
 
                                                 Rectangle {
                                                     width: parent.width
-                                                    height: focused ? 168 : 0
-                                                    visible: focused
+                                                    height: 168
                                                     radius: 12
                                                     clip: true
                                                     color: Qt.rgba(0, 0, 0, bridge.dark ? 0.35 : 0.06)
                                                     Image {
                                                         anchors.fill: parent
-                                                        visible: bridge.coverUrl.length > 0
-                                            source: bridge.coverUrl
-                                            fillMode: Image.PreserveAspectCrop
-                                            asynchronous: true
-                                            sourceSize.width: 640
-                                            sourceSize.height: 360
+                                                        visible: assetCard.focused && bridge.coverUrl.length > 0
+                                                        source: assetCard.focused ? bridge.coverUrl : ""
+                                                        fillMode: Image.PreserveAspectCrop
+                                                        asynchronous: true
+                                                        sourceSize.width: 640
+                                                        sourceSize.height: 360
                                                     }
                                                     Text {
                                                         anchors.centerIn: parent
                                                         width: parent.width - 16
                                                         horizontalAlignment: Text.AlignHCenter
                                                         visible: bridge.coverUrl.length === 0
-                                                        text: bridge.coverBusy ? "Loading preview…" : "No preview"
+                                                        text: bridge.coverBusy ? qsTr("Loading preview…") : qsTr("No preview")
                                                         color: side.mute
                                                         font.pixelSize: 12
                                                     }
                                                 }
-
-                                                Text {
-                                                    width: parent.width
-                                                    text: modelData.category || "Asset"
-                                                    color: "#ff7a45"
-                                                    font.pixelSize: 11
-                                                    font.bold: true
-                                                    font.capitalization: Font.AllUppercase
-                                                    elide: Text.ElideRight
-                                                }
-                                                Text {
-                                                    width: parent.width
-                                                    wrapMode: Text.Wrap
-                                                    text: modelData.title || ""
-                                                    color: side.ink
-                                                    font.pixelSize: focused ? 20 : 15
-                                                    font.bold: true
-                                                }
                                                 Flow {
                                                     width: parent.width
                                                     spacing: 6
-                                                    visible: focused && bridge.detailStatus.length > 0
+                                                    visible: bridge.detailStatus.length > 0
                                                     Repeater {
-                                                        model: bridge.detailStatus
+                                                        model: assetCard.focused ? bridge.detailStatus : []
                                                         delegate: StatusChip {
                                                             required property string modelData
-                                                            label: modelData
+                                                            label: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                                                         }
                                                     }
-                                                }
-                                                Text {
-                                                    width: parent.width
-                                                    visible: !focused && (modelData.statusText || "").length > 0
-                                                    text: modelData.statusText || ""
-                                                    color: side.mute
-                                                    font.pixelSize: 11
-                                                    elide: Text.ElideRight
                                                 }
                                                 Rectangle {
                                                     width: parent.width
@@ -1086,7 +1130,7 @@ Item {
                                                         anchors.leftMargin: 10
                                                         anchors.rightMargin: 10
                                                         verticalAlignment: Text.AlignVCenter
-                                                        text: modelData.kuid || ""
+                                                        text: assetCard.modelData.kuid || ""
                                                         color: side.ink
                                                         font.pixelSize: 12
                                                         font.family: "Consolas"
@@ -1095,36 +1139,35 @@ Item {
                                                 }
                                                 Grid {
                                                     width: parent.width
-                                                    visible: focused
                                                     columns: 2
                                                     columnSpacing: 8
                                                     rowSpacing: 8
                                                     StatTile {
                                                         width: (parent.width - 8) / 2
                                                         cap: "Trainz-build"
-                                                        val: modelData.build || ""
+                                                        val: assetCard.modelData.build || ""
                                                     }
                                                     StatTile {
                                                         width: (parent.width - 8) / 2
                                                         cap: "Modified"
-                                                        val: modelData.modified || ""
+                                                        val: assetCard.modelData.modified || ""
                                                     }
                                                     StatTile {
                                                         width: (parent.width - 8) / 2
                                                         cap: "Size"
-                                                        val: modelData.size || ""
+                                                        val: assetCard.modelData.size || ""
                                                     }
                                                     StatTile {
                                                         width: (parent.width - 8) / 2
                                                         cap: "Author"
-                                                        val: modelData.author || ""
+                                                        val: assetCard.modelData.author || ""
                                                     }
                                                 }
                                                 Rectangle {
-                                                    readonly property string note: modelData.note || ""
+                                                    readonly property string note: assetCard.modelData.note || ""
                                                     readonly property bool warn: note.indexOf("Launcher") >= 0 || note.toLowerCase().indexOf("error") >= 0
                                                     width: parent.width
-                                                    visible: focused && note.length > 0 && bridge.detailDeps.length === 0
+                                                    visible: note.length > 0 && bridge.detailDeps.length === 0
                                                     height: visible ? cardNote.implicitHeight + 16 : 0
                                                     radius: 10
                                                     color: warn
@@ -1138,32 +1181,32 @@ Item {
                                                         anchors.leftMargin: 10
                                                         anchors.rightMargin: 10
                                                         wrapMode: Text.Wrap
-                                                        text: parent.note
+                                                        text: (typeof parent.note === "string" ? qsTr(parent.note) : parent.note)
                                                         color: side.ink
                                                         font.pixelSize: 12
                                                     }
                                                 }
                                                 Column {
-                                                    id: depBlock
                                                     width: parent.width
                                                     spacing: 8
-                                                    visible: focused && bridge.detailDeps.length > 0
+                                                    visible: assetCard.focused && bridge.detailDeps.length > 0
                                                     Item {
                                                         width: parent.width
-                                                        height: 22
+                                                        height: 30
                                                         Row {
                                                             spacing: 8
                                                             anchors.verticalCenter: parent.verticalCenter
                                                             Text {
-                                                                text: bridge.glyphChevronRight
+                                                                text: (typeof bridge.glyphChevronRight === "string" ? qsTr(bridge.glyphChevronRight) : bridge.glyphChevronRight)
                                                                 rotation: root.depsOpen ? 90 : 0
                                                                 color: side.mute
                                                                 font.pixelSize: 16
                                                                 font.family: bridge.iconFont
                                                                 anchors.verticalCenter: parent.verticalCenter
+                                                                Behavior on rotation { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
                                                             }
                                                             Text {
-                                                                text: "Dependencies"
+                                                                text: qsTr("Dependencies")
                                                                 color: side.mute
                                                                 font.pixelSize: 11
                                                                 font.bold: true
@@ -1179,72 +1222,98 @@ Item {
                                                                 Text {
                                                                     id: depCount
                                                                     anchors.centerIn: parent
-                                                                    text: bridge.detailDeps.length
+                                                                    text: (typeof bridge.detailDeps.length === "string" ? qsTr(bridge.detailDeps.length) : bridge.detailDeps.length)
                                                                     color: bridge.dark ? "#ffb199" : "#9a3412"
                                                                     font.pixelSize: 10
                                                                     font.bold: true
                                                                 }
                                                             }
                                                         }
-                                                        TapHandler { onTapped: root.depsOpen = !root.depsOpen }
+                                                        MouseArea {
+                                                            anchors.fill: parent
+                                                            anchors.rightMargin: 92
+                                                            cursorShape: Qt.PointingHandCursor
+                                                            onClicked: root.depsOpen = !root.depsOpen
+                                                        }
+                                                        RaiseButton {
+                                                            anchors.right: parent.right
+                                                            anchors.verticalCenter: parent.verticalCenter
+                                                            width: 86
+                                                            height: 26
+                                                            label: qsTr("Open list")
+                                                            onClicked: bridge.openDependencyList(assetCard.modelData.kuid, "")
+                                                        }
                                                     }
-                                                    Repeater {
-                                                        model: root.depsOpen ? bridge.detailDeps : []
-                                                        delegate: Rectangle {
-                                                            required property var modelData
-                                                            width: cardCol.width
-                                                            height: 48
-                                                            radius: 12
-                                                            color: Qt.rgba(1, 1, 1, bridge.dark ? 0.045 : 0.55)
-                                                            border.width: 1
-                                                            border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.45)
-                                                            Rectangle {
-                                                                width: 3
-                                                                height: 18
-                                                                radius: 1.5
-                                                                anchors.left: parent.left
-                                                                anchors.leftMargin: 8
-                                                                anchors.verticalCenter: parent.verticalCenter
-                                                                color: "#ff7a45"
-                                                            }
-                                                            Column {
-                                                                anchors.left: parent.left
-                                                                anchors.right: parent.right
-                                                                anchors.leftMargin: 20
-                                                                anchors.rightMargin: 10
-                                                                anchors.verticalCenter: parent.verticalCenter
-                                                                spacing: 2
-                                                                Text {
-                                                                    width: parent.width
-                                                                    text: modelData.name
-                                                                    color: side.ink
-                                                                    font.pixelSize: 13
-                                                                    font.bold: true
-                                                                    elide: Text.ElideRight
+                                                    Item {
+                                                        width: parent.width
+                                                        height: root.depsOpen ? depList.implicitHeight : 0
+                                                        opacity: root.depsOpen ? 1 : 0
+                                                        clip: true
+                                                        Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                                                        Behavior on opacity { NumberAnimation { duration: 160 } }
+                                                        Column {
+                                                            id: depList
+                                                            width: parent.width
+                                                            spacing: 8
+                                                            Repeater {
+                                                                model: assetCard.focused ? bridge.detailDeps : []
+                                                                delegate: Rectangle {
+                                                                    required property var modelData
+                                                                    width: depList.width
+                                                                    height: 48
+                                                                    radius: 12
+                                                                    color: depMouse.containsMouse
+                                                                           ? Qt.rgba(1, 0.35, 0.12, bridge.dark ? 0.14 : 0.1)
+                                                                           : Qt.rgba(1, 1, 1, bridge.dark ? 0.045 : 0.55)
+                                                                    border.width: 1
+                                                                    border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.45)
+                                                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                                                    Rectangle {
+                                                                        width: 3
+                                                                        height: 18
+                                                                        radius: 1.5
+                                                                        anchors.left: parent.left
+                                                                        anchors.leftMargin: 8
+                                                                        anchors.verticalCenter: parent.verticalCenter
+                                                                        color: "#ff7a45"
+                                                                    }
+                                                                    Column {
+                                                                        anchors.left: parent.left
+                                                                        anchors.right: parent.right
+                                                                        anchors.leftMargin: 20
+                                                                        anchors.rightMargin: 10
+                                                                        anchors.verticalCenter: parent.verticalCenter
+                                                                        spacing: 2
+                                                                        Text {
+                                                                            width: parent.width
+                                                                            text: (typeof modelData.name === "string" ? qsTr(modelData.name) : modelData.name)
+                                                                            color: side.ink
+                                                                            font.pixelSize: 13
+                                                                            font.bold: true
+                                                                            elide: Text.ElideRight
+                                                                        }
+                                                                        Text {
+                                                                            width: parent.width
+                                                                            text: (typeof modelData.kuid === "string" ? qsTr(modelData.kuid) : modelData.kuid)
+                                                                            color: side.mute
+                                                                            font.pixelSize: 11
+                                                                            font.family: "Consolas"
+                                                                            elide: Text.ElideMiddle
+                                                                        }
+                                                                    }
+                                                                    MouseArea {
+                                                                        id: depMouse
+                                                                        anchors.fill: parent
+                                                                        hoverEnabled: true
+                                                                        cursorShape: Qt.PointingHandCursor
+                                                                        onClicked: bridge.openDependencyList(assetCard.modelData.kuid, modelData.kuid)
+                                                                    }
                                                                 }
-                                                                Text {
-                                                                    width: parent.width
-                                                                    text: modelData.kuid
-                                                                    color: side.mute
-                                                                    font.pixelSize: 11
-                                                                    font.family: "Consolas"
-                                                                    elide: Text.ElideMiddle
-                                                                }
                                                             }
-                                                            TapHandler { onTapped: root.openDependency(modelData.kuid) }
                                                         }
                                                     }
                                                 }
                                             }
-                                            TapHandler {
-                                                onTapped: function (eventPoint) {
-                                                    if (depBlock.visible) {
-                                                        var local = depBlock.mapFromItem(assetCard, eventPoint.position.x, eventPoint.position.y)
-                                                        if (local.x >= 0 && local.y >= 0 && local.x <= depBlock.width && local.y <= depBlock.height)
-                                                            return
-                                                    }
-                                                    bridge.focusAsset(modelData.kuid)
-                                                }
                                             }
                                         }
                                     }
@@ -1270,7 +1339,7 @@ Item {
                         anchors.fill: parent
                         spacing: 6
                         Text {
-                            text: "Packages"
+                            text: qsTr("Packages")
                             color: side.mute
                             font.pixelSize: 11
                         }
@@ -1300,7 +1369,7 @@ Item {
                                     spacing: 2
                                     Text {
                                         width: parent.width - 20
-                                        text: name
+                                        text: (typeof name === "string" ? qsTr(name) : name)
                                         color: side.ink
                                         font.pixelSize: 12
                                         font.bold: true
@@ -1308,7 +1377,7 @@ Item {
                                     }
                                     Text {
                                         width: parent.width
-                                        text: kind + "  ·  " + size + "  ·  " + status
+                                        text: kind + qsTr("  ·  ") + size + qsTr("  ·  ") + status
                                         color: side.mute
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
@@ -1318,7 +1387,7 @@ Item {
                                     anchors.right: parent.right
                                     anchors.top: parent.top
                                     anchors.margins: 4
-                                    text: "×"
+                                    text: qsTr("×")
                                     color: side.mute
                                     font.pixelSize: 14
                                     TapHandler { onTapped: bridge.removeSource(sourceId) }
@@ -1348,7 +1417,7 @@ Item {
                 id: mid
                     anchors.fill: parent
                     anchors.margins: 8
-                    DropArea {
+                    DropZone {
                         anchors.fill: parent
                         enabled: bridge.page === "install"
                         z: 4
@@ -1381,12 +1450,19 @@ Item {
                             visible: bridge.page === "files"
                             width: 64
                             height: 32
-                            label: "Back"
+                            label: qsTr("Back")
                             onClicked: bridge.backContents()
+                        }
+                        RaiseButton {
+                            visible: bridge.libraryOn && bridge.scopeOn
+                            width: 64
+                            height: 32
+                            label: qsTr("Back")
+                            onClicked: bridge.closeScope()
                         }
                         Text {
                             width: bridge.libraryOn
-                                  ? Math.max(80, parent.width - 220 - 80 - 18)
+                                  ? Math.max(80, parent.width - 220 - 80 - 18 - (bridge.scopeOn ? 72 : 0))
                                   : (bridge.page === "backups"
                                      ? Math.max(80, parent.width - 8)
                                      : (bridge.page === "install"
@@ -1396,7 +1472,7 @@ Item {
                                            : Math.max(80, parent.width - 64 - 88 - 100 - 24))))
                             height: 32
                             verticalAlignment: Text.AlignVCenter
-                            text: bridge.libraryOn
+                            text: (typeof bridge.libraryOn === "string" ? qsTr(bridge.libraryOn) : bridge.libraryOn)
                                   ? bridge.librarySummary
                                   : (bridge.page === "backups"
                                      ? bridge.backupSummary
@@ -1432,7 +1508,7 @@ Item {
                                     anchors.fill: parent
                                     verticalAlignment: Text.AlignVCenter
                                     visible: !findInput.text.length && !findInput.activeFocus
-                                    text: "Find"
+                                    text: qsTr("Find")
                                     color: bridge.dark ? "#8b93a1" : "#5c6570"
                                     font.pixelSize: 12
                                 }
@@ -1448,14 +1524,14 @@ Item {
                             visible: bridge.libraryOn
                             width: 72
                             height: 32
-                            label: "Scan"
+                            label: qsTr("Scan")
                             onClicked: bridge.scanLibrary()
                         }
                         RaiseButton {
                             visible: bridge.page === "install"
                             width: 96
                             height: 32
-                            label: "Install"
+                            label: qsTr("Install")
                             accent: true
                             onClicked: bridge.installChecked()
                         }
@@ -1463,49 +1539,49 @@ Item {
                             visible: bridge.page === "install"
                             width: 72
                             height: 32
-                            label: "Stop"
+                            label: qsTr("Stop")
                             onClicked: bridge.stopQueue()
                         }
                         RaiseButton {
                             visible: bridge.page === "files"
                             width: 88
                             height: 32
-                            label: "All"
+                            label: qsTr("All")
                             onClicked: setAll(true)
                         }
                         RaiseButton {
                             visible: bridge.page === "files"
                             width: 100
                             height: 32
-                            label: "None"
+                            label: qsTr("None")
                             onClicked: setAll(false)
                         }
                         RaiseButton {
                             visible: bridge.page === "install"
                             width: 64
                             height: 32
-                            label: "All"
+                            label: qsTr("All")
                             onClicked: bridge.setSourcesChecked(true)
                         }
                         RaiseButton {
                             visible: bridge.page === "install"
                             width: 72
                             height: 32
-                            label: "None"
+                            label: qsTr("None")
                             onClicked: bridge.setSourcesChecked(false)
                         }
                         RaiseButton {
                             visible: bridge.page === "encrypt"
                             width: 72
                             height: 32
-                            label: "Add"
+                            label: qsTr("Add")
                             onClicked: bridge.addScripts()
                         }
                         RaiseButton {
                             visible: bridge.page === "encrypt"
                             width: 96
                             height: 32
-                            label: "Encrypt"
+                            label: qsTr("Encrypt")
                             accent: true
                             onClicked: bridge.encryptScripts()
                         }
@@ -1513,7 +1589,7 @@ Item {
                             visible: bridge.page === "encrypt"
                             width: 72
                             height: 32
-                            label: "Clear"
+                            label: qsTr("Clear")
                             onClicked: bridge.clearScripts()
                         }
                     }
@@ -1576,6 +1652,17 @@ Item {
                     ListView {
                         id: libraryList
                         visible: bridge.libraryOn
+                        readonly property bool scoped: bridge.scopeOn
+                        onScopedChanged: scopeFade.restart()
+                        NumberAnimation {
+                            id: scopeFade
+                            target: libraryList
+                            property: "opacity"
+                            from: 0
+                            to: 1
+                            duration: 220
+                            easing.type: Easing.OutCubic
+                        }
                         anchors.top: colHead.bottom
                         anchors.bottom: parent.bottom
                         anchors.bottomMargin: bridge.reportOn ? 168 : 12
@@ -1628,7 +1715,7 @@ Item {
                                     Text {
                                         anchors.centerIn: parent
                                         visible: picked
-                                        text: "✓"
+                                        text: qsTr("✓")
                                         color: "#ffffff"
                                         font.pixelSize: 11
                                     }
@@ -1670,7 +1757,7 @@ Item {
                                 Text {
                                     width: mid.nameW
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: assetName
+                                    text: (typeof assetName === "string" ? qsTr(assetName) : assetName)
                                     color: faulty ? "#ffd0cc" : (bridge.dark ? "#f4f6fa" : "#1d1d1f")
                                     font.pixelSize: 12
                                     font.bold: faulty
@@ -1679,7 +1766,7 @@ Item {
                                 Text {
                                     width: mid.statW
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: statusText
+                                    text: (typeof statusText === "string" ? qsTr(statusText) : statusText)
                                     color: statusText.indexOf("Edit") >= 0 ? "#ff5a1f" : (faulty ? "#ffb0a8" : (bridge.dark ? "#d5dbe3" : "#1d1d1f"))
                                     font.pixelSize: 11
                                     font.bold: faulty || statusText.indexOf("Edit") >= 0
@@ -1688,7 +1775,7 @@ Item {
                                 Text {
                                     width: mid.modifiedW
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: modified
+                                    text: (typeof modified === "string" ? qsTr(modified) : modified)
                                     color: bridge.dark ? "#d5dbe3" : "#1d1d1f"
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
@@ -1696,7 +1783,7 @@ Item {
                                 Text {
                                     width: mid.sizeW
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: packed
+                                    text: (typeof packed === "string" ? qsTr(packed) : packed)
                                     color: bridge.dark ? "#d5dbe3" : "#1d1d1f"
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
@@ -1704,7 +1791,7 @@ Item {
                                 Text {
                                     width: mid.kuidW
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: kuid
+                                    text: (typeof kuid === "string" ? qsTr(kuid) : kuid)
                                     color: faulty ? "#ffb0a8" : (bridge.dark ? "#9aa3b2" : "#5c6570")
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
@@ -1712,7 +1799,7 @@ Item {
                                 Text {
                                     width: mid.authorW
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: authorName
+                                    text: (typeof authorName === "string" ? qsTr(authorName) : authorName)
                                     color: bridge.dark ? "#d5dbe3" : "#1d1d1f"
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
@@ -1720,7 +1807,7 @@ Item {
                                 Text {
                                     width: mid.buildW
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: buildVersion
+                                    text: (typeof buildVersion === "string" ? qsTr(buildVersion) : buildVersion)
                                     color: bridge.dark ? "#d5dbe3" : "#1d1d1f"
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
@@ -1728,7 +1815,7 @@ Item {
                                 Text {
                                     width: mid.catW
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: category
+                                    text: (typeof category === "string" ? qsTr(category) : category)
                                     color: bridge.dark ? "#9aa3b2" : "#5c6570"
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
@@ -1742,7 +1829,7 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: 58
                                 height: 22
-                                label: "Tuner"
+                                label: qsTr("Tuner")
                                 accent: true
                                 onClicked: bridge.openEngine(kuid)
                             }
@@ -1819,7 +1906,7 @@ Item {
                                 id: reportBody
                                 width: reportBox.width - 44
                                 wrapMode: Text.Wrap
-                                text: bridge.reportText
+                                text: (typeof bridge.reportText === "string" ? qsTr(bridge.reportText) : bridge.reportText)
                                 color: bridge.dark ? "#f4f6fa" : "#1d1d1f"
                                 font.pixelSize: 12
                             }
@@ -1828,7 +1915,7 @@ Item {
                             anchors.right: parent.right
                             anchors.top: parent.top
                             anchors.margins: 6
-                            text: "×"
+                            text: qsTr("×")
                             color: "#ff5a1f"
                             font.pixelSize: 16
                             TapHandler { onTapped: bridge.closeReport() }
@@ -1882,7 +1969,7 @@ Item {
                         Text {
                             anchors.centerIn: parent
                             visible: sourceModel.count === 0
-                            text: "Drop zip or CDP files here"
+                            text: qsTr("Drop zip or CDP files here")
                             color: bridge.dark ? "#9aa3b2" : "#5c6570"
                             font.pixelSize: 16
                         }
@@ -1916,7 +2003,7 @@ Item {
                                     Text {
                                         anchors.centerIn: parent
                                         visible: checked
-                                        text: "✓"
+                                        text: qsTr("✓")
                                         color: "#ffffff"
                                         font.pixelSize: 12
                                     }
@@ -1927,7 +2014,7 @@ Item {
                                     spacing: 4
                                     Text {
                                         width: parent.width
-                                        text: name
+                                        text: (typeof name === "string" ? qsTr(name) : name)
                                         color: bridge.dark ? "#f4f6fa" : "#1d1d1f"
                                         font.pixelSize: 13
                                         font.bold: true
@@ -1935,7 +2022,7 @@ Item {
                                     }
                                     Text {
                                         width: parent.width
-                                        text: kind + "  ·  " + size
+                                        text: kind + qsTr("  ·  ") + size
                                         color: bridge.dark ? "#9aa3b2" : "#5c6570"
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
@@ -1967,7 +2054,7 @@ Item {
                                     }
                                     Text {
                                         width: parent.width
-                                        text: status
+                                        text: (typeof status === "string" ? qsTr(status) : status)
                                         color: failed ? "#ff5a1f" : (bridge.dark ? "#9aa3b2" : "#5c6570")
                                         font.pixelSize: 11
                                         horizontalAlignment: Text.AlignRight
@@ -1977,7 +2064,7 @@ Item {
                                 Text {
                                     width: 20
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: "×"
+                                    text: qsTr("×")
                                     color: bridge.dark ? "#9aa3b2" : "#5c6570"
                                     font.pixelSize: 16
                                     horizontalAlignment: Text.AlignRight
@@ -2060,7 +2147,7 @@ Item {
                                     z: 2
                                     Text {
                                         anchors.centerIn: parent
-                                        text: leftLabel
+                                        text: (typeof leftLabel === "string" ? qsTr(leftLabel) : leftLabel)
                                         color: leftHot ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
                                         font.pixelSize: 13
                                         font.bold: leftHot
@@ -2075,7 +2162,7 @@ Item {
                                     z: 2
                                     Text {
                                         anchors.centerIn: parent
-                                        text: rightLabel
+                                        text: (typeof rightLabel === "string" ? qsTr(rightLabel) : rightLabel)
                                         color: !leftHot ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
                                         font.pixelSize: 13
                                         font.bold: !leftHot
@@ -2137,7 +2224,7 @@ Item {
                                         anchors.fill: parent
                                         verticalAlignment: Text.AlignVCenter
                                         visible: !backupFind.text.length && !backupFind.activeFocus
-                                        text: "Name or KUID"
+                                        text: qsTr("Name or KUID")
                                         color: bridge.dark ? "#8b93a1" : "#5c6570"
                                         font.pixelSize: 13
                                     }
@@ -2187,7 +2274,7 @@ Item {
                                 anchors.left: parent.left
                                 anchors.bottom: parent.bottom
                                 anchors.bottomMargin: 4
-                                text: section
+                                text: (typeof section === "string" ? qsTr(section) : section)
                                 color: "#ff5a1f"
                                 font.pixelSize: 12
                                 font.bold: true
@@ -2225,14 +2312,14 @@ Item {
                                     spacing: 3
                                     Text {
                                         width: parent.width
-                                        text: title
+                                        text: (typeof title === "string" ? qsTr(title) : title)
                                         color: bridge.dark ? "#f4f6fa" : "#1d1d1f"
                                         font.pixelSize: 13
                                         elide: Text.ElideMiddle
                                     }
                                     Text {
                                         width: parent.width
-                                        text: detail
+                                        text: (typeof detail === "string" ? qsTr(detail) : detail)
                                         color: bridge.dark ? "#9aa3b2" : "#5c6570"
                                         font.pixelSize: 11
                                         elide: Text.ElideMiddle
@@ -2242,7 +2329,7 @@ Item {
                                     width: 64
                                     height: 30
                                     anchors.verticalCenter: parent.verticalCenter
-                                    label: "Open"
+                                    label: qsTr("Open")
                                     onClicked: bridge.openBackup(path)
                                 }
                             }
@@ -2256,8 +2343,8 @@ Item {
                         width: Math.max(120, parent.width - 48)
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.Wrap
-                        text: "No " + root.backupKind + " copies"
-                              + (backupFind.text.length ? " for this search." : ".")
+                        text: qsTr("No ") + root.backupKind + qsTr(" copies")
+                              + (backupFind.text.length ? qsTr(" for this search.") : ".")
                         color: bridge.dark ? "#9aa3b2" : "#5c6570"
                         font.pixelSize: 14
                     }
@@ -2275,7 +2362,7 @@ Item {
                         boundsBehavior: Flickable.StopAtBounds
                         model: scriptModel
 
-                        DropArea {
+                        DropZone {
                             anchors.fill: parent
                             z: 2
                             onDropped: function (drop) {
@@ -2289,7 +2376,7 @@ Item {
                         Text {
                             anchors.centerIn: parent
                             visible: scriptModel.count === 0
-                            text: "Drop .gs files or a folder — .gse is written beside each script"
+                            text: qsTr("Drop .gs files or a folder — .gse is written beside each script")
                             color: bridge.dark ? "#9aa3b2" : "#5c6570"
                             font.pixelSize: 15
                         }
@@ -2324,7 +2411,7 @@ Item {
                                     spacing: 2
                                     Text {
                                         width: parent.width
-                                        text: name
+                                        text: (typeof name === "string" ? qsTr(name) : name)
                                         color: bridge.dark ? "#f4f6fa" : "#1d1d1f"
                                         font.pixelSize: 13
                                         font.bold: true
@@ -2332,7 +2419,7 @@ Item {
                                     }
                                     Text {
                                         width: parent.width
-                                        text: folder
+                                        text: (typeof folder === "string" ? qsTr(folder) : folder)
                                         color: bridge.dark ? "#9aa3b2" : "#5c6570"
                                         font.pixelSize: 11
                                         elide: Text.ElideLeft
@@ -2341,7 +2428,7 @@ Item {
                                 Text {
                                     width: 150
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: status
+                                    text: (typeof status === "string" ? qsTr(status) : status)
                                     color: tone === "ok" ? "#3ddc84" : (tone === "bad" ? "#ff5a1f" : (bridge.dark ? "#9aa3b2" : "#5c6570"))
                                     font.pixelSize: 12
                                     horizontalAlignment: Text.AlignRight
@@ -2350,7 +2437,7 @@ Item {
                                 Text {
                                     width: 20
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: "×"
+                                    text: qsTr("×")
                                     color: bridge.dark ? "#9aa3b2" : "#5c6570"
                                     font.pixelSize: 16
                                     horizontalAlignment: Text.AlignRight
@@ -2402,7 +2489,7 @@ Item {
                                     Text {
                                         anchors.centerIn: parent
                                         visible: checked
-                                        text: "✓"
+                                        text: qsTr("✓")
                                         color: "#ffffff"
                                         font.pixelSize: 12
                                     }
@@ -2413,14 +2500,14 @@ Item {
                                     spacing: 2
                                     Text {
                                         width: parent.width
-                                        text: label
+                                        text: (typeof label === "string" ? qsTr(label) : label)
                                         color: bridge.dark ? "#f4f6fa" : "#1d1d1f"
                                         font.pixelSize: 13
                                         elide: Text.ElideRight
                                     }
                                     Text {
                                         width: parent.width
-                                        text: detail
+                                        text: (typeof detail === "string" ? qsTr(detail) : detail)
                                         color: bridge.dark ? "#9aa3b2" : "#5c6570"
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
@@ -2429,7 +2516,7 @@ Item {
                                 Text {
                                     width: 80
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: state
+                                    text: (typeof state === "string" ? qsTr(state) : state)
                                     color: state === "Failed" ? "#ff5a1f" : (bridge.dark ? "#9aa3b2" : "#5c6570")
                                     font.pixelSize: 11
                                     horizontalAlignment: Text.AlignRight
@@ -2438,7 +2525,7 @@ Item {
                                     visible: openable
                                     width: 64
                                     height: 28
-                                    label: "Open"
+                                    label: qsTr("Open")
                                     onClicked: bridge.openEntry(jobId)
                                 }
                             }
@@ -2475,7 +2562,7 @@ Item {
                 x: root.taskOpen ? 0 : (parent.width - width) / 2
                 glyph: root.taskOpen ? bridge.glyphChevronRight : bridge.glyphChevronLeft
                 fontName: bridge.iconFont
-                tip: root.taskOpen ? "Collapse" : "Expand"
+                tip: root.taskOpen ? qsTr("Collapse") : qsTr("Expand")
                 onClicked: root.setTaskOpen(!root.taskOpen)
             }
 
@@ -2488,7 +2575,7 @@ Item {
                 anchors.right: parent.right
                 spacing: 8
                 Text {
-                    text: "Progress"
+                    text: qsTr("Progress")
                     color: taskSide.ink
                     font.pixelSize: 16
                     font.bold: true
@@ -2496,7 +2583,7 @@ Item {
                 Text {
                     width: parent.width
                     wrapMode: Text.Wrap
-                    text: bridge.taskSummary
+                    text: (typeof bridge.taskSummary === "string" ? qsTr(bridge.taskSummary) : bridge.taskSummary)
                     color: taskSide.mute
                     font.pixelSize: 12
                 }
@@ -2524,7 +2611,7 @@ Item {
                 visible: root.taskOpen && !taskAnim.running && taskModel.count === 0
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter
-                text: "Click a row to read its log. Validate, submit, and install each keep their own."
+                text: qsTr("Click a row to read its log. Validate, submit, and install each keep their own.")
                 color: taskSide.mute
                 font.pixelSize: 12
             }
@@ -2599,7 +2686,7 @@ Item {
                         spacing: 4
                         Text {
                             width: parent.width
-                            text: name
+                            text: (typeof name === "string" ? qsTr(name) : name)
                             color: taskSide.ink
                             font.pixelSize: 13
                             font.bold: true
@@ -2607,7 +2694,7 @@ Item {
                         }
                         Text {
                             width: parent.width
-                            text: action + "  ·  " + phase
+                            text: action + qsTr("  ·  ") + phase
                             color: badPhase ? "#ff7a45" : (okPhase ? "#3ddc84" : taskSide.mute)
                             font.pixelSize: 11
                             font.bold: true
@@ -2628,7 +2715,7 @@ Item {
                         Text {
                             width: parent.width
                             visible: detail.length > 0
-                            text: detail
+                            text: (typeof detail === "string" ? qsTr(detail) : detail)
                             color: taskSide.mute
                             font.pixelSize: 11
                             elide: Text.ElideRight
@@ -2828,7 +2915,7 @@ Item {
                 z: 2
                 Text {
                     anchors.centerIn: parent
-                    text: label
+                    text: (typeof label === "string" ? qsTr(label) : label)
                     color: hot ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
                     font.pixelSize: 13
                     font.bold: hot
@@ -2840,7 +2927,7 @@ Item {
                 id: libraryChip
                 x: 4
                 width: 84
-                label: "Library"
+                label: qsTr("Library")
                 hot: bridge.page === "library"
                 onPicked: bridge.showPage("library")
             }
@@ -2848,7 +2935,7 @@ Item {
                 id: backupsChip
                 x: 102
                 width: 100
-                label: "Backups"
+                label: qsTr("Backups")
                 hot: bridge.page === "backups"
                 onPicked: bridge.showPage("backups")
             }
@@ -2856,7 +2943,7 @@ Item {
                 id: installChip
                 x: 216
                 width: 100
-                label: "Installer"
+                label: qsTr("Installer")
                 hot: bridge.page === "install"
                 onPicked: bridge.showPage("install")
             }
@@ -2868,7 +2955,7 @@ Item {
                 z: 2
                 Text {
                     anchors.centerIn: parent
-                    text: bridge.glyphHome
+                    text: (typeof bridge.glyphHome === "string" ? qsTr(bridge.glyphHome) : bridge.glyphHome)
                     font.family: bridge.iconFont
                     font.pixelSize: 22
                     color: homeH.hovered ? "#ff5a1f" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
@@ -2880,7 +2967,7 @@ Item {
                 id: filesChip
                 x: 384
                 width: 84
-                label: "Files"
+                label: qsTr("Files")
                 hot: bridge.page === "files"
                 onPicked: bridge.showPage("files")
             }
@@ -2888,7 +2975,7 @@ Item {
                 id: encryptChip
                 x: 482
                 width: 92
-                label: "Encrypt"
+                label: qsTr("Encrypt")
                 hot: bridge.page === "encrypt"
                 onPicked: bridge.showPage("encrypt")
             }
@@ -2953,7 +3040,7 @@ Item {
                     }
                     Text {
                         width: parent.width - 38
-                        text: "Loading content"
+                        text: qsTr("Loading content")
                         color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
                         font.pixelSize: 18
                         font.bold: true
@@ -2963,7 +3050,7 @@ Item {
                 Text {
                     width: parent.width
                     wrapMode: Text.Wrap
-                    text: bridge.loadDetail
+                    text: (typeof bridge.loadDetail === "string" ? qsTr(bridge.loadDetail) : bridge.loadDetail)
                     color: bridge.dark ? "#f4f6fa" : "#1d1d1f"
                     font.pixelSize: 13
                 }
@@ -2971,7 +3058,7 @@ Item {
                     width: parent.width
                     visible: text.length > 0
                     wrapMode: Text.Wrap
-                    text: bridge.loadLog
+                    text: (typeof bridge.loadLog === "string" ? qsTr(bridge.loadLog) : bridge.loadLog)
                     color: bridge.dark ? "#9aa3b2" : "#5c6570"
                     font.pixelSize: 12
                 }
@@ -3105,7 +3192,7 @@ Item {
                                 spacing: 2
                                 Text {
                                     width: parent.width
-                                    text: root.taskLogTitle
+                                    text: (typeof root.taskLogTitle === "string" ? qsTr(root.taskLogTitle) : root.taskLogTitle)
                                     color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
                                     font.pixelSize: 16
                                     font.bold: true
@@ -3113,7 +3200,7 @@ Item {
                                 }
                                 Text {
                                     width: parent.width
-                                    text: root.taskLogAction
+                                    text: (typeof root.taskLogAction === "string" ? qsTr(root.taskLogAction) : root.taskLogAction)
                                     color: "#9aa3b2"
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
@@ -3135,7 +3222,7 @@ Item {
                             height: 32
                             glyph: bridge.glyphClose
                             fontName: bridge.iconFont
-                            tip: "Close"
+                            tip: qsTr("Close")
                             onClicked: root.taskLogOn = false
                         }
                     }
@@ -3151,7 +3238,7 @@ Item {
                             Text {
                                 id: errCount
                                 anchors.centerIn: parent
-                                text: root.toneCount("error") + " errors"
+                                text: root.toneCount("error") + qsTr(" errors")
                                 color: "#ff4d4f"
                                 font.pixelSize: 11
                                 font.bold: true
@@ -3168,7 +3255,7 @@ Item {
                             Text {
                                 id: warnCount
                                 anchors.centerIn: parent
-                                text: root.toneCount("warn") + " warnings"
+                                text: root.toneCount("warn") + qsTr(" warnings")
                                 color: "#f5c542"
                                 font.pixelSize: 11
                                 font.bold: true
@@ -3185,7 +3272,7 @@ Item {
                             Text {
                                 id: okCount
                                 anchors.centerIn: parent
-                                text: root.toneCount("ok") + " ok"
+                                text: root.toneCount("ok") + qsTr(" ok")
                                 color: "#3ddc84"
                                 font.pixelSize: 11
                                 font.bold: true
@@ -3201,7 +3288,7 @@ Item {
                             glyph: bridge.glyphCopy
                             fontName: bridge.iconFont
                             ink: "#ff4d4f"
-                            tip: "Copy errors"
+                            tip: qsTr("Copy errors")
                             onClicked: bridge.copyText(root.logLines("error"))
                         }
                         RaiseButton {
@@ -3210,7 +3297,7 @@ Item {
                             glyph: bridge.glyphCopy
                             fontName: bridge.iconFont
                             ink: "#f5c542"
-                            tip: "Copy warnings"
+                            tip: qsTr("Copy warnings")
                             onClicked: bridge.copyText(root.logLines("warn"))
                         }
                         RaiseButton {
@@ -3219,7 +3306,7 @@ Item {
                             glyph: bridge.glyphCopy
                             fontName: bridge.iconFont
                             ink: "#3ddc84"
-                            tip: "Copy ok lines"
+                            tip: qsTr("Copy ok lines")
                             onClicked: bridge.copyText(root.logLines("ok"))
                         }
                         RaiseButton {
@@ -3227,7 +3314,7 @@ Item {
                             height: 32
                             glyph: bridge.glyphCopy
                             fontName: bridge.iconFont
-                            tip: "Copy all"
+                            tip: qsTr("Copy all")
                             onClicked: bridge.copyText(root.logLines(""))
                         }
                         RaiseButton {
@@ -3236,7 +3323,7 @@ Item {
                             glyph: bridge.glyphCopy
                             fontName: bridge.iconFont
                             ink: "#ff5a1f"
-                            tip: "Copy selected"
+                            tip: qsTr("Copy selected")
                             enabled: root.logSelCount() > 0
                             onClicked: bridge.copyText(root.logSelectedText())
                         }
@@ -3293,7 +3380,7 @@ Item {
                                 anchors.left: parent.left
                                 anchors.leftMargin: 14
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: modelData.text
+                                text: (typeof modelData.text === "string" ? qsTr(modelData.text) : modelData.text)
                                 color: root.toneColor(modelData.tone)
                                 font.pixelSize: 10
                                 font.family: "Consolas"
