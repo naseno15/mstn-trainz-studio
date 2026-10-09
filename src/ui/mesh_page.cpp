@@ -7,6 +7,7 @@
 #include "io/im_geom.h"
 #include "io/trainzmesh.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -37,7 +38,7 @@ QString qml_file() {
 
 QString fixture_path() {
 #ifdef QML_DIR
-    return QFileInfo(QStringLiteral(QML_DIR)).dir().filePath(QStringLiteral("../../trainz_studio_cpp/checks/fixtures/tri.trainzmesh"));
+    return QDir(QStringLiteral(QML_DIR)).filePath(QStringLiteral("../../checks/fixtures/tri.trainzmesh"));
 #else
     return {};
 #endif

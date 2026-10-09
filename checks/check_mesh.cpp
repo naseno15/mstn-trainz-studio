@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
         for (const QString& line : page.qmlErrors()) std::fprintf(stderr, "%s\n", line.toUtf8().constData());
         assert(page.qmlReady());
     }
-    const QString fixture = QFileInfo(QStringLiteral(QML_DIR)).dir().filePath(QStringLiteral("../../trainz_studio_cpp/checks/fixtures/tri.trainzmesh"));
+    const QString fixture = QDir(QStringLiteral(QML_DIR)).filePath(QStringLiteral("../../checks/fixtures/tri.trainzmesh"));
     page.loadFile(QFileInfo(fixture).absoluteFilePath());
     app.processEvents();
     assert(page.sideJson().contains(QStringLiteral("mesh_0")));

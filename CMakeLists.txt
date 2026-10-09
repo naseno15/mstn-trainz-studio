@@ -10,14 +10,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Widgets OpenGLWidgets Quick QuickWidge
 if(TRAINZ_QT_PREFIX)
     set(trainz_qt_define QT_PREFIX="${TRAINZ_QT_PREFIX}")
 endif()
-# QML stays with the Python package. In-repo layout is trainz_studio/cpp → ../ui/qml.
-# A sibling checkout (trainz_studio_cpp next to trainz_studio) still resolves.
-if(EXISTS "${CMAKE_SOURCE_DIR}/../ui/qml/HomePage.qml")
-    set(_trainz_qml "${CMAKE_SOURCE_DIR}/../ui/qml")
-else()
-    set(_trainz_qml "${CMAKE_SOURCE_DIR}/../trainz_studio/ui/qml")
-endif()
-set(trainz_qml_define QML_DIR="${_trainz_qml}")
+set(trainz_qml_define QML_DIR="${CMAKE_SOURCE_DIR}/ui/qml")
 
 # ponytail: one OBJECT lib so the UI .cpp files compile once. Checks link the
 # same objects. A per-check compile define cannot live in these TUs — put it
