@@ -1,4 +1,4 @@
-"""Load FBX via assimp CLI; decode trainzmesh via lib.trainzmesh_viewer; .im ATCH."""
+"""Load FBX via assimp CLI; decode trainzmesh via lib.trainzmesh_viewer; .im GEOM/ATCH."""
 from __future__ import annotations
 
 import math
@@ -488,6 +488,41 @@ def load_trainzmesh(path: Path, progress=None, *, preview_fast: bool = False) ->
     return scene
 
 
+def load_im_fast(path: Path) -> Scene:
+    """Solid mesh for Finder fast preview. No GEOM → a.* gizmos only."""
+    from ..lib.im_editor.core import parse_attachments
+    from .im_geom import parse_im_parts
+
+    data = path.read_bytes()
+    try:
+        parts = parse_im_parts(data)
+    except ValueError:
+        parts = []
+    if parts:
+        return Scene(
+            source=str(path),
+            kind="im",
+            parts=parts,
+            note=f"{len(parts)} chunks (fast preview — mesh only)",
+        )
+    try:
+        atts_raw = parse_attachments(data)
+    except ValueError:
+        atts_raw = []
+    atts = [
+        Attachment(name=a.name, pos=tuple(a.pos), orient=tuple(a.orient))  # type: ignore[arg-type]
+        for a in atts_raw
+    ]
+    if not atts:
+        raise ValueError("no GEOM or ATCH in this .im")
+    return Scene(
+        source=str(path),
+        kind="im",
+        attachments=atts,
+        note=f"{len(atts)} attachments (no mesh)",
+    )
+
+
 def load_im_attachments(path: Path) -> Scene:
     """Attachment-only preview for .im (reuses lib.im_editor)."""
     from ..lib.im_editor.core import parse_attachments
@@ -523,11 +558,10 @@ def load_any(path: Path, progress=None, *, preview_fast: bool = False) -> Scene:
         return load_trainzmesh(path, progress=progress, preview_fast=preview_fast)
     if suf == ".im":
         if preview_fast:
-            return Scene(
-                source=str(path),
-                kind="im",
-                note=".im has no mesh geo in fast preview — use Mesh Studio",
-            )
+            _p("Reading .im geometry…", 40)
+            sc = load_im_fast(path)
+            _p(".im ready", 90)
+            return sc
         _p("Reading .im attachments…", 40)
         sc = load_im_attachments(path)
         _p(".im ready", 90)
