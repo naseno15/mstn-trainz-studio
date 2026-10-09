@@ -1,0 +1,2 @@
+kuid <kuid:1:2>
+file note.txt hello cdp

@@ -1,0 +1,13 @@
+version 1
+count 1
+name mesh_0
+verts 3
+idx 0,1,2
+pos0 0,0,0
+pos1 1,0,0
+pos2 0,1,0
+uv0 0,1
+uv1 1,1
+uv2 0,0
+albedo body.texture
+mat m.pbrmetal

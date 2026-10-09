@@ -1,0 +1,7 @@
+parts 1
+name body
+verts 3
+idx 0,1,2
+pos0 0,0,0
+pos1 1,0,0
+pos2 0,1,0
