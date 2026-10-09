@@ -8,6 +8,7 @@
 #include <QWidget>
 
 #include "ui/icons.h"
+#include "ui/ve_rules.h"
 
 class QLabel;
 class QPixmap;
@@ -41,7 +42,7 @@ class ShellBridge : public QObject {
 public:
     explicit ShellBridge(QObject* parent = nullptr);
 
-    bool dark() const { return dark_; }
+    bool dark() const;
     QString brand() const { return QStringLiteral("MSTN Trainz Studio"); }
     QString sub() const { return QStringLiteral("Meshes · sounds · engine · assets · maps"); }
     QString copy() const { return QStringLiteral("Copyright MSTN Production"); }
@@ -63,6 +64,7 @@ public:
     void set_open_key(const QString& key);
     void set_zoomed(bool zoomed);
     void set_items(const QVariantList& items);
+    void set_dark(bool dark);
     void bump_menu();
 
     Q_INVOKABLE void openStudio(const QString& studio_id);
@@ -84,9 +86,9 @@ signals:
     void minRequested();
     void zoomRequested();
     void moveRequested();
+    void actionRequested(const QString& act_id);
 
 private:
-    bool dark_ = true;
     QString title_ = QStringLiteral("Trainz Studio");
     QString open_key_;
     bool zoomed_ = false;
@@ -115,6 +117,10 @@ public:
     QStringList qmlErrors() const;
     void openStudio(const QString& studio_id);
     void triggerItem(const QString& act_id);
+    // Rows the top-bar menu `key` shows on the current page (actId, label, shortcut, sep, checked, alive).
+    QVariantList menuRows(const QString& key);
+    // False when an action id names a bridge method the current page does not have.
+    bool actionOk(const QString& act_id) const;
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -127,12 +133,20 @@ private:
     void begin_move();
     void fade_out(const QPixmap& snap);
     void fill_menu(const QString& key);
+    void place_toast();
+    void run_action(const QString& act_id);
+    void open_any();
+    void run_ve(const QString& mode);  // current · folder · fix · last
+    QObject* page_bridge() const;
+    QList<VeReport> ve_last_;
     QQuickWidget* load_quick(const QString& file, bool translucent);
 
     ShellBridge* bridge_ = nullptr;
     QQuickWidget* home_ = nullptr;
     QQuickWidget* title_ = nullptr;
     QQuickWidget* menu_ = nullptr;
+    QQuickWidget* toast_ = nullptr;
+    QQuickWidget* footer_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     QLabel* blank_ = nullptr;
     QLabel* cover_ = nullptr;
@@ -142,6 +156,7 @@ private:
     AssetsPage* assets_ = nullptr;
     SoundsPage* sounds_ = nullptr;
     MeshStudioPage* mesh_ = nullptr;
+    QString engine_kuid_;
     std::function<void(const QString&, int)> boot_;
     bool moving_ = false;
 

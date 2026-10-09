@@ -6,10 +6,14 @@
 #include "sounds_page.h"
 #include "trainzutil_page.h"
 
+#include "crash_report.h"
+#include "i18n.h"
 #include "icons.h"
+#include "status_hub.h"
 
 #include <QApplication>
 #include <QColor>
+#include <QCoreApplication>
 #include <QCursor>
 #include <QEasingCurve>
 #include <QGraphicsOpacityEffect>
@@ -22,9 +26,20 @@
 #include <QMouseEvent>
 #include <QQmlContext>
 #include <QQmlError>
+#include <QQuickWindow>
 #include <QQuickWidget>
+#include <QSGRendererInterface>
 #include <QScreen>
 #include <QStackedWidget>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QKeySequence>
+#include <QMessageBox>
+#include <QSettings>
+#include <QShortcut>
+#include <QSurfaceFormat>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -37,16 +52,39 @@
 
 namespace {
 
-QVariantMap item(const QString& id, const QString& label, bool alive = true) {
+QVariantMap item(const QString& id, const QString& label, bool alive = true, const QString& shortcut = {}, bool checked = false) {
     QVariantMap row;
     row.insert(QStringLiteral("actId"), id);
     row.insert(QStringLiteral("label"), label);
-    row.insert(QStringLiteral("shortcut"), QString());
+    row.insert(QStringLiteral("shortcut"), shortcut);
     row.insert(QStringLiteral("sep"), false);
-    row.insert(QStringLiteral("checked"), false);
+    row.insert(QStringLiteral("checked"), checked);
     row.insert(QStringLiteral("alive"), alive);
     return row;
 }
+
+QVariantMap sep() {
+    QVariantMap row = item(QString(), QString(), false);
+    row.insert(QStringLiteral("sep"), true);
+    return row;
+}
+
+// File/Edit verbs per studio → action id run on that page's bridge.
+// call:<Q_INVOKABLE ()>  ·  click:<MeshBridge::clickId id>  ·  home:open (route by file type).
+QString page_verb(const QString& page, const QString& verb) {
+    static const QHash<QString, QHash<QString, QString>> table = {
+        {QStringLiteral("home"), {{QStringLiteral("open"), QStringLiteral("home:open")}}},
+        {QStringLiteral("mesh"), {{QStringLiteral("open"), QStringLiteral("click:open")}, {QStringLiteral("save"), QStringLiteral("click:save")}, {QStringLiteral("saveAs"), QStringLiteral("click:saveAs")}}},
+        {QStringLiteral("sounds"), {{QStringLiteral("open"), QStringLiteral("call:browse")}, {QStringLiteral("saveAs"), QStringLiteral("call:saveAs")}}},
+        {QStringLiteral("engine"), {{QStringLiteral("open"), QStringLiteral("call:openFile")}, {QStringLiteral("save"), QStringLiteral("call:saveFile")}, {QStringLiteral("saveAs"), QStringLiteral("call:saveFileAs")}, {QStringLiteral("undo"), QStringLiteral("call:undoEdit")}, {QStringLiteral("redo"), QStringLiteral("call:redoEdit")}}},
+        {QStringLiteral("assets"), {{QStringLiteral("open"), QStringLiteral("call:openFolder")}, {QStringLiteral("save"), QStringLiteral("call:viewerSave")}}},
+        {QStringLiteral("texmesh"), {{QStringLiteral("open"), QStringLiteral("call:openFolder")}}},
+        {QStringLiteral("trainzutil"), {{QStringLiteral("open"), QStringLiteral("call:addFiles")}}},
+    };
+    return table.value(page).value(verb);
+}
+
+QSettings studio_settings() { return QSettings(QStringLiteral("MSTN"), QStringLiteral("TrainzStudio")); }
 
 QString qml_dir() {
 #ifdef QML_DIR
@@ -87,6 +125,8 @@ ShellBridge::ShellBridge(QObject* parent) : QObject(parent) {
         {QStringLiteral("edit"), QStringLiteral("Edit")},
         {QStringLiteral("view"), QStringLiteral("View")},
         {QStringLiteral("tools"), QStringLiteral("Tools")},
+        {QStringLiteral("theme"), QStringLiteral("Theme")},
+        {QStringLiteral("lang"), QStringLiteral("Lang")},
     };
     for (const auto& menu : menu_rows) {
         QVariantMap row;
@@ -123,6 +163,10 @@ void ShellBridge::set_items(const QVariantList& items) {
     emit changed();
 }
 
+bool ShellBridge::dark() const { return ui_dark(); }
+
+void ShellBridge::set_dark(bool dark) { UiTheme::instance()->set_dark(dark); }
+
 void ShellBridge::bump_menu() {
     ++menu_gen_;
     emit menuOpened();
@@ -147,6 +191,7 @@ void ShellBridge::triggerItem(const QString& act_id) {
     set_open_key({});
     emit menuDismiss();
     if (act_id == QLatin1String("quit")) emit closeRequested();
+    else if (act_id.contains(QLatin1Char(':'))) emit actionRequested(act_id);
     else if (!act_id.isEmpty()) set_page(act_id);
 }
 
@@ -170,6 +215,17 @@ void prepare_qt_runtime() {
     qputenv("QT_PLUGIN_PATH", QT_PREFIX "/plugins");
     qputenv("QML_IMPORT_PATH", QT_PREFIX "/qml");
 #endif
+    // Desktop GL for the mesh view. Quick stays on the software scene graph:
+    // a D3D QQuickWidget in the same HWND paints its transparent center black
+    // and hides the QOpenGLWidget underneath.
+    QSurfaceFormat fmt;
+    fmt.setDepthBufferSize(24);
+    fmt.setVersion(3, 3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    QSurfaceFormat::setDefaultFormat(fmt);
+    QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     qputenv("QSG_RHI_BACKEND", "software");
 }
 
@@ -178,6 +234,7 @@ void ShellWindow::boot_stage(const QString& text, int pct) {
 }
 
 ShellWindow::~ShellWindow() {
+    UiLang::instance()->flush_harvest();
     if (qApp) qApp->removeEventFilter(this);
 }
 
@@ -190,6 +247,7 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     resize(1100, 720);
 
     bridge_ = new ShellBridge(this);
+    UiLang::instance();
     load_material_icons();
     title_ = load_quick(QStringLiteral("TitleBar.qml"), true);
     home_ = load_quick(QStringLiteral("HomePage.qml"), false);
@@ -200,19 +258,63 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     menu_->setAttribute(Qt::WA_TranslucentBackground, true);
     menu_->setAttribute(Qt::WA_ShowWithoutActivating, true);
     menu_->hide();
+    toast_ = load_quick(QStringLiteral("Toast.qml"), true);
+    // Own tool window like the menu: a translucent child over the GL mesh view paints black.
+    toast_->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint | Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput);
+    toast_->setAttribute(Qt::WA_TranslucentBackground, true);
+    toast_->setAttribute(Qt::WA_ShowWithoutActivating, true);
+    toast_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    toast_->hide();
+    footer_ = load_quick(QStringLiteral("StatusBar.qml"), false);
+    footer_->setFixedHeight(30);
     qApp->installEventFilter(this);
     boot_stage(QStringLiteral("Chrome"), 40);
 
     blank_ = new QLabel(QStringLiteral("Home"));
     blank_->setAlignment(Qt::AlignCenter);
-    blank_->setStyleSheet(QStringLiteral("background:#12161c;color:#f2f4f8;font-size:28px;"));
+    apply_themed_qss(blank_, QStringLiteral("background:#12161c;color:#f2f4f8;font-size:28px;"));
 
     trainz_ = new TrainzUtilPage(this);
     connect(trainz_, &TrainzUtilPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
     engine_ = new EngineTunerPage(this);
-    connect(engine_, &EngineTunerPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
     assets_ = new AssetsPage(this);
+    connect(engine_, &EngineTunerPage::homeRequested, this, [this] {
+        if (!engine_kuid_.isEmpty()) {
+            engine_kuid_.clear();
+            bridge_->set_page(QStringLiteral("trainzutil"));
+            return;
+        }
+        bridge_->set_page(engine_->cdpSession() ? QStringLiteral("assets") : QStringLiteral("home"));
+    });
+    connect(engine_, &EngineTunerPage::cdpSaveRequested, this, [this](const QString& text) {
+        if (!engine_kuid_.isEmpty()) {
+            trainz_->commit_enginespec(engine_kuid_, text);
+            engine_kuid_.clear();
+            bridge_->set_page(QStringLiteral("trainzutil"));
+            return;
+        }
+        assets_->applyEngineText(text);
+        bridge_->set_page(QStringLiteral("assets"));
+    });
+    connect(trainz_, &TrainzUtilPage::engineRequested, this, [this](const QString& kuid, const QString& text, const QString&) {
+        engine_kuid_ = kuid;
+        engine_->loadCdpText(text);
+        bridge_->set_page(QStringLiteral("engine"));
+    });
+    connect(trainz_, &TrainzUtilPage::packagesRequested, this, [this](const QString& folder) {
+        bridge_->set_page(QStringLiteral("assets"));
+        assets_->setPage(QStringLiteral("packages"));
+        if (!folder.isEmpty()) assets_->openPaths({folder});
+    });
     connect(assets_, &AssetsPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
+    connect(assets_, &AssetsPage::meshRequested, this, [this](const QString& path) {
+        mesh_->loadFile(path);
+        bridge_->set_page(QStringLiteral("mesh"));
+    });
+    connect(assets_, &AssetsPage::engineRequested, this, [this](const QString& text, const QString&) {
+        engine_->loadCdpText(text);
+        bridge_->set_page(QStringLiteral("engine"));
+    });
     sounds_ = new SoundsPage(this);
     connect(sounds_, &SoundsPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
     mesh_ = new MeshStudioPage(this);
@@ -233,6 +335,26 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     layout->setSpacing(0);
     layout->addWidget(title_);
     layout->addWidget(stack_, 1);
+    layout->addWidget(footer_);
+
+    StatusHub* hub = StatusHub::instance();
+    connect(hub, &StatusHub::toastChanged, this, [this, hub] {
+        if (hub->toastShown()) {
+            place_toast();
+            if (!toast_->isVisible() && isVisible() && !isMinimized()) toast_->show();
+            toast_->raise();
+            return;
+        }
+        QTimer::singleShot(240, toast_, [this, hub] {
+            if (!hub->toastShown()) toast_->hide();
+        });
+    });
+    connect(hub, &StatusHub::logRequested, this, [hub] {
+        const QStringList lines = hub->history();
+        show_crash_dialog(QStringLiteral("Status log"), QStringLiteral("Recent status messages this session · %1 lines").arg(lines.size()),
+                          lines.isEmpty() ? QStringLiteral("(empty)") : lines.join(QLatin1Char('\n')), QStringLiteral("log"));
+    });
+    connect(hub, &StatusHub::veRequested, this, [this] { run_ve(QStringLiteral("last")); });
 
     connect(bridge_, &ShellBridge::pageChanged, this, [this](const QString& page) {
         const bool home = page == QLatin1String("home");
@@ -250,6 +372,7 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
             snap = stack_->currentWidget()->grab();
         stack_->setCurrentIndex(next);
         if (!snap.isNull()) fade_out(snap);
+        if (UiLang::instance()->lang() != QLatin1String("en")) retranslate_widgets(stack_->currentWidget());
         blank_->setText(page);
         bridge_->set_title(home ? QStringLiteral("Trainz Studio") : engine ? QStringLiteral("Engine Tuner") : assets ? QStringLiteral("Assets Tools") : texmesh ? QStringLiteral("Texture & Mesh Lods") : sounds ? QStringLiteral("Sounds Studio") : mesh ? QStringLiteral("Mesh Studio") : page);
         hide_menu();
@@ -266,6 +389,51 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
         isMaximized() ? showNormal() : showMaximized();
     });
     connect(bridge_, &ShellBridge::moveRequested, this, &ShellWindow::begin_move);
+    connect(bridge_, &ShellBridge::actionRequested, this, &ShellWindow::run_action);
+    connect(UiTheme::instance(), &UiTheme::changed, bridge_, &ShellBridge::changed);
+    connect(UiTheme::instance(), &UiTheme::changed, this, [this] {
+        const QColor clear(ui_dark() ? QStringLiteral("#12161c") : QStringLiteral("#e9edf2"));
+        QPalette pal = palette();
+        pal.setColor(QPalette::Window, clear);
+        setPalette(pal);
+        setAutoFillBackground(true);
+        update();
+        for (QQuickWidget* view : findChildren<QQuickWidget*>()) {
+            if (view->quickWindow() && view->quickWindow()->color().alpha() == 255) view->setClearColor(clear);
+        }
+    });
+    for (QWidget* page : {static_cast<QWidget*>(trainz_), static_cast<QWidget*>(engine_), static_cast<QWidget*>(assets_), static_cast<QWidget*>(sounds_), static_cast<QWidget*>(mesh_)}) {
+        for (QObject* child : page->children()) {
+            if (QByteArray(child->metaObject()->className()).endsWith("Bridge")) connect(UiTheme::instance(), SIGNAL(changed()), child, SIGNAL(changed()));
+        }
+    }
+    bridge_->set_dark(studio_settings().value(QStringLiteral("ui/theme")).toString() != QLatin1String("light"));
+
+    // Window-wide so they fire over the QQuickWidget pages; focused QML text fields still keep their own Ctrl+Z.
+    const QList<QPair<QKeySequence, QString>> keys = {
+        {QKeySequence(QStringLiteral("Ctrl+O")), QStringLiteral("verb:open")},
+        {QKeySequence(QStringLiteral("Ctrl+S")), QStringLiteral("verb:save")},
+        {QKeySequence(QStringLiteral("Ctrl+Shift+S")), QStringLiteral("verb:saveAs")},
+        {QKeySequence(QStringLiteral("Ctrl+Z")), QStringLiteral("verb:undo")},
+        {QKeySequence(QStringLiteral("Ctrl+Y")), QStringLiteral("verb:redo")},
+        {QKeySequence(QStringLiteral("Ctrl+Shift+Z")), QStringLiteral("verb:redo")},
+        {QKeySequence(QStringLiteral("Ctrl+T")), QStringLiteral("theme:toggle")},
+        {QKeySequence(QStringLiteral("Ctrl+L")), QStringLiteral("app:log")},
+        {QKeySequence(QStringLiteral("Ctrl+Shift+V")), QStringLiteral("ve:current")},
+        {QKeySequence(QStringLiteral("Ctrl+Shift+R")), QStringLiteral("ve:folder")},
+    };
+    for (const auto& key : keys) {
+        auto* shortcut = new QShortcut(key.first, this);
+        shortcut->setContext(Qt::WindowShortcut);
+        const QString act = key.second;
+        connect(shortcut, &QShortcut::activated, this, [this, act] { run_action(act); });
+    }
+    auto* quit = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Q")), this);
+    connect(quit, &QShortcut::activated, this, &QWidget::close);
+    auto* settings = new QShortcut(QKeySequence(QStringLiteral("Ctrl+,")), this);
+    connect(settings, &QShortcut::activated, this, [this] {
+        if (bridge_->page() == QLatin1String("mesh")) run_action(QStringLiteral("setpage:settings"));
+    });
     boot_stage(QStringLiteral("Ready"), 100);
 }
 
@@ -273,6 +441,7 @@ QQuickWidget* ShellWindow::load_quick(const QString& file, bool translucent) {
     auto* view = new QQuickWidget(this);
     view->setResizeMode(QQuickWidget::SizeRootObjectToView);
     view->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
+    view->engine()->rootContext()->setContextProperty(QStringLiteral("hub"), StatusHub::instance());
     if (translucent) {
         view->setClearColor(Qt::transparent);
         view->setAttribute(Qt::WA_TranslucentBackground, true);
@@ -285,22 +454,184 @@ QQuickWidget* ShellWindow::load_quick(const QString& file, bool translucent) {
     return view;
 }
 
-void ShellWindow::fill_menu(const QString& key) {
+void ShellWindow::fill_menu(const QString& key) { bridge_->set_items(menuRows(key)); }
+
+QVariantList ShellWindow::menuRows(const QString& key) {
+    const QString page = bridge_->page();
+    const auto verb = [&](const QString& name, const QString& label, const QString& shortcut) {
+        const QString act = page_verb(page, name);
+        return item(act, label, !act.isEmpty() && actionOk(act), shortcut);
+    };
     QVariantList rows;
     if (key == QLatin1String("file")) {
-        rows << item(QStringLiteral("quit"), QStringLiteral("Quit"));
+        rows << verb(QStringLiteral("open"), QStringLiteral("Open…"), QStringLiteral("Ctrl+O"));
+        if (page == QLatin1String("mesh")) {
+            rows << item(QStringLiteral("call:openFixture"), QStringLiteral("Open sample mesh"), actionOk(QStringLiteral("call:openFixture")));
+            rows << item(QStringLiteral("click:clearMesh"), QStringLiteral("Clear meshes"), actionOk(QStringLiteral("click:clearMesh")));
+        }
+        if (page == QLatin1String("trainzutil")) rows << item(QStringLiteral("call:scanLibrary"), QStringLiteral("Scan library"), actionOk(QStringLiteral("call:scanLibrary")));
+        rows << sep();
+        rows << verb(QStringLiteral("save"), QStringLiteral("Save"), QStringLiteral("Ctrl+S"));
+        rows << verb(QStringLiteral("saveAs"), QStringLiteral("Save As…"), QStringLiteral("Ctrl+Shift+S"));
+        rows << sep();
+        rows << item(QStringLiteral("quit"), QStringLiteral("Quit"), true, QStringLiteral("Ctrl+Q"));
+    } else if (key == QLatin1String("edit")) {
+        rows << verb(QStringLiteral("undo"), QStringLiteral("Undo"), QStringLiteral("Ctrl+Z"));
+        rows << verb(QStringLiteral("redo"), QStringLiteral("Redo"), QStringLiteral("Ctrl+Y"));
     } else if (key == QLatin1String("view")) {
-        rows << item(QStringLiteral("home"), QStringLiteral("Home"));
-        rows << item(QStringLiteral("mesh"), QStringLiteral("Mesh Studio"));
-        rows << item(QStringLiteral("sounds"), QStringLiteral("Sounds Studio"));
-        rows << item(QStringLiteral("engine"), QStringLiteral("Engine Tuner"));
-        rows << item(QStringLiteral("assets"), QStringLiteral("Assets Tools"));
-        rows << item(QStringLiteral("texmesh"), QStringLiteral("Texture & Mesh Lods"));
-        rows << item(QStringLiteral("trainzutil"), QStringLiteral("TrainzUtil"));
-    } else {
-        rows << item(QString(), QStringLiteral("Later"), false);
+        const QList<QPair<QString, QString>> studios = {
+            {QStringLiteral("home"), QStringLiteral("Home")},
+            {QStringLiteral("mesh"), QStringLiteral("Mesh Studio")},
+            {QStringLiteral("sounds"), QStringLiteral("Sounds Studio")},
+            {QStringLiteral("engine"), QStringLiteral("Engine Tuner")},
+            {QStringLiteral("assets"), QStringLiteral("Assets Tools")},
+            {QStringLiteral("texmesh"), QStringLiteral("Texture & Mesh Lods")},
+            {QStringLiteral("trainzutil"), QStringLiteral("TrainzUtil")},
+        };
+        for (const auto& studio : studios) rows << item(studio.first, studio.second, true, {}, studio.first == page);
+        if (page == QLatin1String("mesh")) {
+            QObject* mesh = page_bridge();
+            rows << sep();
+            rows << item(QStringLiteral("click:resetCam"), QStringLiteral("Reset camera"));
+            rows << item(QStringLiteral("check:face"), QStringLiteral("Face Orientation"), true, {}, mesh && mesh->property("faceOn").toBool());
+            rows << item(QStringLiteral("check:ground"), QStringLiteral("Ground"), true, {}, mesh && mesh->property("groundOn").toBool());
+            rows << item(QStringLiteral("setpage:settings"), QStringLiteral("Settings…"), true, QStringLiteral("Ctrl+,"));
+            if (mesh && mesh->property("pbrOn").toBool()) {
+                rows << sep();
+                const QStringList labels = mesh->property("pbrLabels").toStringList();
+                for (int i = 0; i < labels.size(); ++i)
+                    rows << item(QStringLiteral("pbr:%1").arg(i), QStringLiteral("PBR ") + labels[i], true, {}, mesh->property("pbr").toInt() == i);
+            }
+        }
+    } else if (key == QLatin1String("tools")) {
+        rows << item(QStringLiteral("ve:current"), QStringLiteral("VE Rules scan current"), true, QStringLiteral("Ctrl+Shift+V"));
+        rows << item(QStringLiteral("ve:folder"), QStringLiteral("VE Rules scan folder…"), true, QStringLiteral("Ctrl+Shift+R"));
+        rows << item(QStringLiteral("ve:fix"), QStringLiteral("VE Rules fix current…"), true);
+        rows << sep();
+        rows << item(QStringLiteral("ve:last"), QStringLiteral("Show last VE report"));
+        rows << item(QStringLiteral("app:log"), QStringLiteral("Status log"), true, QStringLiteral("Ctrl+L"));
+    } else if (key == QLatin1String("theme")) {
+        rows << item(QStringLiteral("theme:dark"), QStringLiteral("Dark"), true, {}, bridge_->dark());
+        rows << item(QStringLiteral("theme:light"), QStringLiteral("Light"), true, {}, !bridge_->dark());
+        rows << sep();
+        rows << item(QStringLiteral("theme:toggle"), QStringLiteral("Toggle light / dark"), true, QStringLiteral("Ctrl+T"));
+    } else if (key == QLatin1String("lang")) {
+        const QString cur = UiLang::instance()->lang();
+        for (const auto& lang : ui_languages()) rows << item(QStringLiteral("lang:") + lang.first, lang.second, true, {}, lang.first == cur);
     }
-    bridge_->set_items(rows);
+    return rows;
+}
+
+void ShellWindow::run_ve(const QString& mode) {
+    StatusHub* hub = StatusHub::instance();
+    if (mode == QLatin1String("last") && !ve_last_.isEmpty()) {
+        show_crash_dialog(ui_tr(QStringLiteral("VE Rules")), ve_summarize(ve_last_).line, ve_format_reports(ve_last_), QStringLiteral("log"));
+        return;
+    }
+    QStringList paths;
+    if (mode == QLatin1String("folder")) {
+        const QString dir = QFileDialog::getExistingDirectory(this, ui_tr(QStringLiteral("VE Rules scan folder…")));
+        if (dir.isEmpty()) return;
+        paths << dir;
+    } else {
+        QObject* target = page_bridge();
+        if (target && target->metaObject()->indexOfMethod("veContextPaths()") >= 0)
+            QMetaObject::invokeMethod(target, "veContextPaths", Q_RETURN_ARG(QStringList, paths));
+        if (paths.isEmpty()) paths = QFileDialog::getOpenFileNames(this, ui_tr(QStringLiteral("VE Rules scan current")));
+        if (paths.isEmpty()) return;
+    }
+    if (mode == QLatin1String("fix")) {
+        const auto answer = QMessageBox::question(this, ui_tr(QStringLiteral("VE Rules")),
+                                                  ui_tr(QStringLiteral("Apply safe VE fixes to %1 path(s)? Each changed file keeps a .bak copy.")).arg(paths.size()));
+        if (answer != QMessageBox::Yes) return;
+        const QList<VeFix> fixes = ve_fix_reports(ve_scan_paths(paths));
+        const auto ok = std::count_if(fixes.begin(), fixes.end(), [](const VeFix& f) { return f.ok; });
+        hub->notify(ok == fixes.size() ? QStringLiteral("save") : QStringLiteral("error"), ui_tr(QStringLiteral("VE Rules fix")),
+                    ui_tr(QStringLiteral("%1 applied · %2 failed")).arg(ok).arg(fixes.size() - ok));
+    }
+    hub->progress(ui_tr(QStringLiteral("VE Rules")), 0, ui_tr(QStringLiteral("Scanning %1 path(s)…")).arg(paths.size()));
+    ve_last_ = ve_scan_paths(paths);
+    const VeSummary sum = ve_summarize(ve_last_);
+    hub->finish(sum.line);
+    hub->set_ve_state(sum.errors > 0 ? QStringLiteral("bad") : QStringLiteral("ok"));
+    show_crash_dialog(ui_tr(QStringLiteral("VE Rules")), sum.line, ve_format_reports(ve_last_), QStringLiteral("log"));
+}
+
+QObject* ShellWindow::page_bridge() const {
+    QWidget* page = stack_ ? stack_->currentWidget() : nullptr;
+    if (!page) return nullptr;
+    for (QObject* child : page->children()) {
+        if (QByteArray(child->metaObject()->className()).endsWith("Bridge")) return child;
+    }
+    return nullptr;
+}
+
+bool ShellWindow::actionOk(const QString& act_id) const {
+    QObject* target = page_bridge();
+    const QMetaObject* meta = target ? target->metaObject() : nullptr;
+    if (act_id.startsWith(QLatin1String("call:"))) return meta && meta->indexOfMethod((act_id.mid(5) + QStringLiteral("()")).toLatin1()) >= 0;
+    if (act_id.startsWith(QLatin1String("click:"))) return meta && meta->indexOfMethod("clickId(QString)") >= 0;
+    if (act_id.startsWith(QLatin1String("setpage:"))) return meta && meta->indexOfMethod("setPage(QString)") >= 0;
+    return true;
+}
+
+void ShellWindow::run_action(const QString& act_id) {
+    StatusHub* hub = StatusHub::instance();
+    const QString arg = act_id.section(QLatin1Char(':'), 1);
+    if (act_id.startsWith(QLatin1String("verb:"))) {
+        const QString act = page_verb(bridge_->page(), arg);
+        if (!act.isEmpty() && actionOk(act)) run_action(act);
+        return;
+    }
+    if (!actionOk(act_id)) return;
+    QObject* target = page_bridge();
+    if (act_id.startsWith(QLatin1String("call:"))) QMetaObject::invokeMethod(target, arg.toLatin1().constData());
+    else if (act_id.startsWith(QLatin1String("click:"))) QMetaObject::invokeMethod(target, "clickId", Q_ARG(QString, arg));
+    else if (act_id.startsWith(QLatin1String("setpage:"))) QMetaObject::invokeMethod(target, "setPage", Q_ARG(QString, arg));
+    else if (act_id.startsWith(QLatin1String("check:")) && target) QMetaObject::invokeMethod(target, "setChecked", Q_ARG(QString, arg), Q_ARG(bool, !target->property((arg + QStringLiteral("On")).toLatin1()).toBool()));
+    else if (act_id.startsWith(QLatin1String("pbr:")) && target) QMetaObject::invokeMethod(target, "setPbr", Q_ARG(int, arg.toInt()));
+    else if (act_id == QLatin1String("home:open")) open_any();
+    else if (act_id == QLatin1String("app:log")) hub->openLog();
+    else if (act_id.startsWith(QLatin1String("ve:"))) run_ve(arg);
+    else if (act_id.startsWith(QLatin1String("theme:"))) {
+        const bool dark = arg == QLatin1String("toggle") ? !bridge_->dark() : arg == QLatin1String("dark");
+        bridge_->set_dark(dark);
+        studio_settings().setValue(QStringLiteral("ui/theme"), dark ? QStringLiteral("dark") : QStringLiteral("light"));
+        hub->notify(QStringLiteral("info"), dark ? QStringLiteral("Dark theme") : QStringLiteral("Light theme"));
+    } else if (act_id.startsWith(QLatin1String("lang:"))) {
+        UiLang::instance()->set_lang(arg);
+        for (const auto& lang : ui_languages()) {
+            if (lang.first == arg) hub->notify(QStringLiteral("info"), lang.second);
+        }
+    }
+}
+
+void ShellWindow::open_any() {
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open"), {}, QStringLiteral("Trainz files (*.trainzmesh *.im *.fbx *.wav *.cdp *.zip *.txt);;All files (*)"));
+    if (path.isEmpty()) return;
+    const QString ext = QFileInfo(path).suffix().toLower();
+    if (ext == QLatin1String("trainzmesh") || ext == QLatin1String("im") || ext == QLatin1String("fbx")) {
+        bridge_->set_page(QStringLiteral("mesh"));
+        mesh_->loadFile(path);
+        return;
+    }
+    if (ext == QLatin1String("cdp") || ext == QLatin1String("zip")) {
+        bridge_->set_page(QStringLiteral("assets"));
+        assets_->openPaths({path});
+        return;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        post_status(QStringLiteral("Could not open ") + QFileInfo(path).fileName());
+        return;
+    }
+    if (ext == QLatin1String("wav")) {
+        bridge_->set_page(QStringLiteral("sounds"));
+        sounds_->loadBytes(file.readAll(), path);
+        return;
+    }
+    bridge_->set_page(QStringLiteral("engine"));
+    engine_->loadText(QString::fromUtf8(file.readAll()));
 }
 
 void ShellWindow::fade_out(const QPixmap& snap) {
@@ -327,6 +658,14 @@ void ShellWindow::fade_out(const QPixmap& snap) {
     fade_->setStartValue(1.0);
     fade_->setEndValue(0.0);
     fade_->start();
+}
+
+void ShellWindow::place_toast() {
+    // Hang 6 px under the title capsule (60 px strip, capsule bottom margin 14).
+    constexpr int w = 480;
+    constexpr int h = 96;
+    const QPoint anchor = title_->mapToGlobal(QPoint(title_->width() / 2, title_->height() - 14 + 6));
+    toast_->setGeometry(anchor.x() - w / 2, anchor.y(), w, h);
 }
 
 void ShellWindow::hide_menu() {
@@ -360,8 +699,9 @@ void ShellWindow::show_menu(const QString& key, int x, int y) {
     }
     fill_menu(key);
     bridge_->set_open_key(key);
-    const int rows = bridge_->items().size();
-    menu_->resize(260, rows * 32 + 24);
+    int height = 12;
+    for (const QVariant& row : bridge_->items()) height += row.toMap().value(QStringLiteral("sep")).toBool() ? 11 : 34;
+    menu_->resize(key == QLatin1String("view") || key == QLatin1String("tools") ? 290 : 260, height);
     menu_->move(x, y);
     menu_->show();
     menu_->raise();
@@ -370,7 +710,7 @@ void ShellWindow::show_menu(const QString& key, int x, int y) {
 
 bool ShellWindow::qmlReady() const {
     const auto ready = [](const QQuickWidget* view) { return view && view->status() == QQuickWidget::Ready; };
-    return ready(home_) && ready(title_) && ready(menu_);
+    return ready(home_) && ready(title_) && ready(menu_) && ready(toast_) && ready(footer_);
 }
 
 QString ShellWindow::page() const { return bridge_->page(); }
@@ -384,12 +724,17 @@ QStringList ShellWindow::qmlErrors() const {
     collect(home_);
     collect(title_);
     collect(menu_);
+    collect(toast_);
+    collect(footer_);
     return lines;
 }
 
 bool ShellWindow::eventFilter(QObject* watched, QEvent* event) {
-    Q_UNUSED(watched);
     if (event->type() == QEvent::MouseButtonRelease) moving_ = false;
+    if (watched == this && toast_ && toast_->isVisible()) {
+        if (event->type() == QEvent::Move || event->type() == QEvent::Resize) place_toast();
+        else if (event->type() == QEvent::Hide) toast_->hide();
+    }
     if (!menu_ || !menu_->isVisible()) return false;
     if (event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);

@@ -10,15 +10,20 @@ find_package(Qt6 REQUIRED COMPONENTS Core Widgets OpenGLWidgets Quick QuickWidge
 if(TRAINZ_QT_PREFIX)
     set(trainz_qt_define QT_PREFIX="${TRAINZ_QT_PREFIX}")
 endif()
-set(trainz_qml_define QML_DIR="${CMAKE_SOURCE_DIR}/ui/qml")
+set(trainz_qml_define QML_DIR="${CMAKE_SOURCE_DIR}/ui/qml" I18N_DIR="${CMAKE_SOURCE_DIR}/assets/i18n")
 
 # ponytail: one OBJECT lib so the UI .cpp files compile once. Checks link the
 # same objects. A per-check compile define cannot live in these TUs — put it
 # on the check .cpp only. Upgrade path: split a page out if it needs its own flags.
 set(trainz_ui_sources
     src/ui/icons.cpp
+    src/ui/crash_report.cpp
     src/ui/shell_window.cpp
+    src/ui/status_hub.cpp
+    src/ui/i18n.cpp
+    src/ui/ve_rules.cpp
     src/ui/install_queue.cpp
+    src/ui/trainz_meta.cpp
     src/ui/trainzutil_page.cpp
     src/ui/engine_page.cpp
     src/ui/assets_page.cpp
@@ -34,6 +39,7 @@ add_library(trainz_io STATIC
     src/io/lzss.cpp
     src/io/cdp.cpp
     src/io/tzarc.cpp
+    src/io/zip_read.cpp
     src/io/im_geom.cpp
     src/io/trainzmesh.cpp
     src/io/config_id.cpp
@@ -48,6 +54,9 @@ target_include_directories(trainz_io PUBLIC src third_party/puff)
 
 add_library(trainz_ui OBJECT ${trainz_ui_sources})
 target_link_libraries(trainz_ui PUBLIC trainz_io Qt6::Core Qt6::Widgets Qt6::Quick Qt6::OpenGLWidgets Qt6::QuickWidgets)
+if(WIN32)
+    target_link_libraries(trainz_ui PUBLIC winmm)
+endif()
 target_include_directories(trainz_ui PUBLIC src)
 target_compile_definitions(trainz_ui PUBLIC ${trainz_qml_define} ${trainz_qt_define})
 target_precompile_headers(trainz_ui PRIVATE src/ui/qt_pch.h)
@@ -69,9 +78,11 @@ target_link_libraries(check_formats PRIVATE trainz_io)
 target_compile_definitions(check_formats PRIVATE FIXTURE_DIR="${CMAKE_SOURCE_DIR}/checks/fixtures")
 
 trainz_ui_check(check_shell)
+trainz_ui_check(check_ve)
 trainz_ui_check(check_trainzutil)
 trainz_ui_check(check_engine)
 trainz_ui_check(check_sounds)
 trainz_ui_check(check_mesh)
 trainz_ui_check(check_assets)
 target_compile_definitions(check_assets PRIVATE FIXTURE_DIR="${CMAKE_SOURCE_DIR}/checks/fixtures")
+

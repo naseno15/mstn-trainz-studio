@@ -8,3 +8,4 @@ if (-not (Test-Path (Join-Path $build "build.ninja"))) {
     & $cmake -S $root -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:\Users\Naito\Qt -DTRAINZ_QT_PREFIX=C:/Users/Naito/Qt
 }
 & $cmake --build $build --target trainz_studio_cpp --parallel
+& "C:\Users\Naito\Qt\bin\windeployqt.exe" --release --compiler-runtime (Join-Path $build "trainz_studio_cpp.exe")

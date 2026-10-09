@@ -1,3 +1,5 @@
+#include "ui/crash_report.h"
+#include "ui/feedback.h"
 #include "ui/shell_window.h"
 
 #include <QApplication>
@@ -67,11 +69,17 @@ private:
 int main(int argc, char** argv) {
     prepare_qt_runtime();
     QApplication app(argc, argv);
+    install_crash_log();
+    app.installEventFilter(new DropHighlight(&app));
     BootDialog boot;
     boot.show();
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     ShellWindow window(nullptr, [&boot](const QString& text, int pct) { boot.set_stage(text, pct); });
     window.show();
     boot.close();
-    return app.exec();
+    if (const QString tail = previous_crash_tail(); !tail.isEmpty())
+        show_crash_dialog(QStringLiteral("Trainz Studio closed unexpectedly"), QStringLiteral("The last session did not exit cleanly. The end of its log is below."), tail, QStringLiteral("warning"));
+    const int code = app.exec();
+    end_crash_session();
+    return code;
 }
