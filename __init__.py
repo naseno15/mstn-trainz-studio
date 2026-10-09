@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 
 def _pkg_root() -> Path:
