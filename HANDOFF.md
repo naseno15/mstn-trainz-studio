@@ -1,12 +1,27 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-08 (Asia/Bangkok) — QML right docks for Texture & Mesh
+**Last updated:** 2026-10-09 (Asia/Bangkok) — Home is the studio-card hub
+
+### Home is the studio-card hub (2026-10-09)
+
+Boot and View → Home open the card hub (`HUB_HOME`). TrainzUtil is its own page (`HUB_TRAINZ`); its Home button returns to that hub. Mesh Studio and Sounds Studio are on the View menu with the other studios.
+
+### TrainzUtil installer (2026-10-09)
+
+| Piece | Role |
+|--------|------|
+| Home card + View → TrainzUtil | QML page, same glass as the other studios. Drag the inner edge of either sidebar to resize that side on its own (left about 260–720, right about 240–640). The other side stays. A narrow window keeps about 220px for the library |
+| `io/trainz_install.py` | Scan zip/CDP, stage, `installCDP` / `installfrompath`. TrainzUtil: saved path, then `steamapps/common` on each local drive (folder name contains `trainz`, prefer 2022). Browse if that misses |
+| `ui/trainzutil_host.py` | Launcher probe, paced queue (default 1 at a time, gap 3s, cap 10, or all-at-once up to 32). The page is built the first time it is opened, then kept for the session. Installed assets scan as soon as the Launcher answers, and the last list is cached under `~/.cache/trainz_studio/tu-library-*.json` so the library is already on screen |
+| Installer page | Opens on Library. Bottom bar is Library · Backups · Installer · Home · Files · Encrypt. Drop several zip/CDP files on the Installer table (or the sidebar). Each row is one package: checkbox, name, a bar, percent, and the live status (`Reading…`, `Queued`, `Starting`, the latest TrainzUtil line, `Installed`, `Failed`). Install runs the checked rows. Stop clears the queue. A CDP installs as one package. Files still opens the contents of a package. Encrypt takes one or many `.gs` files (or a folder) and runs `TrainzUtil encrypt` in one batch. Each `.gse` is written beside its `.gs`. |
+| Gate | Database commands need the Trainz Launcher open and Advanced debug tools on. Library lists installed assets only. Column headers sort Name, KUID, Category, Status, Installed, Modified, Size, Author, Build. Status is Edit / Faulty / Missing / Modified from the flags plus the `editing` folder. Installed time is the `original` tzarc. Modified time is `local` or the open edit folder. Author and trainz-build are the root tags of each tzarc config (soup bodies skipped), cached by mtime, and applied in one pass so Find can match the owner name without waiting for a row-by-row fill. A 3-field cache row (author, build, mtime) is a hit. Requiring a 4th username field reopened every tzarc on boot (about 17k files, 8 threads) and stuttered the whole app. The content-folder walk and any archive that is actually new or changed run on every logical core, and the date pass reuses that same listing. Find also matches the installation date. The Name column starts at 320. Usernames, including Japanese, are read from each asset config (tzarc or the open editing folder). TrainzUtil's console text replaces those characters with ``?`` on this Windows code page. Page text uses native rendering plus a CJK and Thai fallback so the names draw. Type spells category-list codes into words (`SLIB` → Script Library, `BD;RRD;SY;SCEN` → Building · Railroad, `ESPC` → Engine Spec) so Find matches the type. Parents that sit on almost every row (scenery, train, component) are left off when a more specific word remains. There is no Upload Date column. The page sidebar is a detail card: logo, build pill, Data button, then View detail (status chips, title, KUID, trainz-build/modified/size/author sunk tiles, Find backups, Open for editing, Submit edit, Validate, and Packages (opens that asset's files in the Packages finder; the editing folder if it is open, otherwise a cached unpack of the tzarc), dependencies). Ticked library rows each get a card there (the first 40). Cards that are not the open one show only type, name, status, and KUID. Click a ticked row to load that card's dependencies and preview. A right sidebar shows those TrainzUtil runs, plus installs, as a progress list. Click a row to open a dialog of that item's log, colored like Trainz (red error, yellow warning, green ok, gray other). The dialog can stay open while validate is still running; each new line is appended as it arrives. Both sidebars collapse on their own so the library table can take the width back. The detail card shows the asset cover from the config `thumbnails` image (jpg or png), then the usual screenshot names. Sidebar collapse animates the plate only; the library table resizes once when the motion finishes. A single detail card has no orange selection chrome. The Dependencies heading collapses the list. Clicking a dependency scrolls the library table to that asset and opens it in the detail card. Checked rows are the batch; otherwise the open asset. The TrainzUtil.exe path is not shown. Data opens the folder from `TrainzUtil getinstallationdatapath`. TrainzUtil itself has no open-folder command. The sidebar is the manager detail and runs to the bottom of the page. Paced and the gap sliders are not on this page. Install and Stop are on the Installer page. The bottom bar sits in the content lane: Library, Backups, Installer, Files, and Encrypt, with Home in the center. Backups searches `<installation data>/backups/<yy-mm-dd>/` from that same path. A floating bar switches Folder and tzarc, and Newest and Oldest. The field matches an asset name or a partial KUID. Open shows that copy. Find Backups on the detail card jumps here with the asset filled in. Find matches any word anywhere as you type. Status and Errors open a report; Status also runs `validate`. A loading dialog stays up while the installed list, dates, sizes, and author names are still being read, and it says which of those steps is running. Category `ESPC` opens Engine Tuner. Save runs `edit` + `commit` |
 
 ### QML Assets Tools (2026-10-08)
 
 | Piece | Role |
 |--------|------|
 | `ui/qml/AssetsPage.qml` | Stage gradient, raised nav (Assets or Texture & Mesh Lods), sidebar + dock wells |
+| `ui/qml/AssetsCenter.qml` | Center glass. Packages / Config / KUID / Export keep the widget page in the well. Texture Params and Mesh Lods paint the split (section labels, refresh, table + two preview wells). Texture Editor and Texture Denoiser paint one canvas well. The table, code editors, and paint surface stay widgets |
 | `ui/qml/AssetsSide.qml` | Logo, page title, action buttons, CDP icon row. Packages queue stays a widget in the well |
 | `ui/qml/AssetsViewer.qml` | Packages Viewer/Editor dock chrome. Preview stack stays a widget in the well |
 | `ui/qml/AssetsDock.qml` | Mesh Lods, Texture Params, Texture Editor, Texture Denoiser. Maps canvas and Packages preview stay widgets in the well |
@@ -16,17 +31,20 @@
 | Widget nav | Hidden while QML is up — one bottom bar |
 | Texture dock width | Opens at **420** (drag **360–920**). The old 1040 default was the widget sheet |
 | Mesh Lods dock width | Same as Texture Denoiser: opens at **400** (drag **320–520**) |
-| Sidebar icons | Clear actions (open, save, undo, add, remove, copy, denoise run) are icon buttons with a glass caret tip. Rule names stay text |
+| Sidebar icons | Scan and check actions are an icon plus a short name (Rules, VE39, Folder, File, Prep). Open, save, undo, add stay icon-only with a glass tip |
+| Texture viewers | texture.txt preview, scan log, lm.txt preview, and the material log are sunk wells |
+| Primary / Alpha | Primary has a file button. Alpha has a checkbox; off disables the field and omits Alpha=. On, or when a file already has Alpha, the field and file button work |
 
 ### QML Engine Tuner (2026-10-08)
 
 | Piece | Role |
 |--------|------|
 | `ui/qml/EnginePage.qml` | Sunk content well + raised nav (Tuner · Simulation · Parameters · Home · Auto Tune) |
-| `EngineTunerHost._mount_qml` | Sidebar, throttle/sim/parameter editors, and Auto Tune drawer stay widgets inside the well |
-| `ui/qml/EngineAuto.qml` | Right Auto Tune dock in QML. Hidden widget panel still runs Preview / Apply |
+| `ui/qml/EngineCenter.qml` | Tuner notch tables, Simulation fields, Parameters / pressure tables |
+| `EngineTunerHost._mount_qml` | Matplotlib TE graph and sim chart stay canvases in the graph well. Widget editors stay hidden and still own the data |
+| `ui/qml/EngineAuto.qml` | Right Auto Tune dock in QML. Hidden widget panel still runs Preview / Apply. On Parameters the same button opens the air-brake helper (pressures, reservoirs, brakeratio / max-decel, stop test) |
 | Buttons | `RaiseButton.qml` is raised glass. Fields and tables use `SunkField.qml` (sunk). Keep that for every QML control |
-| Warm | Sounds, Engine Tuner, Assets Tools, and Texture/Mesh are built and painted once before the boot cover drops |
+| Warm | Boot builds Home and the Mesh view only. Sounds, Engine, Assets, and TrainzUtil build the first time that page opens, under the load card, and stay built until the process exits |
 | `ui/qml/GlassPlate.qml` | Soft multi-ring floor shadow + inner lip on the glass (Home, Sounds, title) |
 | Fallback | Widget nav stays if the QML page fails to load |
 
@@ -117,6 +135,7 @@ Keep cinema glass look at rest; mid-slide paint must not re-run 14 soft-shadow r
 | Finder showed type badge only (T/F/I) — no edit state | orange **E** badge on edited file / parent folder / asset until **Save CDP…** |
 | Track | `_dirty_paths` + `_dirty_assets` (cleared on Save / Clear / open CDP) |
 | Engine Tuner button on every txt | was substring `"enginespec"` + cwd fallback → traincar kuid-table false positive; now only preview `config.txt` + parsed `looks_like_enginespec` |
+| `config.chump` preview was raw ACS$ garbage | Viewer expands with `chump_to_text`; Save packs `text_to_chump` back to ACS$ |
 
 ### Packages Finder — descenders + selection bubble (2026-10-07)
 
@@ -188,8 +207,9 @@ Also: `_sample_ok` rejected tiled UVs outside ±32 and dropped that chunk (int V
 | Piece | Role |
 |--------|------|
 | Boot cover | **No frost grab** — dim overlay card only (grab+blur was a big first-paint tax) |
-| Boot warm | Mesh chrome only under cover; Sounds/Engine/Assets via `_idle_warm_secondary_hubs` after HOME |
-| `util/preload.py` | Background import of Editor/Sounds/Engine/Assets while MainWindow builds |
+| Boot dialog | Card stays content height (does not stretch to the window). Stage line + 5-line log, last 24 kept |
+| Boot warm | Build Sounds/Engine/Assets/TrainzUtil hosts under the cover. Do **not** paint each hub page (`_expose_hub_page`) — that frame was the long stall |
+| `util/preload.py` | Background import while MainWindow builds. `preload_progress()` feeds the boot log (`import …`) |
 | Mesh GL | `prewarm_mesh_gl` **before** first show (HWND flash fix) |
 | Hub transition | Soft fade + tiny popup lift (`HubRevealOverlay`) — no directional morph / caption |
 | `hub_reveal_ms` | ~260–300ms (0 = skip on low-end) |
@@ -257,10 +277,9 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 | Piece | Role |
 |--------|------|
 | `ui/status_toast.py` | `ToastHost` · `GlassToastBubble` · `StudioStatusBar` · status-log dialog |
-| Bubble | Short wide chip · hangs under title bar · **center** when no topbar · slide-down + fade |
-| Chrome | **Never** `#welcomeTitle` (theme 34px) — `#toastTitle` 12 / `#toastDetail` 10 · mark 18² · ≤2 lines · elide |
-| Progress text | Title + `%` only — `_toast_lines` / `_short_progress_detail` strip `%` + newlines |
-| Save | ✓ green · 5s · status `Saved`/`Wrote`/`Exported` (not Autosave/fail) |
+| Bubble | Wide chip under title bar · center if no topbar · own plate (not panel frost insets) |
+| Chrome | One type ramp `_toast_text_qss` — title/detail/pct **12px** · line height pinned · mark 18² · ≤2 lines |
+| Save | ✓ green · 5s · `Saved`/`Wrote`/`Exported` — **not** `unsaved` / Autosave / fail |
 | Drop | ↓ orange · shows file names (`hub.drop` from `_handle_dropped_paths`) |
 | Progress | … blue · bar + `%` · sticky · load/bake · **finish** on 100% / plain status / hide overlay |
 | Footer left | Clickable `#statusLogMsg` → frost **Status log** (ring buffer ~400) |
@@ -270,7 +289,7 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 | Piece | Role |
 |--------|------|
 | Home cards | 5 in one row — Mesh · Sounds · Engine · **Assets** · **Texture / Mesh** |
-| Assets Tools | Packages · Config · KUID only (`set_suite("assets")`) |
+| Assets Tools | Packages · Config · KUID · Export (`set_suite("assets")`) |
 | Texture / Mesh | Texture · Parameter · Denoise · Mesh Ops (`set_suite("texmesh")`) — same `AssetsStudioHost` |
 | Bottom nav | Suite-specific `AssetsPageNav` (no combined Texture/Mesh tab on Assets) |
 | View menu | Assets Tools · Texture / Mesh Tools |
@@ -297,12 +316,12 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 | Assets sidebars | Rules scan/fix still there (same engine) |
 | Out of scope | Script compile (197/220), DLC featured, CM dependency DB |
 
-**Ship:** v0.3.3 full onefile (HDRI + fonts + Assimp + OIDN)  
+**Ship:** v0.3.4 full onefile (HDRI + fonts + Assimp + OIDN)  
 **Owner chat:** continue from this handoff  
 **Root:** `c:\trs22\trainz_studio\`  
 **Backup (pre-rename):** `c:\trs22\backups\26-10-05\mesh_studio-pre-trainz-studio\`  
 **Run:** `start.bat` / `start.vbs` (silent) · `start_debug.bat` (console) · `python -m trainz_studio` (cwd = `c:\trs22`)  
-**EXE:** `trainz_studio\dist\MSTN_TrainzStudio.exe` (onefile, full assets) — rebuild: `pack\build.bat` · GitHub Release `v0.3.3`  
+**EXE:** `trainz_studio\dist\MSTN_TrainzStudio.exe` (onefile, full assets) — rebuild: `pack\build.bat` · GitHub Release `v0.3.4`  
 **Shell:** `pack\shell\register.ps1` (Open + Quick Preview + Explorer pane) · `unregister.ps1`  
 **Smoke:** `python -m trainz_studio.check` from `c:\trs22` → expect `trainz_studio check: OK`
 
@@ -313,6 +332,7 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 | `PackagesPage.warm_fast_preview_infra` | Idle `_PreviewSurface` + `load_any` import during Assets boot warm |
 | `_ensure_assets_host` | Calls infra warm right after Assets Tools build |
 | Select mesh | Stage+parse overlaps GL ensure; when ready → solid preview opens (no 2nd click) |
+| `.im` | `io/im_geom.py` GEOM 101–201 → solid warm. No GEOM → a.* gizmos only |
 | Leave mesh | `_drop_mesh_warm` so stale warm can't steal image/text pane |
 
 ### Orbit yaw — un-invert (2026-10-07)
@@ -404,7 +424,7 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 |--------|------|
 | Menubar **Lang** | After File / Edit / View — English · ไทย · 日本語 · Bahasa Indonesia |
 | `ui/i18n/` | `t()` / `g()` catalogs · `snapshot_and_apply` · Noto font swap · QSettings `ui/language` |
-| Fonts | EN+TH → **Noto Sans Thai Looped** · JA → **Noto Sans CJK JP** · ID → **Noto Sans** (`assets/fonts/`) — Lang swap rebuilds QSS `* { font-family }` + rebases every widget (Material Icons skipped) |
+| Fonts | EN+ID → **Noto Sans** · TH → **Noto Sans Thai Looped** · JA → **Noto Sans CJK JP** (`assets/fonts/`) — Lang swap rebuilds QSS `* { font-family }` + rebases widgets (Material Icons and Consolas editors skipped). Static Noto Sans is loaded without its STAT table so Qt does not restyle it as Thin Condensed. |
 | Swap motion | `animate_language_swap` fades text chrome only — **never** opacity on MainWindow / GL hosts |
 | VE39 | Glossary IDs (`ve39.tip` / scan / fix) explain solid-texture rejection in every locale |
 | Scope | All UI strings (menus, buttons, tooltips, glass tips, dialogs, status). Not source comments. |
@@ -423,7 +443,7 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 | `QStackedWidget` QSS + palette push | Transparent stack stamped black on Win; hub pages kept dark Window under light — opaque `{p.bg}` + hub palette push |
 | Theme toggle snappy | No `allWidgets`/`setFont` on flip (double polish); frost/HOME/hosts deferred; boot `warm_theme_cache` + logos |
 | `HoverBubble` (`ui/motion.py`) | Translucent hover follower; orange `AccentPill` = selection |
-| `GlassTipBubble` + `attach_glass_tip` | Custom glass tip (`apply_icon`; native Qt tip off) — max ~260px wrap, 9pt Medium (was one-line 11pt DemiBold strip) |
+| `GlassTipBubble` + `attach_glass_tip` | Caret bubble for every tooltip (native `QToolTip` swallowed). Pops from the caret — does not slide/stretch between targets. Max ~260px wrap, 9pt Medium |
 | `ButtonHoverChrome` / `install_button_hover_chrome` | App-wide: soft hover bubble + `chromeLift` emboss only (no button geometry — layout stays still) |
 | Top/bottom bars (Mesh/Engine/Assets/Sounds + PBR HUD / side tabs) | Hover bubble springs (OutBack + pop) under any menu item |
 | Sounds `FloatActionBar` | Compact Home capsule (Theme is top menu) |
@@ -519,7 +539,7 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 | Change | Why |
 |--------|-----|
 | Side tabs **Texture Params** \| **`Resize → _prep`** | Instant swap (no opacity fade — Win frost crash / invisible options) |
-| Crash notify | Glass dialog (`ui/crash_dialog.py`) · `last_error.txt` · next-launch sheet · `fault.log` |
+| Crash notify | QML sheet `ui/qml/CrashDialog.qml` via `ui/crash_dialog.py` · `last_error.txt` · next-launch sheet · `fault.log` |
 | Title **Batch Resize → _prep/** + tip | Clarifies non-destructive sibling `_prep/` output (VE39 stays separate) |
 | Checkbox **Use these settings…** | Default OFF (opt-in) · Off → SegPills/spins dimmed/unclickable + sidebar Resize disabled |
 | `_SegPills.changeEvent` | Child buttons follow enabled; `_pick` no-ops when disabled |
@@ -560,7 +580,9 @@ Imports: `trainz_studio.lib.engine_tuner.config_io`, `…lib.im_editor.core`, `�
 |------|------|
 | `ui/assets/studio.py` | Hub — frost sidebar + stack + bottom nav |
 | `ui/assets/sidebar.py` | Native page actions only |
-| `ui/assets/nav.py` | Suite nav: Assets **Packages**\|**Config**\|**KUID** · TexMesh **Texture**\|**Mesh Ops** |
+| `ui/assets/nav.py` | Suite nav: Assets **Packages**\|**Config**\|**KUID**\|**Export** · TexMesh **Texture**\|**Mesh Ops** |
+| `ui/assets/export_cdp.py` | Paste KUIDs (commas optional) · check rows · TrainzUtil `createCDP` one file each or one combined CDP |
+| `io/cdp_export.py` | `createCDP` argv + success check. Launcher must be open |
 | `ui/assets/kuid.py` | Normalize + hex/hash UI helpers |
 | `io/lm.py` | Parse/write `*.lm.txt` |
 | `io/texture.py` | `format_texture_txt` / `write_texture_txt` (+ existing check) |
