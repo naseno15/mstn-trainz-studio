@@ -1,29 +1,22 @@
-"""Glassmorphism crash / previous-session error dialog — matches Studio frost chrome."""
+"""QML crash / previous-session error dialog — same glass as the studios."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QRectF, QTimer, QUrl
-from PySide6.QtGui import (
-    QColor,
-    QDesktopServices,
-    QFont,
-    QPainter,
-    QRadialGradient,
-)
+from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
-    QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from .frost import FrostGlassFrame
-from .theme import app_font
+from .qml_host import _qml_ok, _quick
+
+_QML = Path(__file__).resolve().parent / "qml" / "CrashDialog.qml"
 
 
 def _theme_dark() -> bool:
@@ -36,8 +29,92 @@ def _theme_dark() -> bool:
     return True
 
 
+class _CrashBridge(QObject):
+    changed = Signal()
+
+    def __init__(
+        self,
+        dialog: QDialog,
+        *,
+        title: str,
+        summary: str,
+        detail: str,
+        log_path: Path,
+        kind: str,
+        dark: bool,
+        quit_on_ok: bool,
+    ) -> None:
+        super().__init__(dialog)
+        self._dialog = dialog
+        self._title = title
+        self._summary = summary
+        self._detail = detail
+        self._log_path = str(log_path)
+        self._folder = str(log_path.parent)
+        self._kind = kind
+        self._dark = dark
+        self._quit_on_ok = quit_on_ok
+        self._copy_label = "Copy error"
+        self._blob = f"{title}\n{summary}\n\n{detail}\n\nLog: {log_path}"
+
+    def _get_dark(self) -> bool:
+        return self._dark
+
+    def _get_title(self) -> str:
+        return self._title
+
+    def _get_summary(self) -> str:
+        return self._summary
+
+    def _get_detail(self) -> str:
+        return self._detail
+
+    def _get_log_path(self) -> str:
+        return self._log_path
+
+    def _get_kind(self) -> str:
+        return self._kind
+
+    def _get_quit(self) -> bool:
+        return self._quit_on_ok
+
+    def _get_copy_label(self) -> str:
+        return self._copy_label
+
+    dark = Property(bool, _get_dark, notify=changed)
+    title = Property(str, _get_title, notify=changed)
+    summary = Property(str, _get_summary, notify=changed)
+    detail = Property(str, _get_detail, notify=changed)
+    logPath = Property(str, _get_log_path, notify=changed)
+    kind = Property(str, _get_kind, notify=changed)
+    quitOnOk = Property(bool, _get_quit, notify=changed)
+    copyLabel = Property(str, _get_copy_label, notify=changed)
+
+    @Slot()
+    def openFolder(self) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(self._folder))
+
+    @Slot(str)
+    def copyError(self, selected: str) -> None:
+        clip = QApplication.clipboard()
+        if clip is None:
+            return
+        clip.setText(selected.strip() or self._blob)
+        self._copy_label = "Copied"
+        self.changed.emit()
+        QTimer.singleShot(1400, self._reset_copy)
+
+    def _reset_copy(self) -> None:
+        self._copy_label = "Copy error"
+        self.changed.emit()
+
+    @Slot()
+    def dismiss(self) -> None:
+        self._dialog.accept()
+
+
 class _GlassCrashDialog(QDialog):
-    """Frameless dim veil + frost card (live error or previous-session notify)."""
+    """Frameless QML sheet (live error or previous-session notify)."""
 
     def __init__(
         self,
@@ -60,169 +137,38 @@ class _GlassCrashDialog(QDialog):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMinimumSize(520, 420)
-        self.resize(640, 520)
-        self._copy_blob = f"{title}\n{summary}\n\n{detail}\n\nLog: {log_path}"
+        self.resize(680, 560)
 
+        self._bridge = _CrashBridge(
+            self,
+            title=title,
+            summary=summary,
+            detail=detail,
+            log_path=log_path,
+            kind=kind,
+            dark=self._dark,
+            quit_on_ok=self._quit_on_ok,
+        )
+        self._view = _quick(_QML, self._bridge)
+        self._ok = _qml_ok(self._view)
         root = QVBoxLayout(self)
-        root.setContentsMargins(28, 28, 28, 28)
-        root.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        card = FrostGlassFrame(radius=18.0)
-        card.setObjectName("sidePanel")
-        card.set_dark(self._dark)
-        card.setFixedWidth(560)
-        self._card = card
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(28, 24, 28, 22)
-        cl.setSpacing(12)
-
-        head = QHBoxLayout()
-        head.setSpacing(14)
-        mark = QLabel("!" if kind == "warning" else "×")
-        mark.setFixedSize(40, 40)
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setObjectName("crashMark")
-        mark.setStyleSheet(self._mark_qss(kind))
-        head.addWidget(mark)
-
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
-        t = QLabel(title)
-        t.setObjectName("welcomeTitle")
-        t.setFont(app_font(16, QFont.Weight.Bold))
-        titles.addWidget(t)
-        sub = QLabel(summary)
-        sub.setObjectName("mutedTip")
-        sub.setWordWrap(True)
-        sub.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        sub.setFont(app_font(12, QFont.Weight.Medium))
-        titles.addWidget(sub)
-        head.addLayout(titles, 1)
-        cl.addLayout(head)
-
-        tip = QLabel("Traceback — select text or use Copy")
-        tip.setObjectName("mutedTip")
-        tip.setFont(app_font(11, QFont.Weight.DemiBold))
-        cl.addWidget(tip)
-
-        body = QPlainTextEdit()
-        body.setReadOnly(True)
-        body.setUndoRedoEnabled(False)
-        body.setPlainText(detail)
-        body.setObjectName("crashTrace")
-        body.setMinimumHeight(220)
-        body.setStyleSheet(self._trace_qss())
-        body.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-            | Qt.TextInteractionFlag.TextSelectableByKeyboard
-        )
-        mono = QFont("Cascadia Mono", 10)
-        if not mono.exactMatch():
-            mono = QFont("Consolas", 10)
-        body.setFont(mono)
-        self._body = body
-        cl.addWidget(body, 1)
-
-        log_lab = QLabel(str(log_path))
-        log_lab.setObjectName("mutedTip")
-        log_lab.setWordWrap(True)
-        log_lab.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        cl.addWidget(log_lab)
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        open_btn = QPushButton("Open log folder")
-        open_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(
-                QUrl.fromLocalFile(str(log_path.parent))
-            )
-        )
-        row.addWidget(open_btn)
-        copy_btn = QPushButton("Copy error")
-        copy_btn.setToolTip("Copy title, summary, traceback, and log path")
-        copy_btn.clicked.connect(self._copy_error)
-        self._copy_btn = copy_btn
-        row.addWidget(copy_btn)
-        row.addStretch(1)
-        ok = QPushButton("OK")
-        ok.setObjectName("accentBtn")
-        ok.setMinimumWidth(110)
-        ok.setMinimumHeight(36)
-        ok.setDefault(True)
-        if self._quit_on_ok:
-            ok.setToolTip("Close Trainz Studio")
-        ok.clicked.connect(self.accept)
-        row.addWidget(ok)
-        cl.addLayout(row)
-
-        root.addWidget(card)
-
-    def _copy_error(self) -> None:
-        clip = QApplication.clipboard()
-        if clip is None:
+        root.setContentsMargins(0, 0, 0, 0)
+        if self._ok:
+            root.addWidget(self._view)
             return
-        # Selection wins if user highlighted a slice; else full report.
-        selected = self._body.textCursor().selectedText().replace("\u2029", "\n")
-        clip.setText(selected if selected.strip() else self._copy_blob)
-        self._copy_btn.setText("Copied")
-        QTimer.singleShot(1400, lambda: self._copy_btn.setText("Copy error"))
+        fallback = QLabel(f"{summary}\n\n{detail}\n\n{log_path}")
+        fallback.setWordWrap(True)
+        fallback.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.addWidget(fallback)
+        ok = QPushButton("OK")
+        ok.clicked.connect(self.accept)
+        root.addWidget(ok)
 
-    def _mark_qss(self, kind: str) -> str:
-        if kind == "warning":
-            bg, fg = "rgba(255, 159, 10, 0.22)", "#ff9f0a"
-        else:
-            bg, fg = "rgba(255, 69, 58, 0.22)", "#ff453a"
-        return (
-            f"QLabel#crashMark {{ background: {bg}; color: {fg};"
-            f" border-radius: 12px; font-weight: 800; font-size: 20px; }}"
-        )
-
-    def _trace_qss(self) -> str:
-        if self._dark:
-            return (
-                "QPlainTextEdit#crashTrace {"
-                " background: rgba(8, 10, 14, 0.55);"
-                " color: rgba(235, 235, 245, 0.88);"
-                " border: 1px solid rgba(255, 255, 255, 0.10);"
-                " border-radius: 12px; padding: 10px; }"
-            )
-        return (
-            "QPlainTextEdit#crashTrace {"
-            " background: rgba(255, 255, 255, 0.72);"
-            " color: #1d1d1f;"
-            " border: 1px solid rgba(0, 0, 0, 0.10);"
-            " border-radius: 12px; padding: 10px; }"
-        )
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        del event
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        # Dim glass veil over whatever is behind the dialog.
-        if self._dark:
-            p.fillRect(self.rect(), QColor(8, 10, 14, 160))
-            veil = QRadialGradient(self.rect().center(), max(self.width(), self.height()) * 0.65)
-            veil.setColorAt(0.0, QColor(255, 90, 31, 28))
-            veil.setColorAt(0.45, QColor(18, 22, 28, 90))
-            veil.setColorAt(1.0, QColor(6, 8, 10, 170))
-            p.fillRect(self.rect(), veil)
-        else:
-            p.fillRect(self.rect(), QColor(240, 242, 245, 170))
-        # Soft orange bloom behind the card.
-        if self._card is not None:
-            cr = self._card.geometry()
-            bloom = QRectF(cr).adjusted(-24, -18, 24, 28)
-            glow = QRadialGradient(bloom.center(), bloom.width() * 0.55)
-            glow.setColorAt(0.0, QColor(255, 90, 31, 40 if self._dark else 28))
-            glow.setColorAt(0.5, QColor(255, 90, 31, 12))
-            glow.setColorAt(1.0, QColor(255, 90, 31, 0))
-            p.fillRect(bloom, glow)
+    @property
+    def ok(self) -> bool:
+        return self._ok
 
 
 def _find_quit_host(parent: QWidget | None) -> QWidget | None:
