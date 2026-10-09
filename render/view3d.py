@@ -1974,7 +1974,11 @@ class MeshView(QOpenGLWidget):
         self.update()
 
     def set_show_attachments(self, on: bool) -> None:
-        self._show_atts = bool(on)
+        on = bool(on)
+        if on == self._show_atts:
+            return
+        self._show_atts = on
+        self.update()
 
     def set_hidden_mesh_keys(self, keys: set[str] | frozenset[str] | None) -> None:
         """Hide whole files by mesh_key (Scene table Show checkboxes)."""
