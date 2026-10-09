@@ -35,6 +35,7 @@ _PAGE_TITLES = {
     "denoise": "Texture Denoiser",
     "meshops": "Mesh Lods",
     "kuid": "KUID",
+    "export": "Export",
 }
 
 _PAGE_BLURBS = {
@@ -45,6 +46,7 @@ _PAGE_BLURBS = {
     "denoise": "Texture Denoiser · OIDN + OpenCV · preview then Save overwrite.",
     "meshops": "Mesh Lods · material rules · .lm.txt · .m.pbrmetal / .m.onetex.",
     "kuid": "Normalize · hex · hash-XX folder (chump buckets).",
+    "export": "Paste KUIDs · one CDP each, or one CDP for the checked set. TrainzUtil createCDP.",
 }
 
 # page → list of (label, action_id, accent?)
@@ -97,30 +99,50 @@ _ACTIONS: dict[str, list[tuple[str, str, bool]]] = {
         ("Hex + hash", "kuid_hash", False),
         ("Copy list", "copy_kuids", False),
     ],
+    "export": [
+        ("Read list", "export_read", True),
+        ("Check all", "export_all", False),
+        ("Export each…", "export_each", True),
+        ("Export one CDP…", "export_one", False),
+    ],
 }
 
-# action_id → Material icon, only where the glyph is unambiguous.
-# The label stays the tooltip. Rule-specific actions stay text buttons.
-_ACTION_ICONS: dict[str, str] = {
-    "open_chump": "file_open",
-    "save_chump": "save",
-    "tex_from_image": "add_photo_alternate",
-    "tex_save": "save",
-    "tex_save_all": "save_as",
-    "param_open": "file_open",
-    "param_save": "save",
-    "param_undo": "undo",
-    "param_redo": "redo",
-    "param_revert": "history",
-    "denoise_open": "file_open",
-    "denoise_run": "play_arrow",
-    "denoise_save": "save",
-    "denoise_revert": "history",
-    "lm_add": "add",
-    "lm_remove": "delete",
-    "lm_load": "file_open",
-    "lm_save": "save",
-    "copy_kuids": "content_copy",
+# (icon, short face). Empty face = icon only. The full label is the tooltip.
+_ACTION_ICONS: dict[str, tuple[str, str]] = {
+    "open_chump": ("file_open", ""),
+    "save_chump": ("save", ""),
+    "tex_from_image": ("add_photo_alternate", ""),
+    "tex_save": ("save", ""),
+    "tex_save_all": ("save_as", ""),
+    "tex_resize": ("aspect_ratio", "Prep"),
+    "tex_rules_scan": ("search", "Rules"),
+    "tex_rules_fix": ("auto_fix_high", "Rules"),
+    "tex_ve39_scan": ("search", "VE39"),
+    "tex_ve39_fix": ("auto_fix_high", "VE39"),
+    "open_texture": ("fact_check", "File"),
+    "scan_folder": ("search", "Folder"),
+    "param_open": ("file_open", ""),
+    "param_save": ("save", ""),
+    "param_undo": ("undo", ""),
+    "param_redo": ("redo", ""),
+    "param_revert": ("history", ""),
+    "denoise_open": ("file_open", ""),
+    "denoise_run": ("play_arrow", ""),
+    "denoise_save": ("save", ""),
+    "denoise_revert": ("history", ""),
+    "lm_add": ("add", ""),
+    "lm_remove": ("delete", ""),
+    "lm_rules_scan": ("search", "Rules"),
+    "lm_rules_fix": ("auto_fix_high", "Rules"),
+    "lm_mat_scan": ("search", "Mat"),
+    "lm_mat_fix": ("auto_fix_high", "Names"),
+    "lm_load": ("file_open", ""),
+    "lm_save": ("save", ""),
+    "copy_kuids": ("content_copy", ""),
+    "export_read": ("playlist_add_check", ""),
+    "export_all": ("done_all", ""),
+    "export_each": ("archive", ""),
+    "export_one": ("file_download", ""),
 }
 _PACKAGE_FOOTER: list[tuple[str, str, str, bool]] = [
     ("file_open", "open_cdp", "Open CDP", True),
