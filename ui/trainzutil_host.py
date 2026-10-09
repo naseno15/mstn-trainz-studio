@@ -1996,7 +1996,7 @@ class TrainzUtilHost(QWidget):
         self._bridge.patch_source(source_id, "Unreadable")
         self._bridge.note(message)
 
-    def _scan_done(self, source_id: str, path: Path, scanned) -> None:
+    def _scan_done(self, source_id: str, scanned) -> None:
         if source_id not in self._source_paths:
             return
         for job in scanned.jobs:
