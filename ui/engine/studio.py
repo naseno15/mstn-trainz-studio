@@ -459,7 +459,7 @@ class SimulationPanel(QWidget):
 
 
 class EngineBridge(QObject):
-    """QML nav talks to the existing page stack. Editors stay widgets."""
+    """QML shell, sidebar, and the three center pages. Graphs stay canvases."""
 
     changed = Signal()
 
@@ -495,12 +495,17 @@ class EngineBridge(QObject):
         self._auto_fields: dict[str, str] = {}
         self._auto_tab = 0
         self._auto_summary = ""
+        self._auto_kind = "engine"
+        self._power_unit = "kW"
         self._shapes: list[str] = []
         self._tuner = "Tuner"
         self._simulation = "Simulation"
         self._parameters = "Parameters"
         self._auto_tune = "Auto Tune"
         self._file_tips = "{}"
+        self._center = "{}"
+        self._notch_focus = -1
+        self._graph: tuple[float, float, float, float] | None = None
         self._sync_file_tips()
 
     def _sync_file_tips(self) -> None:
@@ -536,6 +541,8 @@ class EngineBridge(QObject):
     def set_page_name(self, page: str) -> None:
         self._page = page if page in ("tuner", "simulation", "parameters") else "tuner"
         self._bump()
+        if getattr(self._host, "_graphs_lifted", False):
+            self._apply_graph()
 
     def get_auto(self) -> bool:
         return self._auto
@@ -640,6 +647,7 @@ class EngineBridge(QObject):
     autoJson = Property(str, lambda self: __import__("json").dumps(self._auto_fields), notify=changed)
     autoTab = Property(int, lambda self: self._auto_tab, notify=changed)
     autoSummary = Property(str, lambda self: self._auto_summary, notify=changed)
+    autoKind = Property(str, lambda self: self._auto_kind, notify=changed)
     shapeNames = Property("QVariantList", lambda self: self._shapes, notify=changed)
     openGlyph = Property(str, lambda self: self._open_glyph, notify=changed)
     backGlyph = Property(str, lambda self: self._back_glyph, notify=changed)
@@ -648,6 +656,8 @@ class EngineBridge(QObject):
     undoGlyph = Property(str, lambda self: self._undo_glyph, notify=changed)
     redoGlyph = Property(str, lambda self: self._redo_glyph, notify=changed)
     fileTips = Property(str, lambda self: self._file_tips, notify=changed)
+    centerJson = Property(str, lambda self: self._center, notify=changed)
+    notchFocus = Property(int, lambda self: self._notch_focus, notify=changed)
     tuner = Property(str, get_tuner, notify=changed)
     simulation = Property(str, get_simulation, notify=changed)
     parameters = Property(str, get_parameters, notify=changed)
@@ -719,6 +729,21 @@ class EngineBridge(QObject):
     def doCloneHigher(self) -> None:
         self._host._on_sidebar_clone_higher(self._clone_from)
 
+    def set_kind(self, kind: str) -> None:
+        self._auto_kind = "air" if kind == "air" else "engine"
+        self._bump()
+
+    def sync_air(self) -> None:
+        from ...lib.engine_tuner.airtune import describe, fields_dict
+
+        air = getattr(self._host, "_air", None)
+        if air is None:
+            return
+        self._auto_fields = fields_dict(air)
+        self._auto_summary = describe(air)
+        self._auto_kind = "air"
+        self._bump()
+
     def sync_auto(self) -> None:
         panel = self._host._autotune_panel
         if not hasattr(panel, "power_kw"):
@@ -733,8 +758,11 @@ class EngineBridge(QObject):
         def flag(box) -> str:
             return "1" if box.isChecked() else "0"
 
+        from ...lib.engine_tuner.autotune import format_power
+
         self._auto_fields = {
-            "powerKw": num(panel.power_kw),
+            "powerKw": format_power(float(panel.power_kw.value()), self._power_unit),
+            "powerUnit": self._power_unit if self._power_unit in ("kW", "HP") else "kW",
             "powerCoeff": num(panel.power_coeff),
             "speedKmh": num(panel.speed_kmh),
             "speedCoeff": num(panel.speed_coeff),
@@ -767,10 +795,19 @@ class EngineBridge(QObject):
         }
         self._shapes = [panel.eng_shape.itemText(i) for i in range(panel.eng_shape.count())]
         self._auto_summary = panel.summary.text()
+        self._auto_kind = "engine"
         self._bump()
 
     @Slot(str, str)
     def setAutoField(self, key: str, raw: str) -> None:
+        if self._auto_kind == "air":
+            from ...lib.engine_tuner.airtune import set_field
+
+            air = getattr(self._host, "_air", None)
+            if air is None or not set_field(air, key, raw):
+                return
+            self.sync_air()
+            return
         panel = self._host._autotune_panel
         if not hasattr(panel, "power_kw"):
             return
@@ -808,10 +845,15 @@ class EngineBridge(QObject):
         try:
             if key in spins:
                 box = spins[key]
+                value = float(raw)
+                if key == "powerKw" and self._power_unit == "HP":
+                    from ...lib.engine_tuner.autotune import parse_power_kw
+
+                    value = parse_power_kw(value, "HP")
                 if hasattr(box, "decimals"):
-                    box.setValue(float(raw))
+                    box.setValue(value)
                 else:
-                    box.setValue(int(float(raw)))
+                    box.setValue(int(value))
             elif key in checks:
                 checks[key].setChecked(str(raw).lower() in ("1", "true", "yes", "on"))
             elif key in combos:
@@ -830,6 +872,10 @@ class EngineBridge(QObject):
 
     @Slot()
     def previewAuto(self) -> None:
+        if self._auto_kind == "air":
+            self._host.preview_air_fields()
+            self.sync_air()
+            return
         panel = self._host._autotune_panel
         if not hasattr(panel, "power_kw"):
             return
@@ -838,11 +884,328 @@ class EngineBridge(QObject):
 
     @Slot()
     def applyAuto(self) -> None:
+        if self._auto_kind == "air":
+            self._host.apply_air_fields()
+            self.sync_air()
+            return
         panel = self._host._autotune_panel
         if not hasattr(panel, "power_kw"):
             return
         panel._apply()
         self.sync_auto()
+
+    @Slot()
+    def presetAir(self) -> None:
+        self._host.preset_air_fields()
+        self.sync_air()
+
+    @Slot()
+    def cyclePowerUnit(self) -> None:
+        if self._auto_kind != "engine":
+            return
+        self._power_unit = "HP" if self._power_unit == "kW" else "kW"
+        self.sync_auto()
+
+    @Slot()
+    def cyclePressUnit(self) -> None:
+        from ...lib.engine_tuner.airtune import cycle_press_unit
+
+        air = getattr(self._host, "_air", None)
+        if air is None or self._auto_kind != "air":
+            return
+        cycle_press_unit(air)
+        self.sync_air()
+
+    def sync_center(self) -> None:
+        """Push tuner tables, sim fields, and parameter bags to QML."""
+        import json
+
+        from ...lib.engine_tuner.throttle_round import fmt_kmh, fmt_kn
+        from .throttle_panel import NOTCH_COLORS
+
+        host = self._host
+        ed = host.throttle_editor
+        sim = host.sim_panel
+        cfg = ed.get_cfg()
+        notches = []
+        for notch in range(0, 9):
+            pts = sorted(cfg.throttle_power.get(notch, []), key=lambda p: p[0])
+            notches.append(
+                {
+                    "n": notch,
+                    "color": NOTCH_COLORS.get(notch, "#64748b"),
+                    "pts": [{"kmh": fmt_kmh(sp), "kn": fmt_kn(te)} for sp, te in pts],
+                }
+            )
+
+        def bag(editor) -> list[dict[str, str]]:
+            return [{"k": k, "v": editor._fmt(editor.data[k])} for k in sorted(editor.data)]
+
+        pressure = []
+        for key in sorted(host.press_editor.data):
+            native = host.press_editor.data[key]
+            pressure.append(
+                {
+                    "k": key,
+                    "native": fmt_native(native),
+                    "bar": fmt_bar(native),
+                    "kpa": fmt_kpa(native),
+                }
+            )
+        self._center = json.dumps(
+            {
+                "path": host.path_lab.text(),
+                "resist": bool(ed._show_resist),
+                "maxKmh": f"{float(ed.max_kmh.value()):.2f}",
+                "maxKn": f"{float(ed.max_kn.value()):.2f}",
+                "notches": notches,
+                "sim": {
+                    "mass": f"{float(sim.mass.value()):g}",
+                    "motors": str(int(sim.motors.value())),
+                    "grade": f"{float(sim.grade.value()):g}",
+                    "duration": f"{float(sim.duration.value()):g}",
+                    "notch": str(int(sim.notch.value())),
+                    "brake": f"{float(sim.brake.value()):g}",
+                    "emergency": "1" if sim.emergency.isChecked() else "0",
+                    "stats": sim.stats.text(),
+                },
+                "bags": {
+                    "motor": bag(host.motor_editor),
+                    "mass": bag(host.mass_editor),
+                    "flowsize": bag(host.flow_editor),
+                    "volume": bag(host.vol_editor),
+                },
+                "pressure": pressure,
+            }
+        )
+        self._bump()
+
+    def _note_focus(self) -> None:
+        notch = self._host.throttle_editor.focus_notch
+        value = -1 if notch is None else int(notch)
+        if value == self._notch_focus:
+            return
+        self._notch_focus = value
+        self._bump()
+
+    def _param_editor(self, name: str):
+        host = self._host
+        return {
+            "motor": host.motor_editor,
+            "mass": host.mass_editor,
+            "flowsize": host.flow_editor,
+            "volume": host.vol_editor,
+        }.get(name)
+
+    @Slot(int, int, int, str)
+    def editPoint(self, notch: int, index: int, column: int, text: str) -> None:
+        self._host.throttle_editor.commit_cell_edit(int(notch), int(index), int(column), text)
+        self.sync_center()
+
+    @Slot(int)
+    def addPoint(self, notch: int) -> None:
+        self._host.throttle_editor.add_point(int(notch))
+        self.sync_center()
+
+    @Slot(int, int)
+    def delPoint(self, notch: int, index: int) -> None:
+        editor = self._host.throttle_editor
+        col = editor.columns.get(int(notch))
+        if col is None:
+            return
+        item = col.tree.topLevelItem(int(index))
+        if item is None:
+            return
+        col.tree.clearSelection()
+        item.setSelected(True)
+        editor.del_point(int(notch))
+        self.sync_center()
+
+    @Slot(int, int, int)
+    def movePoint(self, notch: int, src: int, dst: int) -> None:
+        editor = self._host.throttle_editor
+        pts = sorted(editor.get_cfg().throttle_power.get(int(notch), []), key=lambda p: p[0])
+        if not pts:
+            return
+        src_i = max(0, min(len(pts) - 1, int(src)))
+        dst_i = max(0, min(len(pts) - 1, int(dst)))
+        if src_i == dst_i:
+            return
+        pts.insert(dst_i, pts.pop(src_i))
+        editor.reorder_points(int(notch), pts)
+        self.sync_center()
+
+    @Slot(int)
+    def focusNotch(self, notch: int) -> None:
+        self._host.throttle_editor.set_focus_notch(int(notch))
+        self._note_focus()
+
+    @Slot(bool)
+    def setResist(self, on: bool) -> None:
+        self._host.throttle_editor.resist_cb.setChecked(bool(on))
+        self.sync_center()
+
+    @Slot(str, str)
+    def setGraphMax(self, kmh: str, kn: str) -> None:
+        editor = self._host.throttle_editor
+        try:
+            editor.max_kmh.setValue(float(kmh))
+            editor.max_kn.setValue(float(kn))
+        except ValueError:
+            self.sync_center()
+            return
+        self.sync_center()
+
+    @Slot()
+    def fitGraph(self) -> None:
+        self._host.throttle_editor.fit_graph()
+        self.sync_center()
+
+    @Slot(str, str)
+    def setSim(self, key: str, raw: str) -> None:
+        panel = self._host.sim_panel
+        try:
+            if key == "mass":
+                panel.mass.setValue(float(raw))
+            elif key == "motors":
+                panel.motors.setValue(int(float(raw)))
+            elif key == "grade":
+                panel.grade.setValue(float(raw))
+            elif key == "duration":
+                panel.duration.setValue(float(raw))
+            elif key == "notch":
+                panel.notch.setValue(int(float(raw)))
+            elif key == "brake":
+                panel.brake.setValue(float(raw))
+            elif key == "emergency":
+                panel.emergency.setChecked(str(raw).lower() in ("1", "true", "yes", "on"))
+            else:
+                return
+        except ValueError:
+            self.sync_center()
+            return
+        self.sync_center()
+
+    @Slot()
+    def runSim(self) -> None:
+        self._host.sim_panel.run()
+        self.sync_center()
+
+    @Slot(str)
+    def addParam(self, name: str) -> None:
+        editor = self._param_editor(name)
+        if editor is None:
+            return
+        editor.add_row()
+        self.sync_center()
+
+    @Slot(str, str)
+    def delParam(self, name: str, key: str) -> None:
+        editor = self._param_editor(name)
+        if editor is None or key not in editor.data:
+            return
+        editor.begin_edit()
+        editor.data.pop(key, None)
+        editor.refresh()
+        editor.on_change()
+        self.sync_center()
+
+    @Slot(str, str, int, str)
+    def editParam(self, name: str, key: str, column: int, text: str) -> None:
+        editor = self._param_editor(name)
+        if editor is None or key not in editor.data:
+            return
+        if int(column) == 0:
+            new_key = text.strip()
+            if not new_key or new_key == key or new_key in editor.data:
+                self.sync_center()
+                return
+            editor.begin_edit()
+            editor.data[new_key] = editor.data.pop(key)
+        else:
+            try:
+                value = float(text)
+            except ValueError:
+                self.sync_center()
+                return
+            editor.begin_edit()
+            editor.data[key] = value
+        editor.refresh()
+        editor.on_change()
+        self.sync_center()
+
+    @Slot()
+    def addPressure(self) -> None:
+        self._host.press_editor.add_row()
+        self.sync_center()
+
+    @Slot(str)
+    def delPressure(self, key: str) -> None:
+        editor = self._host.press_editor
+        if key not in editor.data:
+            return
+        editor.begin_edit()
+        editor.data.pop(key, None)
+        editor.refresh()
+        editor.on_change()
+        self.sync_center()
+
+    @Slot(str, int, str)
+    def editPressure(self, key: str, column: int, text: str) -> None:
+        editor = self._host.press_editor
+        if key not in editor.data:
+            return
+        if int(column) == 0:
+            new_key = text.strip()
+            if not new_key or new_key == key or new_key in editor.data:
+                self.sync_center()
+                return
+            editor.begin_edit()
+            editor.data[new_key] = editor.data.pop(key)
+        else:
+            try:
+                entered = float(text)
+            except ValueError:
+                self.sync_center()
+                return
+            if int(column) == 2:
+                native = from_bar(entered)
+            elif int(column) == 3:
+                native = from_kpa(entered)
+            else:
+                native = entered
+            editor.begin_edit()
+            editor.data[key] = native
+        editor.refresh()
+        editor.on_change()
+        self.sync_center()
+
+    def _apply_graph(self) -> None:
+        from PySide6.QtCore import QPoint
+
+        host = self._host
+        view = getattr(host, "_engine_view", None)
+        throttle = host.throttle_editor.canvas
+        sim = host.sim_panel.canvas
+        show = throttle if self._page == "tuner" else sim if self._page == "simulation" else None
+        for canvas in (throttle, sim):
+            if canvas is not show:
+                canvas.hide()
+        if show is None or view is None or self._graph is None:
+            return
+        x, y, w, h = self._graph
+        if w < 2 or h < 2:
+            show.hide()
+            return
+        origin = view.mapTo(host, QPoint(int(x), int(y)))
+        show.setGeometry(origin.x(), origin.y(), max(1, int(w)), max(1, int(h)))
+        show.show()
+        show.raise_()
+
+    @Slot(float, float, float, float)
+    def placeGraph(self, x: float, y: float, w: float, h: float) -> None:
+        self._graph = (x, y, w, h)
+        self._apply_graph()
 
     @Slot(float, float, float, float)
     def placeEditor(self, x: float, y: float, w: float, h: float) -> None:
@@ -873,18 +1236,25 @@ class EngineTunerHost(QWidget):
         on_home: Callable[[], None],
         on_theme: Callable[[], None] | None = None,
         theme_mode: str = "dark",
+        shell: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_home = on_home
         self._on_theme = on_theme
         self._theme = theme_mode if theme_mode in ("dark", "light") else "dark"
+        self._shell = shell
+        self._surface_ready = False
         self.cfg = EngineConfig()
         self.history = UndoStack()
         # CDP session: Save writes back via callback then returns to Packages
         self._cdp_on_save: Callable[[str], None] | None = None
         self._cdp_on_done: Callable[[], None] | None = None
         self._cdp_on_back: Callable[[], None] | None = None
+        self._cdp_back_tip = ""
+        self._cdp_save_tip = ""
+        self._cdp_leave_prompt = ""
+        self._cdp_save_note = ""
         self._build()
         self._bind_shortcuts()
 
@@ -916,7 +1286,10 @@ class EngineTunerHost(QWidget):
         self._split.setChildrenCollapsible(False)
         self._split.setHandleWidth(6)
 
+        from ...util.preload import boot_log
+
         # ── left sidebar (Mesh frost theme) — drag handle to resize ──
+        boot_log("Engine · EngineSidebar")
         self.sidebar = EngineSidebar()
         self.sidebar.set_theme(self._theme)
         self.sidebar.open_clicked.connect(self.open_file)
@@ -949,6 +1322,7 @@ class EngineTunerHost(QWidget):
         throttle_box.setObjectName("glassPanel")
         tb = QVBoxLayout(throttle_box)
         tb.setContentsMargins(10, 10, 10, 10)
+        boot_log("Engine · ThrottleEditor")
         self.throttle_editor = ThrottleEditor(
             lambda: self.cfg,
             self._on_throttle_change,
@@ -961,6 +1335,7 @@ class EngineTunerHost(QWidget):
         tl.addWidget(throttle_box, 1)
         self._stack.addWidget(tuner_page)  # 0 tuner
 
+        boot_log("Engine · SimulationPanel")
         self.sim_panel = SimulationPanel(lambda: self._pull_all(), theme_mode=self._theme)
         self._stack.addWidget(self.sim_panel)  # 1 simulation
 
@@ -1016,15 +1391,39 @@ class EngineTunerHost(QWidget):
         dh = QHBoxLayout(self._drawer_host)
         dh.setContentsMargins(8, 0, 0, 0)
         dh.setSpacing(0)
+        from .air_panel import AirPanel
+
+        self._tune_stack = QStackedWidget()
         self._autotune_panel = AutotunePanel()
         self._autotune_panel.set_theme(self._theme)
         self._autotune_panel.applied.connect(self._on_autotune_applied)
         self._autotune_panel.closed.connect(self.close_autotune)
-        dh.addWidget(self._autotune_panel)
+        self._air_panel = AirPanel()
+        self._air_panel.changed.connect(self._on_air_panel_changed)
+        self._air_panel.preview_clicked.connect(self.preview_air_fields)
+        self._air_panel.apply_clicked.connect(self.apply_air_fields)
+        self._air_panel.preset_clicked.connect(self.preset_air_fields)
+        self._tune_stack.addWidget(self._autotune_panel)
+        self._tune_stack.addWidget(self._air_panel)
+        dh.addWidget(self._tune_stack)
+        self._auto_kind = "engine"
+        self._air = None
         root.addWidget(self._drawer_host, 0)
 
         self.sidebar.refresh_info(self.cfg)
+        boot_log("Engine · EnginePage.qml")
+        if self._shell:
+            return
         self._mount_qml()
+        self._surface_ready = True
+
+    def finish_surface(self) -> None:
+        """Glass page, once. Editors, graphs, and the sidebar already exist."""
+        if self._surface_ready:
+            return
+        self._shell = False
+        self._mount_qml()
+        self._surface_ready = True
 
     def _mount_qml(self) -> None:
         """Sunk well + raised nav in QML. Sidebar, editors, and Auto Tune stay widgets."""
@@ -1060,6 +1459,48 @@ class EngineTunerHost(QWidget):
         self.sidebar.hide()
         self._split.setHandleWidth(0)
         self._drop_center_plate()
+        self._lift_graphs()
+        self._hook_center_sync()
+        self._eng_bridge.sync_center()
+
+    def _sync_qml(self) -> None:
+        bridge = getattr(self, "_eng_bridge", None)
+        if bridge is not None and getattr(self, "_graphs_lifted", False):
+            bridge.sync_center()
+
+    def _lift_graphs(self) -> None:
+        """Matplotlib stays a widget. Tables and forms are QML."""
+        for canvas in (self.throttle_editor.canvas, self.sim_panel.canvas):
+            canvas.setParent(self)
+            canvas.hide()
+        self._split.hide()
+        self._graphs_lifted = True
+
+    def _hook_center_sync(self) -> None:
+        editor = self.throttle_editor
+        orig_graph = editor._redraw_graph_only
+        orig_redraw = editor._redraw
+
+        def graph(*, fit: bool = False, live: bool = False, _orig=orig_graph) -> None:
+            _orig(fit=fit, live=live)
+            if not live:
+                bridge = getattr(self, "_eng_bridge", None)
+                if bridge is not None:
+                    bridge._note_focus()
+
+        def redraw(*, fit: bool = False, _orig=orig_redraw) -> None:
+            _orig(fit=fit)
+            self._sync_qml()
+
+        editor._redraw_graph_only = graph  # type: ignore[method-assign]
+        editor._redraw = redraw  # type: ignore[method-assign]
+        orig_run = self.sim_panel.run
+
+        def run(_orig=orig_run) -> None:
+            _orig()
+            self._sync_qml()
+
+        self.sim_panel.run = run  # type: ignore[method-assign]
 
     def _clear_widget_fill(self, widget: QWidget, name: str) -> None:
         widget.setObjectName(name)
@@ -1098,8 +1539,14 @@ class EngineTunerHost(QWidget):
             if bridge is not None:
                 bridge.sync_sidebar()
 
-        def cdp(active: bool, label: str = "", _orig=orig_cdp) -> None:
-            _orig(active, label=label)
+        def cdp(
+            active: bool,
+            label: str = "",
+            back_tip: str = "",
+            save_tip: str = "",
+            _orig=orig_cdp,
+        ) -> None:
+            _orig(active, label=label, back_tip=back_tip, save_tip=save_tip)
             bridge = getattr(self, "_eng_bridge", None)
             if bridge is not None:
                 bridge.sync_sidebar()
@@ -1119,14 +1566,35 @@ class EngineTunerHost(QWidget):
             self.close_autotune()
 
     def open_autotune(self) -> None:
-        from ..motion import animate_max_width
-        from .autotune_dialog import AutotunePanel
-
         if self._autotune_open:
             self._nav.set_autotune_checked(True)
             return
-        # Auto Tune edits throttle curves — jump to Tuner page
-        self._nav.set_page("tuner", emit=True, animate=True)
+        # Parameters keeps the air helper. Tuner and Simulation open the TE generator.
+        if self._nav._page != "parameters":
+            self._nav.set_page("tuner", emit=True, animate=True)
+            kind = "engine"
+        else:
+            kind = "air"
+        self._autotune_open = True
+        self._nav.set_autotune_checked(True)
+        self._arm_autotune(kind)
+        self._present_tune_drawer()
+
+    def _arm_autotune(self, kind: str) -> None:
+        self._pull_all()
+        self._auto_kind = kind
+        bridge = getattr(self, "_eng_bridge", None)
+        if kind == "air":
+            from ...lib.engine_tuner.airtune import load_air
+
+            self._air = load_air(self.cfg)
+            self._air_panel.load(self._air)
+            self._tune_stack.setCurrentWidget(self._air_panel)
+            if bridge is not None:
+                bridge.set_kind("air")
+                bridge.sync_air()
+            self.status.emit("Air brake helper")
+            return
         max_kmh, max_kn = self.throttle_editor.autotune_graph_limits()
         self._autotune_panel.bind(
             self.cfg,
@@ -1134,15 +1602,22 @@ class EngineTunerHost(QWidget):
             graph_max_kn=max_kn,
             current_resist=self.throttle_editor._resist_params,
         )
-        self._autotune_open = True
-        self._nav.set_autotune_checked(True)
+        self._tune_stack.setCurrentWidget(self._autotune_panel)
+        if bridge is not None:
+            bridge.set_kind("engine")
+            bridge.sync_auto()
+        self.status.emit("Auto Tune sidebar")
+
+    def _present_tune_drawer(self) -> None:
+        from ..motion import animate_max_width
+        from .autotune_dialog import AutotunePanel
+
         bridge = getattr(self, "_eng_bridge", None)
         if bridge is not None and getattr(self, "_engine_view", None) is not None:
-            bridge.sync_auto()
             bridge.set_auto(True)
-            self.status.emit("Auto Tune sidebar")
             return
-        # Widget dock only when the QML page did not load.
+        if self._drawer_host.maximumWidth() > 40:
+            return
         if bridge is None:
             sizes = self._split.sizes()
             self._sidebar_lock_w = sizes[0] if sizes else self.sidebar.width()
@@ -1163,7 +1638,50 @@ class EngineTunerHost(QWidget):
             on_done=_done,
             min_frame_ms=40,
         )
-        self.status.emit("Auto Tune sidebar")
+
+    def preview_air_fields(self) -> None:
+        from ...lib.engine_tuner.airtune import describe, preview_brake
+
+        if self._air is None:
+            return
+        self._pull_all()
+        preview_brake(self.cfg, self._air)
+        text = describe(self._air)
+        self._air_panel.summary.setText(text)
+        self.status.emit(self._air.sim_line or "Air brake preview")
+
+    def apply_air_fields(self) -> None:
+        from ...lib.engine_tuner.airtune import apply_to_cfg
+
+        if self._air is None:
+            return
+        self._begin_edit()
+        apply_to_cfg(self.cfg, self._air)
+        self._sync_editors_from_cfg()
+        self._mark_dirty()
+        self.status.emit("Air brake Auto Tune applied")
+
+    def preset_air_fields(self) -> None:
+        from ...lib.engine_tuner.airtune import apply_jnr_preset, describe
+
+        if self._air is None:
+            return
+        apply_jnr_preset(self._air)
+        self._air_panel.load(self._air)
+        self._air_panel.summary.setText(describe(self._air))
+        bridge = getattr(self, "_eng_bridge", None)
+        if bridge is not None and self._auto_kind == "air":
+            bridge.sync_air()
+
+    def _on_air_panel_changed(self) -> None:
+        from ...lib.engine_tuner.airtune import describe
+
+        if self._air is None:
+            return
+        self._air_panel.summary.setText(describe(self._air))
+        bridge = getattr(self, "_eng_bridge", None)
+        if bridge is not None and self._auto_kind == "air":
+            bridge.sync_air()
 
     def close_autotune(self) -> None:
         from ..motion import animate_max_width
@@ -1236,7 +1754,8 @@ class EngineTunerHost(QWidget):
             ans = QMessageBox.question(
                 self,
                 "Leave Engine Tuner?",
-                "มีแก้ที่ยังไม่ได้ Save เข้า CDP — กลับ Packages โดยไม่เขียนทับ?",
+                self._cdp_leave_prompt
+                or "มีแก้ที่ยังไม่ได้ Save เข้า CDP — กลับ Packages โดยไม่เขียนทับ?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -1252,6 +1771,11 @@ class EngineTunerHost(QWidget):
     def _on_page(self, page: str) -> None:
         idx = {"tuner": 0, "simulation": 1, "parameters": 2}.get(page, 0)
         self._stack.setCurrentIndex(idx)
+        if self._autotune_open and page in ("tuner", "parameters"):
+            kind = "air" if page == "parameters" else "engine"
+            if kind != self._auto_kind:
+                self._arm_autotune(kind)
+                return
         if page == "simulation":
             self.status.emit("Engine Tuner — Simulation")
         elif page == "parameters":
@@ -1275,6 +1799,7 @@ class EngineTunerHost(QWidget):
         if restored is None:
             self.status.emit("Nothing to undo")
             self.path_lab.setText("Nothing to undo")
+            self._sync_qml()
             return
         self._restore_cfg(restored, "Undo")
 
@@ -1283,6 +1808,7 @@ class EngineTunerHost(QWidget):
         if restored is None:
             self.status.emit("Nothing to redo")
             self.path_lab.setText("Nothing to redo")
+            self._sync_qml()
             return
         self._restore_cfg(restored, "Redo")
 
@@ -1295,6 +1821,7 @@ class EngineTunerHost(QWidget):
             msg = f"{label} — {path}"
             self.path_lab.setText(msg)
             self.status.emit(msg)
+            self._sync_qml()
         finally:
             self.history.locked = False
 
@@ -1306,6 +1833,7 @@ class EngineTunerHost(QWidget):
         self.press_editor.set_data(self.cfg.pressure)
         self.throttle_editor.reload_all()
         self.sidebar.refresh_info(self.cfg)
+        self._sync_qml()
 
     def _on_throttle_change(self) -> None:
         self._mark_dirty()
@@ -1318,6 +1846,7 @@ class EngineTunerHost(QWidget):
         self.path_lab.setText(msg)
         self.status.emit(msg)
         self.sidebar.refresh_info(self.cfg)
+        self._sync_qml()
 
     def _pull_all(self) -> EngineConfig:
         self.cfg.motor = self.motor_editor.get_data()
@@ -1351,9 +1880,12 @@ class EngineTunerHost(QWidget):
     def _load_into_ui(self) -> None:
         self.history.clear()
         self._sync_editors_from_cfg()
+        if self._autotune_open and self._auto_kind == "air":
+            self._arm_autotune("air")
         msg = f"Loaded {self.cfg.source_path}"
         self.path_lab.setText(msg)
         self.status.emit(msg)
+        self._sync_qml()
 
     def _config_start_dir(self) -> str:
         from ... import REPO_ROOT
@@ -1369,6 +1901,10 @@ class EngineTunerHost(QWidget):
         self._cdp_on_save = None
         self._cdp_on_done = None
         self._cdp_on_back = None
+        self._cdp_back_tip = ""
+        self._cdp_save_tip = ""
+        self._cdp_leave_prompt = ""
+        self._cdp_save_note = ""
         self.sidebar.set_cdp_session(False)
         self._nav.set_home_mode(cdp=False)
         bridge = getattr(self, "_eng_bridge", None)
@@ -1383,6 +1919,10 @@ class EngineTunerHost(QWidget):
         on_save: Callable[[str], None],
         on_done: Callable[[], None] | None = None,
         on_back: Callable[[], None] | None = None,
+        back_tip: str = "",
+        save_tip: str = "",
+        leave_prompt: str = "",
+        save_note: str = "",
     ) -> bool:
         """Load enginespec text from Packages CDP; Save writes back then returns."""
         try:
@@ -1393,14 +1933,21 @@ class EngineTunerHost(QWidget):
         self._cdp_on_save = on_save
         self._cdp_on_done = on_done
         self._cdp_on_back = on_back
+        self._cdp_back_tip = back_tip
+        self._cdp_save_tip = save_tip
+        self._cdp_leave_prompt = leave_prompt
+        self._cdp_save_note = save_note
         self._load_into_ui()
-        self.sidebar.set_cdp_session(True, label=label)
+        self.sidebar.set_cdp_session(True, label=label, back_tip=back_tip, save_tip=save_tip)
         self._nav.set_home_mode(cdp=True)
         bridge = getattr(self, "_eng_bridge", None)
         if bridge is not None:
             bridge.set_home("←")
-        self.path_lab.setText(f"CDP session — {label}")
-        self.status.emit(f"Opened from CDP — {label}")
+        self.path_lab.setText(label if save_note else f"CDP session — {label}")
+        self.status.emit(
+            f"Opened from Trainz — {label}" if save_note else f"Opened from CDP — {label}"
+        )
+        self._sync_qml()
         return True
 
     def open_file(self) -> bool:
@@ -1428,12 +1975,17 @@ class EngineTunerHost(QWidget):
             try:
                 self._cdp_on_save(text)
             except Exception as exc:
-                QMessageBox.critical(self, "Save into CDP failed", str(exc))
+                QMessageBox.critical(
+                    self,
+                    "Save failed" if self._cdp_save_note else "Save into CDP failed",
+                    str(exc),
+                )
                 return
             label = self.cfg.source_path or "CDP"
-            msg = f"Saved into CDP — {label}"
+            msg = self._cdp_save_note or f"Saved into CDP — {label}"
             self.path_lab.setText(msg)
             self.status.emit(msg)
+            self._sync_qml()
             done = self._cdp_on_done
             self.clear_cdp_session()
             if done is not None:
@@ -1447,6 +1999,7 @@ class EngineTunerHost(QWidget):
         msg = f"Saved {self.cfg.source_path}"
         self.path_lab.setText(msg)
         self.status.emit(msg)
+        self._sync_qml()
 
     def save_file_as(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -1467,6 +2020,7 @@ class EngineTunerHost(QWidget):
         msg = f"Saved {out}"
         self.path_lab.setText(msg)
         self.status.emit(msg)
+        self._sync_qml()
 
 
 def build_engine_tuner(
@@ -1474,5 +2028,8 @@ def build_engine_tuner(
     on_home: Callable[[], None],
     on_theme: Callable[[], None] | None = None,
     theme_mode: str = "dark",
+    shell: bool = False,
 ) -> EngineTunerHost:
-    return EngineTunerHost(on_home=on_home, on_theme=on_theme, theme_mode=theme_mode)
+    return EngineTunerHost(
+        on_home=on_home, on_theme=on_theme, theme_mode=theme_mode, shell=shell
+    )
