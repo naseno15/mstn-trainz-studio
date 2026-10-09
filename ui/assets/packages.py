@@ -62,7 +62,7 @@ from ...io.cdp import (
     stage_asset_for_mesh_preview,
 )
 from ...io.cdp_lzss import decode_asset_text
-from ...io.chump import ChumpFile
+from ...io.chump import ChumpFile, chump_to_text, encode_chump, read_chump, text_to_chump
 from ...io.tzarc import extract_tzarc, list_tzarc
 from ...lib.engine_tuner.config_io import looks_like_enginespec
 from ..code_edit import (
@@ -428,7 +428,7 @@ def _file_kind_label(name: str) -> str:
     suf = Path(name).suffix.lower()
     if low.endswith(".cdp") or suf == ".cdp":
         return "CDP package"
-    if low == "config.txt":
+    if low == "config.txt" or low.endswith(".chump"):
         return "Trainz config"
     if suf in _IMAGE_EXTS:
         return f"Image ({suf[1:].upper()})" if suf else "Image"
@@ -567,6 +567,8 @@ class PackagesPage(QWidget):
         self._finder_scan: str | None = None  # e.g. "fbx" = flat match across CDP
         self._preview_src: tuple[str, str, str] | None = None  # disk|cdp, key, name
         self._preview_bytes: bytes | None = None
+        self._preview_as_chump = False
+        self._preview_force_binary = False
         self._audio_tmp: Path | None = None
         self._clip_player = None  # lazy ClipPlayer
         self._mesh_preview = None  # lazy _PreviewSurface
@@ -609,7 +611,7 @@ class PackagesPage(QWidget):
         ml.setSpacing(8)
 
         title = QLabel("Packages")
-        title.setObjectName("welcomeTitle")
+        title.setObjectName("pageHead")
         title.setFont(app_font(16, QFont.Weight.Bold))
         ml.addWidget(title)
 
@@ -617,7 +619,7 @@ class PackagesPage(QWidget):
             "ซ้าย (sidebar): queue · กลาง: Finder (ดับเบิลคลิกเข้าโฟลเดอร์ · breadcrumb ย้อน · ค้นหา) · "
             "ขวา: preview"
         )
-        tip.setObjectName("mutedTip")
+        tip.setObjectName("pageBlurb")
         tip.setWordWrap(True)
         ml.addWidget(tip)
 
@@ -915,21 +917,39 @@ class PackagesPage(QWidget):
         self.btn_engine_tuner.clicked.connect(self._open_in_engine_tuner)
         self.btn_engine_tuner.setVisible(False)
         pbtn.addWidget(self.btn_engine_tuner)
-        self.btn_fast_preview = QPushButton("Fast preview")
-        self.btn_fast_preview.setToolTip(
-            "ดู mesh แบบ solid เร็วๆ (ไม่โหลด texture / ไม่โชว์จุด a.*)"
+        self.btn_fast_preview = QPushButton()
+        apply_icon(
+            self.btn_fast_preview,
+            "view_in_ar",
+            tip="Fast preview — solid mesh. .im with no geometry shows a.* points",
+            kind="icon",
+            size=20,
+            square=36,
         )
         self.btn_fast_preview.clicked.connect(self._start_fast_mesh_preview)
         self.btn_fast_preview.setVisible(False)
         pbtn.addWidget(self.btn_fast_preview)
-        self.btn_mesh_studio = QPushButton("Open in Mesh Studio")
-        self.btn_mesh_studio.setToolTip(
-            "เปิดใน Mesh Studio พร้อม texture จาก CDP"
+        self.btn_mesh_studio = QPushButton()
+        apply_icon(
+            self.btn_mesh_studio,
+            "open_in_new",
+            tip="Open in Mesh Studio with textures",
+            kind="icon",
+            size=20,
+            square=36,
         )
         self.btn_mesh_studio.clicked.connect(self._open_in_mesh_studio)
         self.btn_mesh_studio.setVisible(False)
         pbtn.addWidget(self.btn_mesh_studio)
-        self.btn_repl = QPushButton("Replace…")
+        self.btn_repl = QPushButton()
+        apply_icon(
+            self.btn_repl,
+            "swap_horiz",
+            tip="Replace this file…",
+            kind="icon",
+            size=20,
+            square=36,
+        )
         self.btn_repl.clicked.connect(self._replace_selected)
         pbtn.addWidget(self.btn_repl)
         self.btn_del = QPushButton()
@@ -954,11 +974,18 @@ class PackagesPage(QWidget):
         )
         self.btn_save_cdp.clicked.connect(self.save_active_cdp)
         pbtn.addWidget(self.btn_save_cdp)
-        sl.addLayout(pbtn)
-        self.btn_del_all_fbx = QPushButton("Delete all .fbx in CDP…")
-        self.btn_del_all_fbx.setToolTip("สแกนแล้วลบไฟล์ .fbx ทั้งหมดใน CDP ที่เปิดอยู่")
+        self.btn_del_all_fbx = QPushButton()
+        apply_icon(
+            self.btn_del_all_fbx,
+            "delete_sweep",
+            tip="Delete all .fbx in this CDP…",
+            kind="icon",
+            size=20,
+            square=36,
+        )
         self.btn_del_all_fbx.clicked.connect(self._delete_all_fbx)
-        sl.addWidget(self.btn_del_all_fbx)
+        pbtn.addWidget(self.btn_del_all_fbx)
+        sl.addLayout(pbtn)
 
     def _msg(self, text: str) -> None:
         self.status.emit(text)
@@ -1040,6 +1067,10 @@ class PackagesPage(QWidget):
     def _preview_is_text(self) -> bool:
         if self._preview_src is None:
             return False
+        if self._preview_force_binary:
+            return False
+        if self._preview_as_chump:
+            return True
         name = self._preview_src[2]
         if _is_text_name(name):
             return True
@@ -1120,6 +1151,16 @@ class PackagesPage(QWidget):
                 if q.kind == "folder":
                     self._open_disk(q.path)
                     break
+
+    def open_folder(self, path: Path) -> None:
+        """Show one asset folder in the finder. A repeat open stays on that folder."""
+        path = Path(path)
+        if not path.is_dir():
+            return
+        if not any(item.path == path for item in self._queue):
+            self._queue.append(QueueItem(path, "folder"))
+            self._refresh_queue()
+        self._open_disk(path)
 
     def add_pack_folders(self, paths: list[Path]) -> None:
         self.add_queue_paths(paths)
@@ -1819,6 +1860,8 @@ class PackagesPage(QWidget):
         self._warm_scene = None
         self._preview_src = None
         self._preview_bytes = None
+        self._preview_as_chump = False
+        self._preview_force_binary = False
         self._mesh_staged_path = None
         self.preview_stack.setCurrentIndex(0)
         self.preview_edit.setPlainText("")
@@ -1903,7 +1946,6 @@ class PackagesPage(QWidget):
         else:
             self._preview_src = ("cdp", f"{e.kuid}/{e.rel}", name)
         self._sync_editor_tab()
-        suf = Path(name).suffix.lower()
         key = self._mesh_entry_key(e)
         warm_ready = (
             self._warm_key == key
@@ -1911,34 +1953,25 @@ class PackagesPage(QWidget):
             and self._warm_path is not None
             and self._warm_path.is_file()
         )
-        im_note = (
-            "\n\n.im ยังไม่มี geometry ใน fast preview — ใช้ Open in Mesh Studio"
-            if suf == ".im"
-            else ""
-        )
         if warm_ready:
             status = "warm ready"
-        elif suf == ".im":
-            status = "ใช้ Open in Mesh Studio"
         else:
             status = "warming fast preview…"
         self.preview_lab.setText(f"{name} · {format_bytes(size)} · {status}")
         self.preview_meta.setText(
             f"{name}\n{_file_kind_label(name)}\n{format_bytes(size)}\n\n"
             f"{status}\n"
-            f"Fast preview = solid mesh เท่านั้น (ไม่ texture / ไม่จุด a.*)"
-            f"{im_note}"
+            "Fast preview = solid mesh (ไม่ texture). .im ที่ไม่มี geometry จะโชว์จุด a.*"
         )
         self.preview_stack.setCurrentIndex(3)
-        self.btn_fast_preview.setVisible(suf != ".im")
+        self.btn_fast_preview.setVisible(True)
         self.btn_mesh_studio.setVisible(True)
         self.btn_engine_tuner.setVisible(False)
         self.btn_save_text.setEnabled(False)
         if warm_ready:
             self._show_warm_preview(self._mesh_req, self._warm_path, self._warm_scene)
             return
-        if suf != ".im":
-            self._start_warm_fast_preview(e)
+        self._start_warm_fast_preview(e)
 
     def _start_warm_fast_preview(self, e: FinderEntry) -> None:
         """Background: stage mesh-only + parse solid scene; GL host warms in parallel."""
@@ -2027,10 +2060,14 @@ class PackagesPage(QWidget):
             self._warm_path = Path(path_s)
             name = self._warm_path.name
             self.preview_lab.setText(f"{name} · warm ready")
+            if scene.parts:
+                counts = f"{scene.vertex_count:,}v · {scene.face_count:,}f"
+                extra = "warm ready (solid, ไม่ texture / ไม่จุด)"
+            else:
+                counts = f"{len(scene.attachments)} a.*"
+                extra = "warm ready (จุด attachment — ไม่มี mesh)"
             self.preview_meta.setText(
-                f"{name}\n{_file_kind_label(name)}\n"
-                f"{scene.vertex_count:,}v · {scene.face_count:,}f\n\n"
-                f"warm ready (solid, ไม่ texture / ไม่จุด)"
+                f"{name}\n{_file_kind_label(name)}\n{counts}\n\n{extra}"
             )
             self._show_when_warm_ready = None
             # still on this mesh → open solid preview immediately
@@ -2076,17 +2113,10 @@ class PackagesPage(QWidget):
         e = self._mesh_entry_from_selection()
         if e is None:
             QMessageBox.information(
-                self, "Fast preview", "เลือกไฟล์ .trainzmesh / .fbx ก่อน"
+                self, "Fast preview", "เลือกไฟล์ .trainzmesh / .fbx / .im ก่อน"
             )
             return
         name = e.path.name if e.path is not None else Path(e.rel).name
-        if Path(name).suffix.lower() == ".im":
-            QMessageBox.information(
-                self,
-                "Fast preview",
-                ".im ยังไม่มี mesh geometry ใน preview — ใช้ Open in Mesh Studio",
-            )
-            return
         key = self._mesh_entry_key(e)
         # use warm scene if ready
         if (
@@ -2134,8 +2164,9 @@ class PackagesPage(QWidget):
         self._mesh_staged_path = path
         self.btn_mesh_studio.setVisible(True)
         self.btn_fast_preview.setVisible(True)
+        tag = "solid (warm)" if scene.parts else f"{len(scene.attachments)} a.*"
         self.preview_lab.setText(
-            f"{path.name} · {format_bytes(path.stat().st_size)} · solid (warm)"
+            f"{path.name} · {format_bytes(path.stat().st_size)} · {tag}"
         )
         self._ensure_fast_preview_gl_host()
         if self._mesh_preview is None:
@@ -2354,8 +2385,26 @@ class PackagesPage(QWidget):
             return
 
         self._preview_bytes = data
+        self._preview_as_chump = False
+        self._preview_force_binary = False
         self.preview_lab.setText(f"{name} · {format_bytes(len(data))} · {_file_kind_label(name)}")
         self.btn_save_text.setEnabled(False)
+
+        if name.lower().endswith(".chump"):
+            try:
+                text = chump_to_text(read_chump(data))
+            except Exception as exc:
+                self._preview_force_binary = True
+                self.preview_lab.setText(f"Cannot read {name}")
+                self.preview_stack.setCurrentIndex(3)
+                self.preview_meta.setText(str(exc))
+                self._sync_editor_tab()
+                return
+            self._preview_as_chump = True
+            self.preview_edit.set_syntax(syntax_for_filename(name))
+            self.preview_edit.setPlainText(text)
+            self._apply_pane_mode()
+            return
 
         if _is_image_name(name):
             pix = _load_preview_pixmap(data, name)
@@ -2460,8 +2509,15 @@ class PackagesPage(QWidget):
         if self._preview_src is None:
             return
         text = self.preview_edit.toPlainText()
-        data = text.encode("utf-8")
         src, key, name = self._preview_src
+        if self._preview_as_chump:
+            try:
+                data = encode_chump(text_to_chump(text))
+            except Exception as exc:
+                QMessageBox.warning(self, "config.chump", str(exc))
+                return
+        else:
+            data = text.encode("utf-8")
         if src == "disk":
             path = Path(key)
             # ponytail: temp sibling .bak only for the overwrite; delete on success
@@ -2471,9 +2527,12 @@ class PackagesPage(QWidget):
                 bak_path.write_bytes(path.read_bytes())
                 wrote_bak = True
             try:
-                path.write_text(
-                    text if text.endswith("\n") else text + "\n", encoding="utf-8"
-                )
+                if self._preview_as_chump:
+                    path.write_bytes(data)
+                else:
+                    path.write_text(
+                        text if text.endswith("\n") else text + "\n", encoding="utf-8"
+                    )
             except Exception:
                 raise
             if wrote_bak and bak_path.is_file():
