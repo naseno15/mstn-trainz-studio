@@ -29,11 +29,11 @@ Item {
                     width: 40
                     height: 40
                     radius: 12
-                    color: bridge.kind === "warning" ? Qt.rgba(1, 0.62, 0.04, 0.22) : Qt.rgba(1, 0.27, 0.23, 0.22)
+                    color: bridge.kind === "log" ? Qt.rgba(1, 0.35, 0.12, 0.18) : bridge.kind === "warning" ? Qt.rgba(1, 0.62, 0.04, 0.22) : Qt.rgba(1, 0.27, 0.23, 0.22)
                     Text {
                         anchors.centerIn: parent
-                        text: bridge.kind === "warning" ? "!" : "×"
-                        color: bridge.kind === "warning" ? "#ff9f0a" : "#ff453a"
+                        text: bridge.kind === "log" ? qsTr("≡") : bridge.kind === "warning" ? "!" : qsTr("×")
+                        color: bridge.kind === "log" ? "#ff5a1f" : bridge.kind === "warning" ? "#ff9f0a" : "#ff453a"
                         font.pixelSize: 20
                         font.bold: true
                     }
@@ -44,7 +44,7 @@ Item {
                     spacing: 2
                     Text {
                         width: parent.width
-                        text: bridge.title
+                        text: (typeof bridge.title === "string" ? qsTr(bridge.title) : bridge.title)
                         color: bridge.dark ? "#f2f3f5" : "#1d1d1f"
                         font.pixelSize: 16
                         font.bold: true
@@ -52,7 +52,7 @@ Item {
                     }
                     Text {
                         width: parent.width
-                        text: bridge.summary
+                        text: (typeof bridge.summary === "string" ? qsTr(bridge.summary) : bridge.summary)
                         color: bridge.dark ? "#a8b0bc" : "#5c6570"
                         font.pixelSize: 12
                         wrapMode: Text.WordWrap
@@ -61,7 +61,7 @@ Item {
             }
 
             Text {
-                text: "Traceback — select text or use Copy"
+                text: bridge.kind === "log" ? qsTr("Messages — newest at the bottom") : qsTr("Traceback — select text or use Copy")
                 color: bridge.dark ? "#8b93a1" : "#5c6570"
                 font.pixelSize: 11
                 font.bold: true
@@ -84,6 +84,7 @@ Item {
                     contentHeight: trace.contentHeight
                     clip: true
                     flickableDirection: Flickable.HorizontalAndVerticalFlick
+                    Component.onCompleted: if (bridge.kind === "log") contentY = Math.max(0, contentHeight - height)
 
                     TextEdit {
                         id: trace
@@ -102,7 +103,7 @@ Item {
 
             Text {
                 width: parent.width
-                text: bridge.logPath
+                text: (typeof bridge.logPath === "string" ? qsTr(bridge.logPath) : bridge.logPath)
                 color: bridge.dark ? "#8b93a1" : "#5c6570"
                 font.pixelSize: 11
                 elide: Text.ElideMiddle
@@ -113,22 +114,22 @@ Item {
                 spacing: 8
 
                 RaiseButton {
-                    label: "Open log folder"
+                    label: qsTr("Open log folder")
                     width: 148
                     onClicked: bridge.openFolder()
                 }
                 RaiseButton {
-                    label: bridge.copyLabel
+                    label: (typeof bridge.copyLabel === "string" ? qsTr(bridge.copyLabel) : bridge.copyLabel)
                     width: 120
-                    tip: "Copy title, summary, traceback, and log path"
+                    tip: qsTr("Copy title, summary, traceback, and log path")
                     onClicked: bridge.copyError(trace.selectedText)
                 }
                 Item { width: Math.max(0, parent.width - 148 - 120 - 110 - 24); height: 1 }
                 RaiseButton {
-                    label: "OK"
+                    label: qsTr("OK")
                     accent: true
                     width: 110
-                    tip: bridge.quitOnOk ? "Close Trainz Studio" : ""
+                    tip: bridge.quitOnOk ? qsTr("Close Trainz Studio") : ""
                     onClicked: bridge.dismiss()
                 }
             }
