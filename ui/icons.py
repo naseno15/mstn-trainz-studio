@@ -44,6 +44,9 @@ GLYPHS: dict[str, str] = {
     "folder_zip": "\ueb2c",
     "fullscreen": "\ue5d0",
     "fullscreen_exit": "\ue5d1",
+    "open_in_new": "\ue89e",
+    "swap_horiz": "\ue8d4",
+    "delete_sweep": "\ue16c",
     # HOME studio tiles
     "view_in_ar": "\uef4f",
     "layers": "\ue53b",
@@ -53,6 +56,15 @@ GLYPHS: dict[str, str] = {
     "upload_file": "\ue9fc",
     "add_photo_alternate": "\ue43e",
     "history": "\ue889",
+    "manage_search": "\uf02c",
+    "search": "\ue8b6",
+    "edit": "\ue3c9",
+    "publish": "\ue255",
+    "fact_check": "\uf0c5",
+    "chevron_left": "\ue5cb",
+    "chevron_right": "\ue5cc",
+    "auto_fix_high": "\ue663",
+    "aspect_ratio": "\ue85b",
 }
 
 _FAMILY = "Material Icons"
