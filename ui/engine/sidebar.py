@@ -312,19 +312,19 @@ class EngineSidebar(FrostGlassFrame):
         self.set_frost(None, dark=self._theme != "light")
         self._logo.setPixmap(_logo_pixmap(108, mode=self._theme))
 
-    def set_cdp_session(self, active: bool, *, label: str = "") -> None:
+    def set_cdp_session(self, active: bool, *, label: str = "", back_tip: str = "", save_tip: str = "") -> None:
         """CDP handoff from Packages — show Back; Save tip points at CDP write-back."""
         from ..icons import apply_icon
 
         self.back_btn.setVisible(active)
         self.open_btn.setVisible(not active)
         if active:
-            tip = f"Return to Packages ({label})" if label else "Return to Packages / CDP"
+            tip = back_tip or (f"Return to Packages ({label})" if label else "Return to Packages / CDP")
             self.back_btn.setToolTip(tip)
             apply_icon(
                 self.save_btn,
                 "save",
-                tip="Write enginespec back into the CDP and return",
+                tip=save_tip or "Write enginespec back into the CDP and return",
                 kind="accent",
                 size=20,
                 square=36,
