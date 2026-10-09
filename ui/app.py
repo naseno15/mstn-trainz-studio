@@ -181,6 +181,7 @@ HUB_MESH = 1
 HUB_SOUNDS = 2
 HUB_ENGINE = 3
 HUB_ASSETS = 4
+HUB_TRAINZ = 5
 DUMMY_FRAMES = 120
 # Keep shading keys here so boot does not import OpenGL/view3d.
 SHADING_WIRE = "wire"
@@ -1476,21 +1477,47 @@ class MeshInfoSection(QFrame):
 
 
 class GlassProgressBar(QWidget):
-    """Orange rounded load bar — shallow groove + lit chunk (not flat QSS)."""
+    """Orange rounded load bar. The fill eases toward the target and creeps while a stage runs."""
+
+    shownChanged = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("glassLoadBar")
         self._value = 0
+        self._shown = 0.0
+        self._creep = False
         self.setFixedHeight(16)
         self.setMinimumWidth(180)
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._tick)
 
     def setValue(self, value: int) -> None:
         self._value = max(0, min(100, int(value)))
-        self.update()
+        self._creep = self._value < 100
+        if self._value >= 100 and self._shown > 100:
+            self._shown = 100.0
+        if not self._timer.isActive():
+            self._timer.start()
 
     def value(self) -> int:
         return self._value
+
+    def shown(self) -> float:
+        return self._shown
+
+    def _tick(self) -> None:
+        target = float(self._value)
+        if self._shown + 0.05 < target:
+            self._shown = min(target, self._shown + max(0.45, (target - self._shown) * 0.22))
+        elif self._creep and self._shown < min(99.0, target + 6.0):
+            self._shown = min(min(99.0, target + 6.0), self._shown + 0.18)
+        else:
+            self._timer.stop()
+            return
+        self.shownChanged.emit(self._shown)
+        self.update()
 
     def paintEvent(self, event) -> None:  # noqa: ARG002
         p = QPainter(self)
@@ -1509,11 +1536,11 @@ class GlassProgressBar(QWidget):
         p.setPen(QPen(QColor(0, 0, 0, 70), 1.0))
         p.drawPath(groove)
 
-        if self._value <= 0:
+        if self._shown <= 0:
             return
 
         # ponytail: min width so round pill still reads at 1–8%
-        fill_w = max(track.height(), track.width() * (self._value / 100.0))
+        fill_w = max(track.height(), track.width() * (self._shown / 100.0))
         fill_w = min(fill_w, track.width())
         chunk = QRectF(track.x(), track.y(), fill_w, track.height())
         cpath = QPainterPath()
@@ -1553,10 +1580,12 @@ class LoadingOverlay(QWidget):
 
         card = QFrame()
         card.setObjectName("loadingCard")
-        card.setFixedWidth(380)
+        card.setFixedWidth(460)
+        # Preferred would eat the full window and stretch the labels apart.
+        card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
         card_lay = QVBoxLayout(card)
-        card_lay.setContentsMargins(32, 30, 32, 28)
-        card_lay.setSpacing(12)
+        card_lay.setContentsMargins(28, 22, 28, 18)
+        card_lay.setSpacing(6)
 
         self.logo = QLabel()
         self.logo.setObjectName("sideLogo")
@@ -1577,14 +1606,34 @@ class LoadingOverlay(QWidget):
         self.pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.bar = GlassProgressBar()
+        self.bar.shownChanged.connect(self._on_bar_shown)
 
+        self.log_view = QPlainTextEdit()
+        self.log_view.setObjectName("overlayLog")
+        self.log_view.setReadOnly(True)
+        self.log_view.setUndoRedoEnabled(False)
+        self.log_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.log_view.setFixedHeight(92)
+        self.log_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.log_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        log_font = QFont("Cascadia Mono", 9)
+        if not log_font.exactMatch():
+            log_font = QFont("Consolas", 9)
+        self.log_view.setFont(log_font)
+        self._log_lines: list[str] = []
+        self._last_log = ""
+
+        for lab in (self.logo, self.brand, self.stage, self.pct):
+            lab.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         card_lay.addWidget(self.logo)
         card_lay.addWidget(self.brand)
-        card_lay.addSpacing(4)
+        card_lay.addSpacing(2)
         card_lay.addWidget(self.bar)
         card_lay.addWidget(self.pct)
         card_lay.addWidget(self.stage)
-        root.addWidget(card)
+        card_lay.addWidget(self.log_view)
+        root.addWidget(card, 0, Qt.AlignmentFlag.AlignCenter)
         self._card = card
         # Card is display-only — clicks must reach this overlay for window drag.
         card.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -1598,13 +1647,33 @@ class LoadingOverlay(QWidget):
         self._frost = pm
         self.update()
 
+    def log(self, text: str) -> None:
+        """One boot line: what is being called right now."""
+        text = " ".join(str(text).split())
+        if not text or text == self._last_log:
+            return
+        self._last_log = text
+        self._log_lines.append(text)
+        self._log_lines = self._log_lines[-24:]
+        self.log_view.setPlainText("\n".join(self._log_lines))
+        bar = self.log_view.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def log_text(self) -> str:
+        return self.log_view.toPlainText()
+
+    def _on_bar_shown(self, shown: float) -> None:
+        self.pct.setText(f"{int(shown)}%")
+
     def set_stage(self, text: str, pct: int | None = None) -> None:
         self.stage.setText(text)
+        self.log(text)
         if pct is None:
             return
         pct = max(0, min(100, int(pct)))
         self.bar.setValue(pct)
-        self.pct.setText(f"{pct}%")
+        if self.bar.shown() <= 0:
+            self.pct.setText(f"{pct}%")
 
     def paintEvent(self, event) -> None:  # noqa: ARG002
         # Real glass: blurred snapshot of UI under overlay + dim veil (not flat tint).
@@ -2159,12 +2228,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MSTN Trainz Studio")
         self.resize(1280, 780)
         self.setAcceptDrops(True)
-        self._studio_mode = "home"  # home | mesh | sounds | engine | assets | texmesh
+        self._studio_mode = "home"  # home | mesh | sounds | engine | assets | texmesh | trainzutil
         self._chrome_ready = False  # Mesh Editor/sidebar/settings/chrome
         self._sounds_ready = False
         self._engine_ready = False
         self._assets_ready = False
         self._assets_host = None
+        self._trainzutil_ready = False
+        self._trainzutil_host = None
         self._scene = Scene()
         self._mesh_folder: Path | None = None
         self._mesh_path: Path | None = None
@@ -2529,6 +2600,7 @@ class MainWindow(QMainWindow):
             on_engine=self.enter_engine_tuner,
             on_assets=self.enter_assets_studio,
             on_texmesh=self.enter_texmesh_studio,
+            on_trainzutil=self.enter_trainzutil,
             on_drop=self._handle_dropped_paths,
             theme_mode=self._theme_mode,
         )
@@ -2542,6 +2614,8 @@ class MainWindow(QMainWindow):
         self._hub.addWidget(self._sounds_hub_ph)  # HUB_SOUNDS
         self._hub.addWidget(self._engine_hub_ph)  # HUB_ENGINE
         self._hub.addWidget(self._assets_hub_ph)  # HUB_ASSETS
+        self._trainz_hub_ph = QWidget()
+        self._hub.addWidget(self._trainz_hub_ph)  # HUB_TRAINZ
         self._stack.addWidget(self._hub)  # STACK_HUB
 
         self._gl_host = QWidget()
@@ -2622,8 +2696,10 @@ class MainWindow(QMainWindow):
             return
         self._chrome_ready = True
 
+        from ..util.preload import boot_log
         from .editor import EditorWorkspace
 
+        boot_log("Mesh · _build_widgets")
         self._build_widgets()
         # Swap Mesh hub placeholder → welcome
         welcome = self._build_welcome()
@@ -2634,6 +2710,7 @@ class MainWindow(QMainWindow):
             old.deleteLater()
         self._mesh_hub_ph = None
 
+        boot_log("Mesh · EditorWorkspace")
         self.editor = EditorWorkspace()
         self._att_x = self.editor.att_x
         self._att_y = self.editor.att_y
@@ -2642,6 +2719,7 @@ class MainWindow(QMainWindow):
         self._ed_att_list = self.editor.att_list
         _enable_side_table_scroll(self._ed_att_list)
 
+        boot_log("Mesh · sidebar")
         side = self._build_sidebar()
         side.setParent(self._center_host)
         self._side_panel = side
@@ -2650,6 +2728,7 @@ class MainWindow(QMainWindow):
         self.editor.setFixedWidth(EDITOR_DOCK_W)
         self.editor.hide()
 
+        boot_log("Mesh · settings")
         self._settings_panel = self._build_settings()
         self._settings_panel.setParent(self._center_host)
         self._settings_panel.hide()
@@ -2671,6 +2750,7 @@ class MainWindow(QMainWindow):
         self._chrome_layer.setObjectName("chromeLayer")
         self._chrome_layer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self._chrome_layer.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
+        boot_log("Mesh · BottomNav")
         self._nav = BottomNav(self._chrome_layer)
         self._bake_bar = BakeProgressBar(self._chrome_layer)
         self._bake_bar.hide()
@@ -2692,6 +2772,7 @@ class MainWindow(QMainWindow):
         self._center_host.installEventFilter(self)
 
         host = self._center_host
+        boot_log("Mesh · ShadingPie")
         self._shading_pie = ShadingPie(host)
         self._shading_pie.hide()
         self._edit_pie = EditModePie(host)
@@ -2699,6 +2780,7 @@ class MainWindow(QMainWindow):
         self._shading_pie.dismissed.connect(lambda: self._commit_tab_pie(force=True))
         self._edit_pie.dismissed.connect(lambda: self._commit_tab_pie(force=True))
 
+        boot_log("Mesh · _wire")
         self._wire()
         self._strip_sidebar_tab_focus()
         self._update_stats(None)
@@ -2718,100 +2800,127 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._probe_cuda_bake)
         QTimer.singleShot(0, self._strip_sidebar_tab_focus)
 
-    def _ensure_sounds_host(self) -> None:
-        if self._sounds_ready:
+    def _ensure_sounds_host(self, *, shell: bool = False) -> None:
+        host = getattr(self, "_sounds_host", None)
+        if self._sounds_ready and (shell or getattr(host, "_surface_ready", True)):
             return
-        self._sounds_ready = True
-        from .sounds import build_sounds_studio
+        close_cover = (lambda: None) if shell else self._finish_build_cover("Sounds Studio")
+        try:
+            if not self._sounds_ready:
+                self._sounds_ready = True
+                from .sounds import build_sounds_studio
 
-        host = build_sounds_studio(
-            on_home=self.go_home,
-            on_theme=self._toggle_theme,
-            theme_mode=self._theme_mode,
-        )
-        host.status.connect(self._status_from_sounds)
-        _imp = host.import_paths
+                host = build_sounds_studio(
+                    on_home=self.go_home,
+                    on_theme=self._toggle_theme,
+                    theme_mode=self._theme_mode,
+                    shell=True,
+                )
+                host.status.connect(self._status_from_sounds)
+                _imp = host.import_paths
 
-        def _import_and_ve(paths: list[Path]) -> None:
-            _imp(paths)
-            QTimer.singleShot(
-                0, lambda ps=list(paths): self._ve_scan_auto([Path(p) for p in ps])
-            )
+                def _import_and_ve(paths: list[Path]) -> None:
+                    _imp(paths)
+                    QTimer.singleShot(
+                        0, lambda ps=list(paths): self._ve_scan_auto([Path(p) for p in ps])
+                    )
 
-        host.import_paths = _import_and_ve  # type: ignore[method-assign]
-        old = self._hub.widget(HUB_SOUNDS)
-        self._hub.removeWidget(old)
-        self._hub.insertWidget(HUB_SOUNDS, host)
-        if old is not None:
-            old.deleteLater()
-        self._sounds_host = host
-        self._sounds_hub_ph = None
-        if not getattr(self, "_boot_batch", False):
-            from .i18n import snapshot_and_apply
+                host.import_paths = _import_and_ve  # type: ignore[method-assign]
+                old = self._hub.widget(HUB_SOUNDS)
+                self._hub.removeWidget(old)
+                self._hub.insertWidget(HUB_SOUNDS, host)
+                if old is not None:
+                    old.deleteLater()
+                self._sounds_host = host
+                self._sounds_hub_ph = None
+                if not getattr(self, "_boot_batch", False):
+                    from .i18n import snapshot_and_apply
 
-            snapshot_and_apply(host)
+                    snapshot_and_apply(host)
+            if not shell:
+                self._sounds_host.finish_surface()
+        finally:
+            close_cover()
 
-    def _ensure_engine_host(self) -> None:
-        if self._engine_ready:
+    def _ensure_engine_host(self, *, shell: bool = False) -> None:
+        host = getattr(self, "_engine_host", None)
+        if self._engine_ready and (shell or getattr(host, "_surface_ready", True)):
             return
-        self._engine_ready = True
-        from .engine import build_engine_tuner
+        close_cover = (lambda: None) if shell else self._finish_build_cover("Engine Tuner")
+        try:
+            if not self._engine_ready:
+                self._engine_ready = True
+                from .engine import build_engine_tuner
 
-        host = build_engine_tuner(
-            on_home=self.go_home,
-            on_theme=self._toggle_theme,
-            theme_mode=self._theme_mode,
-        )
-        host.status.connect(self._status_from_sounds)
-        _open = host.open_file
+                host = build_engine_tuner(
+                    on_home=self.go_home,
+                    on_theme=self._toggle_theme,
+                    theme_mode=self._theme_mode,
+                    shell=True,
+                )
+                host.status.connect(self._status_from_sounds)
+                _open = host.open_file
 
-        def _open_and_ve() -> bool:
-            ok = _open()
-            if ok:
-                sp = getattr(getattr(host, "cfg", None), "source_path", None)
-                if sp:
-                    QTimer.singleShot(0, lambda p=Path(sp): self._ve_scan_auto([p]))
-            return ok
+                def _open_and_ve() -> bool:
+                    ok = _open()
+                    if ok:
+                        sp = getattr(getattr(host, "cfg", None), "source_path", None)
+                        if sp:
+                            QTimer.singleShot(0, lambda p=Path(sp): self._ve_scan_auto([p]))
+                    return ok
 
-        host.open_file = _open_and_ve  # type: ignore[method-assign]
-        old = self._hub.widget(HUB_ENGINE)
-        self._hub.removeWidget(old)
-        self._hub.insertWidget(HUB_ENGINE, host)
-        if old is not None:
-            old.deleteLater()
-        self._engine_host = host
-        self._engine_hub_ph = None
-        if not getattr(self, "_boot_batch", False):
-            from .i18n import snapshot_and_apply
+                host.open_file = _open_and_ve  # type: ignore[method-assign]
+                old = self._hub.widget(HUB_ENGINE)
+                self._hub.removeWidget(old)
+                self._hub.insertWidget(HUB_ENGINE, host)
+                if old is not None:
+                    old.deleteLater()
+                self._engine_host = host
+                self._engine_hub_ph = None
+                if not getattr(self, "_boot_batch", False):
+                    from .i18n import snapshot_and_apply
 
-            snapshot_and_apply(host)
+                    snapshot_and_apply(host)
+            if not shell:
+                self._engine_host.finish_surface()
+        finally:
+            close_cover()
 
-    def _ensure_assets_host(self) -> None:
-        if self._assets_ready:
+    def _ensure_assets_host(self, title: str = "Assets Tools", *, shell: bool = False) -> None:
+        host = getattr(self, "_assets_host", None)
+        if self._assets_ready and (shell or getattr(host, "_surface_ready", True)):
             return
-        self._assets_ready = True
-        from .assets import build_assets_studio
+        close_cover = (lambda: None) if shell else self._finish_build_cover(title)
+        try:
+            if not self._assets_ready:
+                self._assets_ready = True
+                from .assets import build_assets_studio
 
-        host = build_assets_studio(
-            on_home=self.go_home,
-            on_theme=self._toggle_theme,
-            theme_mode=self._theme_mode,
-        )
-        host.status.connect(self._status_from_sounds)
-        host.enginespec_open.connect(self._on_packages_enginespec_open)
-        host.mesh_open.connect(self._on_packages_mesh_open)
-        old = self._hub.widget(HUB_ASSETS)
-        self._hub.removeWidget(old)
-        self._hub.insertWidget(HUB_ASSETS, host)
-        if old is not None:
-            old.deleteLater()
-        self._assets_host = host
-        self._assets_hub_ph = None
-        if not getattr(self, "_boot_batch", False):
-            from .i18n import snapshot_and_apply
+                host = build_assets_studio(
+                    on_home=self.go_home,
+                    on_theme=self._toggle_theme,
+                    theme_mode=self._theme_mode,
+                    shell=True,
+                )
+                host.status.connect(self._status_from_sounds)
+                host.enginespec_open.connect(self._on_packages_enginespec_open)
+                host.mesh_open.connect(self._on_packages_mesh_open)
+                old = self._hub.widget(HUB_ASSETS)
+                self._hub.removeWidget(old)
+                self._hub.insertWidget(HUB_ASSETS, host)
+                if old is not None:
+                    old.deleteLater()
+                self._assets_host = host
+                self._assets_hub_ph = None
+                if not getattr(self, "_boot_batch", False):
+                    from .i18n import snapshot_and_apply
 
-            snapshot_and_apply(host)
-            self._idle_warm_assets_preview()
+                    snapshot_and_apply(host)
+            if not shell:
+                self._assets_host.finish_surface()
+                self._idle_warm_assets_preview()
+        finally:
+            close_cover()
 
     def _idle_warm_assets_preview(self) -> None:
         """Finder GL surface — after HOME is up (creating QOpenGLWidget at boot stalls)."""
@@ -2840,56 +2949,47 @@ class MainWindow(QMainWindow):
             self._boot_batch = False
 
     def warmup_hub_studios(self, *, on_stage=None) -> None:
-        """Warm Mesh, then Sounds and Engine Tuner, before the boot cover drops."""
+        """Home and Mesh only. A studio's frame and QML surface build on its first open."""
         self._boot_batch = True
         try:
             if on_stage is not None:
-                on_stage("Warming Mesh Studio…", 55)
+                on_stage("Calling warm_logo_cache", 40)
             warm_logo_cache()
+            if on_stage is not None:
+                on_stage("Calling ensure_studio_chrome", 70)
             self.ensure_studio_chrome()
-            # MeshView should already exist from prewarm_mesh_gl; keep as safety net
-            # when boot is invoked without the hidden prewarm path.
             if self.view is None:
+                if on_stage is not None:
+                    on_stage("Calling _ensure_gl", 88)
                 self._ensure_gl()
         finally:
             self._boot_batch = False
         from .i18n import snapshot_and_apply
 
+        if on_stage is not None:
+            on_stage("Calling snapshot_and_apply", 96)
         snapshot_and_apply(self)
-        # First real frame too. A hidden widget is not cached; the first click
-        # was still the cold paint, and the old idle timer froze HOME after entry.
-        self._boot_batch = True
-        try:
-            if on_stage is not None:
-                on_stage("Loading Sounds Studio", 62)
-            self._ensure_sounds_host()
-            self._expose_hub_page(HUB_SOUNDS)
-            if on_stage is not None:
-                on_stage("Loading Engine Tuner", 74)
-            self._ensure_engine_host()
-            self._expose_hub_page(HUB_ENGINE)
-            if on_stage is not None:
-                on_stage("Loading Assets Tools", 86)
-            self._ensure_assets_host()
-            self._expose_hub_page(HUB_ASSETS)
-            assets = getattr(self, "_assets_host", None)
-            if assets is not None:
-                if on_stage is not None:
-                    on_stage("Loading Texture / Mesh", 94)
-                assets.set_suite("texmesh")
-                self._expose_hub_page(HUB_ASSETS)
-                assets.set_suite("assets")
-            if on_stage is not None:
-                on_stage("Loading mesh preview", 98)
-            self._idle_warm_assets_preview()
-        finally:
-            self._boot_batch = False
-            self._hub.setCurrentIndex(HUB_HOME)
-            self._stack.setCurrentIndex(STACK_HUB)
-            overlay = getattr(self, "_overlay", None)
-            if overlay is not None:
-                overlay.raise_()
-            self._raise_overlay_chrome()
+        self._hub.setCurrentIndex(HUB_HOME)
+        self._stack.setCurrentIndex(STACK_HUB)
+        overlay = getattr(self, "_overlay", None)
+        if overlay is not None:
+            overlay.raise_()
+        self._raise_overlay_chrome()
+
+    def _finish_build_cover(self, title: str):
+        """Load card for the first build of a studio. Later opens in this process skip it."""
+        if getattr(self, "_boot_batch", False) or not self.isVisible():
+            return lambda: None
+        overlay = getattr(self, "_overlay", None)
+        if overlay is None or overlay.isVisible():
+            return lambda: None
+        self._show_overlay(f"Building {title}…", brand=title, pct=40, instant=True, frost=False)
+
+        def close() -> None:
+            self._overlay.set_stage("Ready", 100)
+            self._hide_overlay()
+
+        return close
 
     def _expose_hub_page(self, index: int) -> None:
         """Paint one frame while the boot cover is still up. Do not leave this page visible."""
@@ -2931,6 +3031,8 @@ class MainWindow(QMainWindow):
             steps.append(self._ensure_engine_host)
         if not self._assets_ready:
             steps.append(self._ensure_assets_host)
+        if not self._trainzutil_ready:
+            steps.append(self._ensure_trainzutil_host)
 
         def _next(i: int = 0) -> None:
             if i >= len(steps):
@@ -2955,6 +3057,7 @@ class MainWindow(QMainWindow):
             and self._sounds_ready
             and self._engine_ready
             and self._assets_ready
+            and self._trainzutil_ready
         )
 
     def _build_stats_card(self) -> QFrame:
@@ -3761,11 +3864,13 @@ class MainWindow(QMainWindow):
         ov.play(from_pm, ms=ms)
 
     def go_home(self) -> None:
-        """Return to MSTN Trainz Studio HOME (keep mesh scene in memory)."""
+        """Studio-card hub. Mesh scene stays in memory."""
+        if self._studio_mode == "home" and self._hub.currentIndex() == HUB_HOME:
+            return
         leaving = self._studio_mode
         snap = (
             self._grab_hub_snapshot()
-            if leaving in ("mesh", "sounds", "engine", "assets", "texmesh")
+            if leaving in ("mesh", "sounds", "engine", "assets", "texmesh", "trainzutil")
             else QPixmap()
         )
         self._studio_mode = "home"
@@ -3777,10 +3882,8 @@ class MainWindow(QMainWindow):
         if self.pbr_hud is not None:
             self.pbr_hud.hide()
         self._apply_studio_chrome()
-        self._layout_viewer_pane()  # hub must fill pane or HOME cards sit top-left
-        self._status.showMessage(
-            "MSTN Trainz Studio — Mesh · Sounds · Engine · Assets · Texture & Mesh Lods"
-        )
+        self._layout_viewer_pane()
+        self._status.showMessage("Home")
         QTimer.singleShot(0, self._reposition_viewer_chrome)
         if not snap.isNull():
             self._play_hub_transition(snap)
@@ -3908,6 +4011,53 @@ class MainWindow(QMainWindow):
             return
         self.enter_engine_tuner()
 
+    def _on_trainzutil_enginespec(self, kuid: str, text: str, label: str) -> None:
+        """Library engine spec → Engine Tuner. Save commits the config back into Trainz."""
+        from .trainzutil_host import TrainzUtilHost
+        from ..io.trainz_install import commit_enginespec
+
+        self._ensure_engine_host()
+        host = self._trainzutil_host
+        engine = self._engine_host
+        if not isinstance(host, TrainzUtilHost) or engine is None:
+            return
+        exe = host.queue.exe
+
+        def on_save(new_text: str) -> None:
+            if exe is None:
+                raise RuntimeError("Pick TrainzUtil.exe with Browse")
+            commit_enginespec(exe, kuid, new_text)
+            self._pending_enginespec_notice = f"บันทึกเข้าเกมแล้ว — {label} · {kuid}"
+
+        def on_done() -> None:
+            self.enter_trainzutil()
+            notice = getattr(self, "_pending_enginespec_notice", None) or f"บันทึกเข้าเกมแล้ว — {kuid}"
+            self._pending_enginespec_notice = None
+            host._bridge.note(notice)
+            sb = getattr(self, "_status", None)
+            if sb is not None:
+                sb.showMessage(notice, 8000)
+
+        def on_back() -> None:
+            self.enter_trainzutil()
+            sb = getattr(self, "_status", None)
+            if sb is not None:
+                sb.showMessage("Back to TrainzUtil — game asset unchanged", 5000)
+
+        if not engine.open_cdp_session(
+            text=text,
+            label=f"{label} · {kuid}",
+            on_save=on_save,
+            on_done=on_done,
+            on_back=on_back,
+            back_tip="Return to TrainzUtil",
+            save_tip="Write this engine spec back into Trainz and return",
+            leave_prompt="มีแก้ที่ยังไม่ได้ Save เข้าเกม — กลับ TrainzUtil โดยไม่เขียนทับ?",
+            save_note=f"Saved into Trainz — {label} · {kuid}",
+        ):
+            return
+        self.enter_engine_tuner()
+
     def _on_packages_mesh_open(self, staged_path: str) -> None:
         """Packages CDP mesh → Mesh Studio (mesh-first; textures may still be filling)."""
         path = Path(staged_path)
@@ -3948,11 +4098,96 @@ class MainWindow(QMainWindow):
         if leaving_home and not snap.isNull():
             self._play_hub_transition(snap)
 
+    def _on_trainzutil_packages(self, folder: str) -> None:
+        self.enter_assets_studio()
+        self._assets_host.show_packages()
+        if not folder:
+            self._status.showMessage("No files for this asset")
+            return
+        try:
+            self._assets_host.packages_page.open_folder(Path(folder))
+        except OSError as exc:
+            self._status.showMessage(str(exc))
+            return
+        self._status.showMessage(Path(folder).name)
+
+    def _open_from_trainzutil(self, name: str) -> None:
+        if name == "packages":
+            self.enter_assets_studio()
+            self._assets_host.show_packages()
+            return
+        jump = {
+            "mesh": self.enter_mesh_studio,
+            "sounds": self.enter_sounds_studio,
+            "engine": self.enter_engine_tuner,
+            "assets": self.enter_assets_studio,
+        }.get(name)
+        if jump is not None:
+            jump()
+
+    def enter_trainzutil(self, paths: list[Path] | None = None) -> None:
+        """Open TrainzUtil. Database commands need the Launcher open."""
+        leaving_home = self._studio_mode == "home"
+        snap = self._grab_hub_snapshot() if leaving_home else QPixmap()
+        self._ensure_trainzutil_host()
+        self._studio_mode = "trainzutil"
+        if self._chrome_ready:
+            self._set_editor_dock(False, animated=False)
+            self._set_settings_overlay(False, animated=False)
+        self._hub.setCurrentIndex(HUB_TRAINZ)
+        self._stack.setCurrentIndex(STACK_HUB)
+        if self.pbr_hud is not None:
+            self.pbr_hud.hide()
+        self._apply_studio_chrome()
+        pending = list(paths or [])
+        if pending and self._trainzutil_host is not None:
+            self._trainzutil_host.add_paths(pending)
+        self._status.showMessage(
+            "Smart TrainzUtil — open the Launcher before installing"
+            if pending
+            else "Smart TrainzUtil"
+        )
+        QTimer.singleShot(0, self._reposition_viewer_chrome)
+        if leaving_home and not snap.isNull():
+            self._play_hub_transition(snap)
+
+    def _ensure_trainzutil_host(self, *, shell: bool = False) -> None:
+        host = getattr(self, "_trainzutil_host", None)
+        if host is not None and (shell or getattr(host, "_surface_ready", True)):
+            return
+        close_cover = (lambda: None) if shell else self._finish_build_cover("Smart TrainzUtil")
+        try:
+            if self._trainzutil_host is None:
+                self._trainzutil_ready = True
+                from .trainzutil_host import TrainzUtilHost
+
+                host = TrainzUtilHost(
+                    on_home=self.go_home,
+                    on_studio=self._open_from_trainzutil,
+                    theme_mode=self._theme_mode,
+                    shell=True,
+                )
+                old = self._hub.widget(HUB_TRAINZ)
+                self._hub.removeWidget(old)
+                self._hub.insertWidget(HUB_TRAINZ, host)
+                if old is not None:
+                    old.deleteLater()
+                self._trainz_hub_ph = None
+                self._trainzutil_host = host
+                host.tunerReady.connect(self._on_trainzutil_enginespec)
+                host.packagesReady.connect(self._on_trainzutil_packages)
+            if not shell:
+                self._trainzutil_host.finish_surface()
+                if not self._trainzutil_host.ok:
+                    self._status.showMessage("TrainzUtil page failed to load")
+        finally:
+            close_cover()
+
     def enter_texmesh_studio(self) -> None:
         """Texture & Mesh Lods tools — maps + LM / materials (same host, texmesh suite)."""
         leaving_home = self._studio_mode == "home"
         snap = self._grab_hub_snapshot() if leaving_home else QPixmap()
-        self._ensure_assets_host()
+        self._ensure_assets_host("Texture & Mesh Lods tools")
         self._assets_host.set_suite("texmesh")
         self._studio_mode = "texmesh"
         if self._chrome_ready:
@@ -4203,6 +4438,8 @@ class MainWindow(QMainWindow):
             self._engine_host.set_theme(mode)
         if getattr(self, "_assets_host", None) is not None:
             self._assets_host.set_theme(mode)
+        if getattr(self, "_trainzutil_host", None) is not None:
+            self._trainzutil_host.set_theme(mode)
         apply_code_edit_theme(self, mode)
 
     def _deferred_theme_chrome(self) -> None:
@@ -6840,6 +7077,12 @@ class MainWindow(QMainWindow):
         show_home.triggered.connect(self.go_home)
         v.addSeparator()
         v.addAction(show_home)
+        mesh_act = QAction("Mesh Studio", self)
+        mesh_act.triggered.connect(self.enter_mesh_studio)
+        v.addAction(mesh_act)
+        sounds_act = QAction("Sounds Studio", self)
+        sounds_act.triggered.connect(self.enter_sounds_studio)
+        v.addAction(sounds_act)
         engine_act = QAction("Engine Tuner", self)
         engine_act.triggered.connect(self.enter_engine_tuner)
         v.addAction(engine_act)
@@ -8949,6 +9192,10 @@ class MainWindow(QMainWindow):
             if host is not None and hasattr(host, "handle_dropped_paths"):
                 if host.handle_dropped_paths(paths):
                     return
+        packs = [p for p in files if p.suffix.lower() in {".zip", ".cdp"}]
+        if packs and len(packs) == len(files) and getattr(self, "_studio_mode", "") != "assets":
+            self.enter_trainzutil(packs)
+            return
         from ..audio.classify import partition_paths
 
         buckets = partition_paths(paths)
@@ -9021,6 +9268,9 @@ class MainWindow(QMainWindow):
             return
 
         self._stop_anim()
+        util_host = getattr(self, "_trainzutil_host", None)
+        if util_host is not None:
+            util_host.shutdown()
         if self._worker is not None and self._worker.isRunning():
             self._worker.wait(2000)
         # Keep self-backup when quitting with unsaved tzMF edits; else clear.
