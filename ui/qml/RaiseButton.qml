@@ -60,6 +60,8 @@ Item {
 
     implicitWidth: 88
     implicitHeight: 36
+    property real sink: tap.pressed && btn.enabled ? 1 : 0
+    Behavior on sink { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
 
     Repeater {
         model: 3
@@ -69,9 +71,10 @@ Item {
             anchors.fill: parent
             anchors.leftMargin: 2 - t * 3
             anchors.rightMargin: 2 - t * 3
-            anchors.topMargin: 2 + index
-            anchors.bottomMargin: -t * 3
+            anchors.topMargin: 2 + index + btn.sink * 2
+            anchors.bottomMargin: -t * 3 * (1 - btn.sink)
             radius: 12
+            opacity: 1 - btn.sink
             color: Qt.rgba(0, 0, 0, (btn.accent || btn.lit ? 0.28 : 0.18) * (1.05 - t))
         }
     }
@@ -79,7 +82,8 @@ Item {
     Rectangle {
         id: face
         anchors.fill: parent
-        anchors.bottomMargin: 3
+        anchors.topMargin: btn.sink * 3
+        anchors.bottomMargin: 3 * (1 - btn.sink)
         radius: 10
         border.width: 1
         border.color: btn.accent || btn.lit
@@ -157,7 +161,10 @@ Item {
         radius: 10
         color: hv.hovered ? Qt.rgba(1, 1, 1, 0.10) : "transparent"
     }
-    TapHandler { onTapped: if (btn.enabled) btn.clicked() }
+    TapHandler {
+        id: tap
+        onTapped: if (btn.enabled) btn.clicked()
+    }
 
     // Reparented onto the page so sidebars and docks cannot clip it.
     Item {
