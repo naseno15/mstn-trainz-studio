@@ -70,7 +70,7 @@ Item {
             y: tip.padY
             width: Math.min(216, implicitWidth)
             wrapMode: Text.WordWrap
-            text: tip.text
+            text: (typeof tip.text === "string" ? qsTr(tip.text) : tip.text)
             color: tip.dark ? "#f4f6fa" : "#1c1c1e"
             font.pixelSize: 12
         }

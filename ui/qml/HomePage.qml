@@ -29,14 +29,14 @@ Item {
 
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: bridge.brand
+            text: (typeof bridge.brand === "string" ? qsTr(bridge.brand) : bridge.brand)
             color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
             font.pixelSize: 30
             font.bold: true
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: bridge.sub
+            text: (typeof bridge.sub === "string" ? qsTr(bridge.sub) : bridge.sub)
             color: bridge.dark ? "#9aa3b2" : "#5c6570"
             font.pixelSize: 12
         }
@@ -67,7 +67,7 @@ Item {
                         width: parent.width
                         Text {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: card.glyph
+                            text: (typeof card.glyph === "string" ? qsTr(card.glyph) : card.glyph)
                             font.family: bridge.iconFont
                             font.pixelSize: 28
                             color: "#ff5a1f"
@@ -76,7 +76,7 @@ Item {
                             anchors.horizontalCenter: parent.horizontalCenter
                             width: parent.width
                             horizontalAlignment: Text.AlignHCenter
-                            text: card.title
+                            text: (typeof card.title === "string" ? qsTr(card.title) : card.title)
                             color: bridge.dark ? "#f4f6fa" : "#1d1d1f"
                             font.pixelSize: 15
                             font.bold: true
@@ -86,14 +86,14 @@ Item {
                             anchors.horizontalCenter: parent.horizontalCenter
                             width: parent.width
                             horizontalAlignment: Text.AlignHCenter
-                            text: card.blurb
+                            text: (typeof card.blurb === "string" ? qsTr(card.blurb) : card.blurb)
                             color: bridge.dark ? "#a8b0bd" : "#5c6570"
                             font.pixelSize: 11
                             wrapMode: Text.WordWrap
                         }
                         Text {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: bridge.cta
+                            text: (typeof bridge.cta === "string" ? qsTr(bridge.cta) : bridge.cta)
                             color: "#ff5a1f"
                             font.pixelSize: 11
                             font.bold: true
@@ -123,20 +123,20 @@ Item {
                 spacing: 2
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: bridge.dropTitle
+                    text: (typeof bridge.dropTitle === "string" ? qsTr(bridge.dropTitle) : bridge.dropTitle)
                     color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
                     font.pixelSize: 13
                     font.bold: true
                 }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: bridge.dropHint
+                    text: (typeof bridge.dropHint === "string" ? qsTr(bridge.dropHint) : bridge.dropHint)
                     color: bridge.dark ? "#9aa3b2" : "#5c6570"
                     font.pixelSize: 11
                 }
             }
 
-            DropArea {
+            DropZone {
                 id: dropHover
                 anchors.fill: parent
                 onDropped: function (drop) {
@@ -151,7 +151,7 @@ Item {
 
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: bridge.copy
+            text: (typeof bridge.copy === "string" ? qsTr(bridge.copy) : bridge.copy)
             color: bridge.dark ? "#6d7684" : "#8b939e"
             font.pixelSize: 10
         }

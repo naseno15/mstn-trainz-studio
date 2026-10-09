@@ -28,7 +28,7 @@ Item {
         anchors.right: parent.right
         anchors.top: parent.top
         height: visible ? 14 : 0
-        text: field.label
+        text: (typeof field.label === "string" ? qsTr(field.label) : field.label)
         color: bridge.dark ? "#8b93a1" : "#5c6570"
         font.pixelSize: 11
         elide: Text.ElideRight
@@ -55,7 +55,7 @@ Item {
             Text {
                 anchors.centerIn: parent
                 visible: field.checked
-                text: "✓"
+                text: qsTr("✓")
                 color: "#ffffff"
                 font.pixelSize: 12
             }
@@ -67,7 +67,7 @@ Item {
             anchors.leftMargin: field.hasCheck ? 22 : 0
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: field.label
+            text: (typeof field.label === "string" ? qsTr(field.label) : field.label)
             color: bridge.dark ? "#8b93a1" : "#5c6570"
             font.pixelSize: 11
             elide: Text.ElideRight
@@ -126,7 +126,7 @@ Item {
                 anchors.right: parent.right
                 anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
-                text: field.unit
+                text: (typeof field.unit === "string" ? qsTr(field.unit) : field.unit)
                 color: bridge.dark ? "#8b93a1" : "#5c6570"
                 font.pixelSize: 11
             }

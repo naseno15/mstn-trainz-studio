@@ -38,7 +38,7 @@ Item {
                         anchors.leftMargin: 8
                         anchors.rightMargin: 8
                         height: 1
-                        color: Qt.rgba(1, 1, 1, bridge.dark ? 0.12 : 0.35)
+                        color: bridge.dark ? Qt.rgba(1, 1, 1, 0.12) : Qt.rgba(0, 0, 0, 0.10)
                     }
 
                     Rectangle {
@@ -54,7 +54,7 @@ Item {
                             spacing: 8
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: checked ? "●" : ""
+                                text: checked ? qsTr("●") : ""
                                 color: rowHover.hovered ? "#ffffff" : "#ff5a1f"
                                 font.pixelSize: 10
                                 width: 12
@@ -62,7 +62,7 @@ Item {
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: parent.width - 80
-                                text: label
+                                text: (typeof label === "string" ? qsTr(label) : label)
                                 color: !alive
                                        ? "#888888"
                                        : (rowHover.hovered ? "#ffffff" : (bridge.dark ? "#f2f4f8" : "#1d1d1f"))
@@ -71,7 +71,7 @@ Item {
                             }
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: shortcut
+                                text: (typeof shortcut === "string" ? qsTr(shortcut) : shortcut)
                                 color: rowHover.hovered ? "#ffe8dc" : (bridge.dark ? "#9aa3b2" : "#6a7380")
                                 font.pixelSize: 11
                             }

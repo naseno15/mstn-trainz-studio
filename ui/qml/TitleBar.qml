@@ -66,7 +66,7 @@ Item {
                     radius: 6.5
                     Text {
                         anchors.centerIn: parent
-                        text: disc.glyph
+                        text: (typeof disc.glyph === "string" ? qsTr(disc.glyph) : disc.glyph)
                         font.pixelSize: 10
                         font.bold: true
                         color: "#4a3018"
@@ -85,19 +85,19 @@ Item {
                 Light {
                     color: "#ff5f57"
                     glyph: "×"
-                    tipText: "Close"
+                    tipText: qsTr("Close")
                     onPressed: bridge.requestClose()
                 }
                 Light {
                     color: "#febc2e"
                     glyph: "−"
-                    tipText: "Minimize"
+                    tipText: qsTr("Minimize")
                     onPressed: bridge.requestMin()
                 }
                 Light {
                     color: "#28c840"
                     glyph: bridge.zoomed ? "▢" : "+"
-                    tipText: bridge.zoomed ? "Restore" : "Maximize"
+                    tipText: bridge.zoomed ? qsTr("Restore") : qsTr("Maximize")
                     onPressed: bridge.requestZoom()
                 }
             }
@@ -118,7 +118,7 @@ Item {
                     Text {
                         id: labelText
                         anchors.centerIn: parent
-                        text: menuBtn.label
+                        text: (typeof menuBtn.label === "string" ? qsTr(menuBtn.label) : menuBtn.label)
                         color: bridge.openKey === menuBtn.key
                                ? "#ffffff"
                                : (bridge.dark ? "#f2f4f8" : "#1d1d1f")
@@ -142,7 +142,7 @@ Item {
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 width: Math.max(40, parent.width - x - 8)
-                text: bridge.windowTitle
+                text: (typeof bridge.windowTitle === "string" ? qsTr(bridge.windowTitle) : bridge.windowTitle)
                 color: bridge.dark ? "#9aa3b2" : "#5c6570"
                 font.pixelSize: 12
                 elide: Text.ElideRight

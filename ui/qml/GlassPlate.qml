@@ -10,6 +10,7 @@ Item {
     property bool lit: false
     property bool sunk: false
     property bool matte: false
+    property real veil: 1
     property real plateRadius: 22
     property real foot: 12
     default property alias content: body.data
@@ -48,24 +49,24 @@ Item {
                 color: plate.matte
                        ? (plate.dark ? Qt.rgba(0.16, 0.17, 0.20, 0.98) : Qt.rgba(0.94, 0.95, 0.97, 0.98))
                        : (plate.sunk
-                          ? (plate.dark ? Qt.rgba(0.07, 0.08, 0.10, 0.88) : Qt.rgba(0.86, 0.89, 0.93, 0.92))
-                          : (plate.dark ? Qt.rgba(1, 1, 1, 0.16) : Qt.rgba(0.96, 0.97, 0.98, 0.90)))
+                          ? (plate.dark ? Qt.rgba(0.07, 0.08, 0.10, 0.55 * plate.veil) : Qt.rgba(0.86, 0.89, 0.93, 0.72 * plate.veil))
+                          : (plate.dark ? Qt.rgba(1, 1, 1, 0.10 * plate.veil) : Qt.rgba(0.96, 0.97, 0.98, 0.55 * plate.veil)))
             }
             GradientStop {
                 position: 0.22
                 color: plate.matte
                        ? (plate.dark ? Qt.rgba(0.11, 0.12, 0.15, 0.99) : Qt.rgba(0.90, 0.92, 0.95, 0.99))
                        : (plate.dark
-                          ? Qt.rgba(0.16, 0.18, 0.22, plate.sunk ? 0.92 : 0.86)
-                          : Qt.rgba(0.90, 0.92, 0.95, 0.92))
+                          ? Qt.rgba(0.16, 0.18, 0.22, (plate.sunk ? 0.62 : 0.48) * plate.veil)
+                          : Qt.rgba(0.90, 0.92, 0.95, 0.50 * plate.veil))
             }
             GradientStop {
                 position: 1.0
                 color: plate.matte
                        ? (plate.dark ? Qt.rgba(0.07, 0.08, 0.10, 1) : Qt.rgba(0.82, 0.85, 0.89, 1))
                        : (plate.dark
-                          ? Qt.rgba(0.06, 0.07, 0.09, 0.94)
-                          : Qt.rgba(0.78, 0.82, 0.87, 0.94))
+                          ? Qt.rgba(0.06, 0.07, 0.09, 0.58 * plate.veil)
+                          : Qt.rgba(0.78, 0.82, 0.87, 0.55 * plate.veil))
             }
         }
 

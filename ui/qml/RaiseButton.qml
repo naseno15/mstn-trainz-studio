@@ -120,14 +120,14 @@ Item {
             spacing: 6
             Text {
                 visible: btn.glyph.length > 0
-                text: btn.glyph
+                text: (typeof btn.glyph === "string" ? qsTr(btn.glyph) : btn.glyph)
                 font.family: btn.fontName
                 font.pixelSize: btn.label.length > 0 ? 16 : 20
                 color: btn.ink.length ? btn.ink : (btn.accent || btn.lit ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e"))
             }
             Text {
                 visible: btn.label.length > 0
-                text: btn.label
+                text: (typeof btn.label === "string" ? qsTr(btn.label) : btn.label)
                 font.pixelSize: 12
                 font.bold: true
                 color: btn.accent || btn.lit ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
@@ -218,7 +218,7 @@ Item {
                 anchors.margins: 6
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
-                text: tipText.text
+                text: (typeof tipText.text === "string" ? qsTr(tipText.text) : tipText.text)
                 color: bridge.dark ? "#f4f6fa" : "#1c1c1e"
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
