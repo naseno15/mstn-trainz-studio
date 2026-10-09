@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
 # Default before i18n fonts load — apply_language_font / stylesheet() replace per locale.
-FONT_STACK = '"Noto Sans Thai Looped", "Noto Sans", "Segoe UI", system-ui, sans-serif'
+FONT_STACK = '"Noto Sans", "Segoe UI", system-ui, sans-serif'
 MONO_STACK = "Menlo, Consolas, 'Courier New', monospace"
 
 
@@ -25,9 +25,12 @@ def font_stack(lang: str | None = None) -> str:
 
         fam = family_for(lang or current_language())
     except Exception:
-        fam = "Noto Sans Thai Looped"
-    # Keep Noto Sans + Segoe as fallbacks for missing glyphs / dialogs.
-    return f'"{fam}", "Noto Sans", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif'
+        fam = "Noto Sans"
+    # CJK stays in every language. Asset names are Japanese even when the UI is Thai.
+    return (
+        f'"{fam}", "Noto Sans CJK JP", "Noto Sans Thai Looped", "Noto Sans", '
+        '"Segoe UI Variable", "Segoe UI", system-ui, sans-serif'
+    )
 
 
 def invalidate_stylesheet_cache() -> None:
@@ -128,7 +131,7 @@ def app_font(point_size: int = 13, weight: QFont.Weight = QFont.Weight.Normal) -
 
         return ui_font(point_size=point_size, weight=weight)
     except Exception:
-        f = QFont("Noto Sans Thai Looped")
+        f = QFont("Noto Sans")
         if not f.exactMatch():
             f = QFont("Segoe UI")
         f.setPointSize(point_size)
@@ -384,6 +387,13 @@ def _build_stylesheet(p: Palette, *, lang: str | None = None) -> str:
         font-weight: 700;
         font-size: 12px;
         letter-spacing: 0.2px;
+    }}
+    QPlainTextEdit#overlayLog {{
+        color: {p.muted};
+        background: transparent;
+        border: none;
+        font-family: "Cascadia Mono", Consolas, monospace;
+        font-size: 11px;
     }}
     /* frost painted in FrostGlassFrame / _paint_glass_chip — QSS must stay clear */
     QFrame#glassPanel, QFrame#editorDock, QFrame#sidePanel {{
