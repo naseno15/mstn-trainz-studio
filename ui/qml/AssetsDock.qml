@@ -152,7 +152,7 @@ Item {
                                     return Math.max(18, noteText.implicitHeight)
                                 if (modelData.type === "pills")
                                     return 58
-                                if (modelData.type === "buttons")
+                                if (modelData.type === "buttons" || modelData.type === "file")
                                     return 40
                                 if (modelData.type === "check")
                                     return 28
@@ -179,6 +179,32 @@ Item {
                                 value: modelData.value || ""
                                 fieldEnabled: modelData.enabled !== false
                                 onEdited: bridge.setDockField(modelData.id, text)
+                            }
+
+                            Row {
+                                visible: modelData.type === "file"
+                                width: parent.width
+                                spacing: 6
+                                SunkField {
+                                    width: parent.width - 42
+                                    label: modelData.label || ""
+                                    value: modelData.value || ""
+                                    fieldEnabled: modelData.enabled !== false
+                                    hasCheck: !!modelData.check
+                                    checked: !!modelData.on
+                                    onEdited: bridge.setDockField(modelData.id, text)
+                                    onToggled: bridge.setDockField(modelData.check, modelData.on ? "0" : "1")
+                                }
+                                RaiseButton {
+                                    width: 36
+                                    height: 36
+                                    glyph: modelData.glyph || ""
+                                    fontName: bridge.iconFont
+                                    tip: "Choose file"
+                                    enabled: modelData.enabled !== false
+                                    opacity: enabled ? 1 : 0.4
+                                    onClicked: bridge.runDock(modelData.pick)
+                                }
                             }
 
                             Column {
@@ -318,7 +344,10 @@ Item {
                                                ? (btnRow.width - 6 * (btnRow.items.length - 1)) / btnRow.items.length
                                                : btnRow.width
                                         height: 36
-                                        label: modelData.label
+                                        label: modelData.label || ""
+                                        glyph: modelData.glyph || ""
+                                        tip: modelData.label || ""
+                                        fontName: bridge.iconFont
                                         accent: !!modelData.accent
                                         onClicked: bridge.runDock(modelData.id)
                                     }
