@@ -1,4 +1,5 @@
 #include "sounds_page.h"
+#include "feedback.h"
 
 #include "shell_window.h"
 
@@ -41,7 +42,7 @@ void WaveView::set_samples(const std::vector<int16_t>& samples) {
 
 void WaveView::paintEvent(QPaintEvent*) {
     QPainter paint(this);
-    paint.fillRect(rect(), QColor(18, 22, 28));
+    paint.fillRect(rect(), ui_dark() ? QColor(18, 22, 28) : QColor(246, 247, 249));
     if (samples_.empty() || width() < 2) return;
     paint.setPen(QColor(255, 90, 31));
     const int mid = height() / 2;
@@ -110,6 +111,7 @@ bool SoundsBridge::save_as(const QString& dest) {
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
     file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<qint64>(bytes.size()));
     bar_tip_ = QStringLiteral("Saved ") + QFileInfo(dest).fileName();
+    post_status(bar_tip_);
     emit changed();
     return true;
 }
@@ -141,7 +143,10 @@ void SoundsBridge::dropUrls(const QVariantList& urls) {
     const QString path = url.isLocalFile() ? url.toLocalFile() : urls.front().toString();
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return;
-    load_bytes(file.readAll(), path);
+    BusyToast busy({path}, QStringLiteral("Reading ") + QFileInfo(path).fileName() + QStringLiteral("…"));
+    const QByteArray bytes = file.readAll();
+    busy.step(QStringLiteral("Analysing ") + QFileInfo(path).fileName() + QStringLiteral("…"), 0);
+    load_bytes(bytes, path);
 }
 
 void SoundsBridge::waveRect(double x, double y, double w, double h) { emit waveRectRequested(static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h)); }
@@ -194,6 +199,7 @@ SoundsPage::SoundsPage(QWidget* parent) : QWidget(parent) {
     view_->setClearColor(QColor(QStringLiteral("#12161c")));
     view_->setSource(QUrl::fromLocalFile(qml_dir() + QStringLiteral("/SoundsPage.qml")));
     wave_ = new WaveView(this);
+    connect(UiTheme::instance(), &UiTheme::changed, wave_, qOverload<>(&QWidget::update));
     wave_->hide();
     connect(bridge_, &SoundsBridge::waveRectRequested, this, [this](int x, int y, int w, int h) {
         if (w < 8 || h < 8) {

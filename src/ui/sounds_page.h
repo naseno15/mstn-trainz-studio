@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/status_hub.h"
+
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -60,7 +62,7 @@ class SoundsBridge : public QObject {
 public:
     explicit SoundsBridge(QObject* parent = nullptr);
 
-    bool dark() const { return true; }
+    bool dark() const { return ui_dark(); }
     QString ffmpeg() const { return ffmpeg_; }
     QString meta() const { return meta_; }
     QString amp() const { return amp_; }
@@ -105,6 +107,7 @@ public:
     Q_INVOKABLE void fix();
     Q_INVOKABLE void saveAs();
     Q_INVOKABLE void goHome();
+    Q_INVOKABLE QStringList veContextPaths() const { return source_.isEmpty() ? QStringList() : QStringList{source_}; }
 
 signals:
     void changed();

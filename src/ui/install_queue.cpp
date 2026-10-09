@@ -1,5 +1,8 @@
 #include "install_queue.h"
 
+#include <memory>
+
+#include <QFileInfo>
 #include <QProcess>
 #include <QTimer>
 
@@ -21,6 +24,12 @@ void InstallQueue::stop() {
     if (proc_) proc_->kill();
 }
 
+bool install_ok(const QString& output) {
+    const QString low = output.toLower();
+    if (low.contains(QLatin1String("not running"))) return false;
+    return !low.startsWith(QLatin1String("error")) && !low.contains(QLatin1String("\nerror"));
+}
+
 void InstallQueue::start_next() {
     if (stopped_ || active_ != 0 || pending_.isEmpty()) return;
     const InstallJob job = pending_.takeFirst();
@@ -36,23 +45,38 @@ void InstallQueue::start_next() {
     }
     auto* proc = new QProcess(this);
     proc_ = proc;
+    proc->setProcessChannelMode(QProcess::MergedChannels);
     const QString verb = job.path.endsWith(QStringLiteral(".cdp"), Qt::CaseInsensitive) ? QStringLiteral("installCDP")
                                                                                         : QStringLiteral("installfrompath");
-    connect(proc, &QProcess::finished, this, [this, proc](int, QProcess::ExitStatus) {
+    auto output = std::make_shared<QString>();
+    const QString id = job.id;
+    connect(proc, &QProcess::readyRead, this, [this, proc, output, id] {
+        while (proc->canReadLine()) {
+            const QString line = QString::fromUtf8(proc->readLine()).trimmed();
+            if (line.isEmpty()) continue;
+            *output += line + QLatin1Char('\n');
+            emit jobLine(id, line);
+        }
+    });
+    connect(proc, &QProcess::finished, this, [this, proc, output](int, QProcess::ExitStatus status) {
+        *output += QString::fromUtf8(proc->readAll());
         proc_ = nullptr;
         proc->deleteLater();
-        finish_current(true, QStringLiteral("Installed"));
+        const QString text = output->trimmed();
+        const bool ok = status == QProcess::NormalExit && install_ok(text);
+        finish_current(ok, text.isEmpty() ? (ok ? QStringLiteral("Installed") : QStringLiteral("Install failed")) : text.right(400));
     });
+    proc->setWorkingDirectory(QFileInfo(exe_).absolutePath());
     proc->start(exe_, {verb, job.path});
 }
 
-void InstallQueue::finish_current(bool ok, const QString&) {
+void InstallQueue::finish_current(bool ok, const QString& message) {
     if (active_ == 0) return;
     const QString id = current_;
     active_ = 0;
     finished_ << current_;
     current_.clear();
-    emit jobFinished(id, ok);
+    emit jobFinished(id, ok, message);
     if (stopped_) return;
     QTimer::singleShot(0, this, [this] { start_next(); });
 }

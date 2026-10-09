@@ -7,6 +7,8 @@
 #include <QString>
 #include <QStringList>
 
+bool install_ok(const QString& output);
+
 struct InstallJob {
     QString id;
     QString path;
@@ -31,7 +33,8 @@ public:
     int pending() const { return pending_.size(); }
 
 signals:
-    void jobFinished(const QString& id, bool ok);
+    void jobFinished(const QString& id, bool ok, const QString& message);
+    void jobLine(const QString& id, const QString& line);
 
 private:
     void start_next();
