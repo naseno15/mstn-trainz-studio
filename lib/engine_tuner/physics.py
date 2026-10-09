@@ -15,6 +15,7 @@ class SimParams:
     grade_percent: float = 0.0
     dt: float = 0.05
     duration_s: float = 200.0
+    initial_speed_mps: float = 0.0
 
 
 @dataclass
@@ -108,7 +109,7 @@ def simulate(cfg: EngineConfig, params: SimParams, controls: SimControls) -> Sim
     p_aux = bp_release
     p_bc = press.get("autobrakecylinder_start", 0.0)
 
-    v = 0.0
+    v = min(max(0.0, params.initial_speed_mps), max_speed)
     x = 0.0
     t = 0.0
     air_used = 0.0
