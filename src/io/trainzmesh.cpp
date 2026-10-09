@@ -3,6 +3,7 @@
 #include "bin.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 
@@ -174,28 +175,30 @@ std::vector<std::string> extract_strings(const uint8_t* data, size_t start, size
     return records;
 }
 
-void pick_textures(const std::vector<std::string>& strings, std::string& material, std::string& albedo) {
+void pick_textures(const std::vector<std::string>& strings, std::string& material, std::string& albedo, std::string& normal, std::string& parameter) {
     const char* types[] = {"stdonetex", "pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec"};
+    const char* param_labels[] = {"txparameters", "txparameter", "parameters", "parameter", "param", "txparam", "pbrparameter", "pbrparameters"};
     for (size_t i = 0; i < strings.size(); ++i) {
         std::string low = lower_copy(strings[i]);
         bool typed = low.rfind("m.", 0) == 0 || low.find(".m.") != std::string::npos;
         if (!typed) {
-            for (const char* item : types) {
+            for (const char* item : types)
                 if (low == item) typed = true;
-            }
         }
         if (typed && material.empty()) material = strings[i];
         std::string next = i + 1 < strings.size() ? strings[i + 1] : "";
         if (is_env(strings[i]) || is_env(next)) continue;
-        if ((low == "txalbedo" || low == "albedo" || low == "txdiffuse" || low == "diffuse" || low == "texture0") &&
-            !next.empty() && albedo.empty()) {
-            albedo = next;
-        } else if (strings[i].size() >= 8 &&
-                   (strings[i].find(".texture") != std::string::npos || strings[i].find(".tga") != std::string::npos ||
-                    strings[i].find(".png") != std::string::npos || strings[i].find(".jpg") != std::string::npos)) {
-            bool normal = low.find("normal") != std::string::npos || low.find("_n.") != std::string::npos;
-            bool param = low.find("parameter") != std::string::npos || low.find("_p.") != std::string::npos;
-            if (!normal && !param && albedo.empty() && !is_env(strings[i])) albedo = strings[i];
+        if ((low == "txalbedo" || low == "albedo" || low == "txdiffuse" || low == "diffuse" || low == "texture0") && !next.empty() && albedo.empty()) albedo = next;
+        else if ((low == "txnormal" || low == "normal" || low == "normalmap") && !next.empty() && normal.empty()) normal = next;
+        else if (parameter.empty() && !next.empty()) {
+            for (const char* label : param_labels)
+                if (low == label) parameter = next;
+        } else if (strings[i].size() >= 8 && (strings[i].find(".texture") != std::string::npos || strings[i].find(".tga") != std::string::npos || strings[i].find(".png") != std::string::npos || strings[i].find(".jpg") != std::string::npos)) {
+            const bool is_normal = low.find("normal") != std::string::npos || low.find("_n.") != std::string::npos || low.size() >= 10 && low.rfind("_n.texture") == low.size() - 10;
+            const bool is_param = low.find("parameter") != std::string::npos || low.find("_p.") != std::string::npos || low.find("-p.") != std::string::npos;
+            if (is_normal && normal.empty()) normal = strings[i];
+            else if (is_param && parameter.empty() && !is_env(strings[i])) parameter = strings[i];
+            else if (!is_normal && !is_param && albedo.empty() && !is_env(strings[i])) albedo = strings[i];
         }
     }
 }
@@ -211,6 +214,8 @@ struct Hit {
     int index_size = 0;
     size_t tail = 0;
     std::string albedo;
+    std::string normal;
+    std::string parameter;
     std::string material;
     bool set = false;
 };
@@ -264,7 +269,9 @@ bool try_decode(const uint8_t* data, size_t size, size_t fmt_end, const std::str
                     auto strings = extract_strings(data, tail, std::min(size, tail + 4096));
                     std::string material;
                     std::string albedo;
-                    pick_textures(strings, material, albedo);
+                    std::string normal;
+                    std::string parameter;
+                    pick_textures(strings, material, albedo, normal, parameter);
                     if (!albedo.empty() || !material.empty()) score += 12;
                     if (!best.set || score > best.score) {
                         best.set = true;
@@ -278,6 +285,8 @@ bool try_decode(const uint8_t* data, size_t size, size_t fmt_end, const std::str
                         best.index_size = index_size;
                         best.tail = tail;
                         best.albedo = albedo;
+                        best.normal = normal;
+                        best.parameter = parameter;
                         best.material = material;
                     }
                     if (be && token_stride == static_cast<int>(stride) && score >= 45) done = true;
@@ -288,14 +297,22 @@ bool try_decode(const uint8_t* data, size_t size, size_t fmt_end, const std::str
     if (!best.set) return false;
     mesh.format = fmt_text;
     mesh.albedo = best.albedo;
+    mesh.normal_map = best.normal;
+    mesh.parameter_map = best.parameter;
     mesh.material_type = best.material;
     mesh.positions.resize(static_cast<size_t>(best.vc) * 3);
+    mesh.normals.resize(static_cast<size_t>(best.vc) * 3);
     mesh.uvs.resize(static_cast<size_t>(best.vc) * 2);
     for (int v = 0; v < best.vc; ++v) {
         const uint8_t* src = data + best.vertex_offset + static_cast<size_t>(v) * best.stride;
         mesh.positions[v * 3] = rd_f32(src + best.fmt.position);
         mesh.positions[v * 3 + 1] = rd_f32(src + best.fmt.position + 4);
         mesh.positions[v * 3 + 2] = rd_f32(src + best.fmt.position + 8);
+        if (best.fmt.normal >= 0) {
+            mesh.normals[v * 3] = rd_f32(src + best.fmt.normal);
+            mesh.normals[v * 3 + 1] = rd_f32(src + best.fmt.normal + 4);
+            mesh.normals[v * 3 + 2] = rd_f32(src + best.fmt.normal + 8);
+        }
         if (best.fmt.uv >= 0) {
             mesh.uvs[v * 2] = rd_f32(src + best.fmt.uv);
             mesh.uvs[v * 2 + 1] = 1.f - rd_f32(src + best.fmt.uv + 4);
@@ -311,6 +328,154 @@ bool try_decode(const uint8_t* data, size_t size, size_t fmt_end, const std::str
 }
 
 }  // namespace
+
+namespace tzmf_detail {
+
+bool read_le_cstr(const uint8_t* data, size_t size, size_t pos, std::string& out, size_t& next) {
+    if (pos + 4 > size) return false;
+    const uint32_t n = rd_u32(data + pos);
+    if (n < 2 || n > 512 || pos + 4 + n > size) return false;
+    const uint8_t* raw = data + pos + 4;
+    if (raw[n - 1] != 0) return false;
+    for (uint32_t i = 0; i + 1 < n; ++i) {
+        if (raw[i] < 32 || raw[i] >= 127) return false;
+    }
+    out.assign(reinterpret_cast<const char*>(raw), n - 1);
+    next = pos + 4 + n;
+    return true;
+}
+
+struct MatHit {
+    size_t off = 0;
+    std::string type;
+    std::string name;
+};
+
+std::vector<MatHit> scan_material_blocks(const uint8_t* data, size_t size) {
+    const char* types[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "stdonetex", "glass", "clutter", "foliage"};
+    std::vector<MatHit> hits;
+    for (size_t i = 0; i + 8 < size; ++i) {
+        std::string type;
+        size_t after = 0;
+        if (!read_le_cstr(data, size, i, type, after)) continue;
+        bool known = false;
+        for (const char* item : types) {
+            if (type == item) known = true;
+        }
+        if (!known) continue;
+        std::string name;
+        size_t cursor = 0;
+        if (!read_le_cstr(data, size, after, name, cursor)) continue;
+        if (name.find(".m.") == std::string::npos) continue;
+        if (cursor + 25 > size) continue;
+        if (std::memcmp(data + cursor, "\0\0\0\0", 4) != 0 || data[cursor + 4] != 1) continue;
+        const uint32_t count = rd_u32be(data + cursor + 21);
+        if (count == 0 || count > 32) continue;
+        hits.push_back({i, type, name});
+        i = after;
+    }
+    return hits;
+}
+
+void bind_material_names(const uint8_t* data, size_t size, TrainzMesh& mesh) {
+    const std::vector<MatHit> hits = scan_material_blocks(data, size);
+    for (SubMesh& sub : mesh.submeshes) {
+        for (const MatHit& hit : hits) {
+            if (hit.off != sub.tail_off) continue;
+            sub.name = hit.name;
+            sub.material_type = hit.type;
+            break;
+        }
+    }
+}
+
+float rd_f32be(const uint8_t* p) {
+    const uint8_t swapped[4] = {p[3], p[2], p[1], p[0]};
+    return rd_f32(swapped);
+}
+
+std::vector<TzMaterial> scan_tzmf_materials(const uint8_t* data, size_t size) {
+    std::vector<TzMaterial> out;
+    if (!data || size < 16) return out;
+    for (size_t i = 0; i + 8 < size; ++i) {
+        std::string type;
+        size_t after = 0;
+        if (!read_le_cstr(data, size, i, type, after)) continue;
+        const char* types[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "stdonetex", "glass", "clutter", "foliage"};
+        bool known = false;
+        for (const char* item : types)
+            if (type == item) known = true;
+        if (!known) continue;
+        std::string name;
+        size_t cursor = 0;
+        if (!read_le_cstr(data, size, after, name, cursor)) continue;
+        if (name.find(".m.") == std::string::npos) continue;
+        if (cursor + 25 > size) continue;
+        if (std::memcmp(data + cursor, "\0\0\0\0", 4) != 0 || data[cursor + 4] != 1) continue;
+        const uint32_t count = rd_u32be(data + cursor + 21);
+        if (count == 0 || count > 32) continue;
+        TzMaterial mat;
+        mat.type_name = type;
+        mat.name = name;
+        mat.type_off = i;
+        mat.name_off = after;
+        mat.color_off = cursor + 5;
+        for (int c = 0; c < 4; ++c) mat.color[c] = rd_f32be(data + mat.color_off + static_cast<size_t>(c) * 4);
+        size_t p = cursor + 25;
+        bool ok = true;
+        for (uint32_t n = 0; n < count; ++n) {
+            TzTex slot;
+            size_t next = 0;
+            if (!read_le_cstr(data, size, p, slot.key, next)) {
+                ok = false;
+                break;
+            }
+            slot.value_off = next;
+            if (!read_le_cstr(data, size, next, slot.value, p)) {
+                ok = false;
+                break;
+            }
+            mat.textures.push_back(std::move(slot));
+        }
+        if (!ok) continue;
+        if (p + 4 <= size && rd_u32be(data + p) == 3) {
+            p += 4;
+            for (int n = 0; n < 4 && p + 4 < size; ++n) {
+                std::string key;
+                size_t p2 = 0;
+                if (!read_le_cstr(data, size, p, key, p2)) break;
+                if ((key == "matEmissive" || key == "matSpecular") && p2 + 22 <= size && std::memcmp(data + p2, "\x07\0\0\0\0\x01", 6) == 0) {
+                    float* dest = key == "matEmissive" ? mat.emissive : mat.specular;
+                    if (key == "matEmissive") mat.emissive_off = static_cast<int>(p2 + 6);
+                    else mat.specular_off = static_cast<int>(p2 + 6);
+                    for (int c = 0; c < 4; ++c) dest[c] = rd_f32(data + p2 + 6 + static_cast<size_t>(c) * 4);
+                    p = p2 + 22;
+                } else if (key == "specPower" && p2 + 10 <= size && std::memcmp(data + p2, "\0\0\0\0\0\x01", 6) == 0) {
+                    mat.spec_power = rd_f32(data + p2 + 6);
+                    mat.spec_power_off = static_cast<int>(p2 + 6);
+                    break;
+                } else break;
+            }
+        }
+        const size_t win = i > 2000000 ? i - 2000000 : 0;
+        std::string vfmt;
+        for (size_t s = win; s + 4 < i; ++s) {
+            if (data[s] != 'S' || data[s + 1] < '0' || data[s + 1] > '9') continue;
+            size_t k = s;
+            while (k < i && (std::isalnum(data[k]) || data[k] == '_')) ++k;
+            std::string text(reinterpret_cast<const char*>(data + s), k - s);
+            if (text.find("P3f") != std::string::npos) vfmt = text;
+        }
+        mat.vertex_format = vfmt;
+        out.push_back(std::move(mat));
+        i = after;
+    }
+    return out;
+}
+
+}  // namespace tzmf_detail
+
+std::vector<TzMaterial> parse_tzmf_materials(const uint8_t* data, size_t size) { return tzmf_detail::scan_tzmf_materials(data, size); }
 
 TrainzMesh parse_trainzmesh(const uint8_t* data, size_t size) {
     if (size < 20 || std::memcmp(data, "tzMF", 4) != 0) throw std::runtime_error("Not a tzMF .trainzmesh file");
@@ -345,11 +510,13 @@ TrainzMesh parse_trainzmesh(const uint8_t* data, size_t size) {
         }
         if (overlap) continue;
         seen.emplace_back(start, end);
+        sub.tail_off = end;
         sub.name = "mesh_" + std::to_string(mesh.submeshes.size());
         mesh.submeshes.push_back(std::move(sub));
         if (limit && static_cast<int>(mesh.submeshes.size()) >= limit) break;
         i = k - 1;
     }
     if (mesh.submeshes.empty()) throw std::runtime_error("Failed to decode any tzMF vertex/index buffers");
+    tzmf_detail::bind_material_names(data, size, mesh);
     return mesh;
 }

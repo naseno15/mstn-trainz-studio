@@ -1,6 +1,12 @@
 #include "chump.h"
 
 #include "bin.h"
+#include "kuid.h"
+
+#include <cstdio>
+#include <deque>
+#include <regex>
+#include <sstream>
 
 static std::string utf8_lossy(const uint8_t* data, size_t size) {
     std::string out;
@@ -142,4 +148,250 @@ const ChumpTag* find_tag(const std::vector<ChumpTag>& tags, const std::string& n
         if (tag.name == name) return &tag;
     }
     return nullptr;
+}
+
+static std::string pad_name(const std::string& indent, const std::string& name) {
+    const std::string left = indent + name;
+    const int spaces = 40 - static_cast<int>(left.size());
+    if (spaces < 2) return left + "  ";
+    return left + std::string(static_cast<size_t>(spaces), ' ');
+}
+
+static std::string float_token(float value) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%g", static_cast<double>(value));
+    std::string text = buf;
+    const auto lower = text;
+    if (text.find('.') == std::string::npos && lower.find('e') == std::string::npos && lower.find('E') == std::string::npos) text += ".0";
+    return text;
+}
+
+static void write_text_tag(std::vector<std::string>& lines, const ChumpTag& tag, int depth) {
+    const std::string indent(static_cast<size_t>(depth) * 2, ' ');
+    if (tag.type == ChumpType::Null || tag.type == ChumpType::Raw) return;
+    if (tag.type == ChumpType::Soup) {
+        lines.push_back(indent + tag.name);
+        lines.push_back(indent + "{");
+        for (const ChumpTag& child : tag.children) write_text_tag(lines, child, depth + 1);
+        lines.push_back(indent + "}");
+        return;
+    }
+    const std::string prefix = pad_name(indent, tag.name);
+    if (tag.type == ChumpType::Text) {
+        lines.push_back(prefix + "\"" + tag.text + "\"");
+        return;
+    }
+    if (tag.type == ChumpType::Int) {
+        std::string joined;
+        for (size_t i = 0; i < tag.ints.size(); ++i) {
+            if (i) joined += ',';
+            joined += std::to_string(tag.ints[i]);
+        }
+        lines.push_back(prefix + joined);
+        return;
+    }
+    if (tag.type == ChumpType::Float) {
+        std::string joined;
+        for (size_t i = 0; i < tag.floats.size(); ++i) {
+            if (i) joined += ',';
+            joined += float_token(tag.floats[i]);
+        }
+        lines.push_back(prefix + joined);
+        return;
+    }
+    if (tag.type == ChumpType::Kuid && tag.raw.size() >= 8) lines.push_back(prefix + bytes_to_kuid(tag.raw.data(), tag.raw.size()));
+}
+
+std::string chump_to_text(const ChumpFile& file) {
+    std::vector<std::string> lines;
+    for (size_t i = 0; i < file.root.size(); ++i) {
+        if (file.root[i].type == ChumpType::Soup && i > 0) lines.emplace_back();
+        write_text_tag(lines, file.root[i], 0);
+    }
+    std::string out;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i) out += '\n';
+        out += lines[i];
+    }
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' ')) out.pop_back();
+    out += '\n';
+    return out;
+}
+
+static bool token_int(const std::string& text) {
+    static const std::regex re(R"(^[-+]?\d+$)");
+    return std::regex_match(text, re);
+}
+
+static bool token_float(const std::string& text) {
+    static const std::regex re(R"(^[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?$)");
+    return std::regex_match(text, re);
+}
+
+static std::string trim_copy(std::string text) {
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r')) text.erase(text.begin());
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r')) text.pop_back();
+    return text;
+}
+
+static bool name_only(const std::string& text) {
+    if (text.empty()) return false;
+    for (char c : text) {
+        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+static void push_value(std::deque<ChumpTag>& list, const std::string& name, const std::string& value) {
+    ChumpTag tag;
+    tag.name = name;
+    const auto lower = value.size() >= 5 ? value.substr(0, 5) : value;
+    std::string head = lower;
+    for (char& c : head) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    if (head.rfind("<kuid", 0) == 0) {
+        const auto raw = parse_kuid_string(value);
+        if (!raw) throw std::runtime_error("bad kuid: " + value);
+        tag.type = ChumpType::Kuid;
+        tag.raw = *raw;
+        list.push_back(std::move(tag));
+        return;
+    }
+    if (value.find(',') != std::string::npos) {
+        std::vector<std::string> parts;
+        std::stringstream stream(value);
+        std::string part;
+        while (std::getline(stream, part, ',')) {
+            part = trim_copy(part);
+            if (!part.empty()) parts.push_back(part);
+        }
+        bool all_int = !parts.empty();
+        bool all_float = !parts.empty();
+        for (const std::string& one : parts) {
+            all_int = all_int && token_int(one);
+            all_float = all_float && token_float(one);
+        }
+        if (all_int) {
+            tag.type = ChumpType::Int;
+            for (const std::string& one : parts) tag.ints.push_back(std::stoi(one));
+            list.push_back(std::move(tag));
+            return;
+        }
+        if (all_float) {
+            tag.type = ChumpType::Float;
+            for (const std::string& one : parts) tag.floats.push_back(std::stof(one));
+            list.push_back(std::move(tag));
+            return;
+        }
+    }
+    if (token_float(value)) {
+        tag.type = ChumpType::Float;
+        tag.floats.push_back(std::stof(value));
+        list.push_back(std::move(tag));
+        return;
+    }
+    if (token_int(value)) {
+        tag.type = ChumpType::Int;
+        tag.ints.push_back(std::stoi(value));
+        list.push_back(std::move(tag));
+        return;
+    }
+    tag.type = ChumpType::Text;
+    tag.text = value;
+    list.push_back(std::move(tag));
+}
+
+static void copy_level(const std::deque<ChumpTag>& from, std::vector<ChumpTag>& into) {
+    for (const ChumpTag& tag : from) {
+        ChumpTag copy = tag;
+        copy.children.clear();
+        copy_level(std::deque<ChumpTag>(tag.children.begin(), tag.children.end()), copy.children);
+        into.push_back(std::move(copy));
+    }
+}
+
+ChumpFile text_to_chump(const std::string& text) {
+    std::deque<std::deque<ChumpTag>> levels;
+    levels.emplace_back();
+    std::vector<std::deque<ChumpTag>*> stack{&levels.back()};
+    std::string pending;
+    std::string multiline_name;
+    std::string multiline_value;
+    std::stringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!multiline_name.empty()) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const std::string trimmed = trim_copy(line);
+            const bool closes = !trimmed.empty() && trimmed.back() == '"';
+            std::string part = line;
+            if (closes) {
+                const size_t quote = part.find_last_of('"');
+                part.erase(quote);
+            }
+            multiline_value += '\n';
+            multiline_value += part;
+            if (closes) {
+                push_value(*stack.back(), multiline_name, multiline_value);
+                multiline_name.clear();
+                multiline_value.clear();
+            }
+            continue;
+        }
+        line = trim_copy(line);
+        if (line.empty()) continue;
+        if (line == "}") {
+            if (stack.size() <= 1) throw std::runtime_error("extra '}' in chump text");
+            auto* kids = stack.back();
+            stack.pop_back();
+            stack.back()->back().children.assign(kids->begin(), kids->end());
+            pending.clear();
+            continue;
+        }
+        if (line == "{") {
+            if (pending.empty()) throw std::runtime_error("unexpected '{' in chump text");
+            levels.emplace_back();
+            ChumpTag soup;
+            soup.name = pending;
+            soup.type = ChumpType::Soup;
+            stack.back()->push_back(std::move(soup));
+            stack.push_back(&levels.back());
+            pending.clear();
+            continue;
+        }
+        if (line.size() > 2 && line.ends_with(" {")) {
+            levels.emplace_back();
+            ChumpTag soup;
+            soup.name = trim_copy(line.substr(0, line.size() - 2));
+            soup.type = ChumpType::Soup;
+            stack.back()->push_back(std::move(soup));
+            stack.push_back(&levels.back());
+            pending.clear();
+            continue;
+        }
+        if (name_only(line)) {
+            pending = line;
+            continue;
+        }
+        const auto gap = line.find_first_of(" \t");
+        if (gap == std::string::npos) throw std::runtime_error("bad chump line");
+        const std::string name = line.substr(0, gap);
+        std::string value = trim_copy(line.substr(gap + 1));
+        if (!value.empty() && value.front() == '"' && (value.size() == 1 || value.back() != '"')) {
+            multiline_name = name;
+            multiline_value = value.substr(1);
+            pending.clear();
+            continue;
+        }
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') value = value.substr(1, value.size() - 2);
+        push_value(*stack.back(), name, value);
+        pending.clear();
+    }
+    if (!multiline_name.empty()) throw std::runtime_error("unclosed quote in chump text");
+    if (stack.size() != 1) throw std::runtime_error("unclosed '{' in chump text");
+    ChumpFile file;
+    copy_level(levels.front(), file.root);
+    return file;
 }

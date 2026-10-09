@@ -33,3 +33,5 @@ struct ChumpFile {
 ChumpFile read_chump(const uint8_t* data, size_t size);
 std::vector<uint8_t> encode_chump(const ChumpFile& file);
 const ChumpTag* find_tag(const std::vector<ChumpTag>& tags, const std::string& name);
+std::string chump_to_text(const ChumpFile& file);
+ChumpFile text_to_chump(const std::string& text);
