@@ -1,8 +1,0 @@
-numpy>=1.26
-PySide6_Essentials>=6.6
-PyOpenGL>=3.1.7
-Pillow>=10.0.0
-matplotlib>=3.8
-opencv-contrib-python-headless>=4.8
-# optional — CUDA lamp bake (RTX): needs headers for RawKernel
-# pip install "cupy-cuda12x[ctk]"

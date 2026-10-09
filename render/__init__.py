@@ -1,1 +1,0 @@
-﻿"""OpenGL preview + environment / HDRI."""

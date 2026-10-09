@@ -1,1 +1,0 @@
-﻿"""Hardware / thread helpers."""

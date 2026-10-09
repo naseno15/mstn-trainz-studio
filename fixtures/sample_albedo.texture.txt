@@ -1,4 +1,0 @@
-Primary=sample_albedo.png
-Alpha=
-Tile=st
-UsageHint=albedo

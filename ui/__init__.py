@@ -1,1 +1,0 @@
-﻿"""Qt shell / chrome / docks."""
