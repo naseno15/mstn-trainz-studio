@@ -95,8 +95,7 @@ def read_chump(path: Path | bytes) -> ChumpFile:
     return ChumpFile(version=version, reserved=reserved, root=root)
 
 
-def write_chump(path: Path, chump: ChumpFile) -> Path:
-    path = Path(path)
+def encode_chump(chump: ChumpFile) -> bytes:
     body = bytearray()
     for tag in chump.root:
         body.extend(_encode_tag(tag))
@@ -105,7 +104,12 @@ def write_chump(path: Path, chump: ChumpFile) -> Path:
     out.extend(struct.pack("<II", chump.version, chump.reserved))
     out.extend(struct.pack("<I", len(body)))
     out.extend(body)
-    path.write_bytes(out)
+    return bytes(out)
+
+
+def write_chump(path: Path, chump: ChumpFile) -> Path:
+    path = Path(path)
+    path.write_bytes(encode_chump(chump))
     return path
 
 
