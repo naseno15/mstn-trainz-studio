@@ -9,7 +9,21 @@ from dataclasses import dataclass, field
 from .throttle_round import normalize_points
 
 G = 9.80665
-HP_PER_KW = 1.0 / 0.746
+HP_PER_KW = 1.0 / 0.746  # metric horsepower, 1 hp = 0.746 kW
+
+
+def format_power(kw: float, unit: str) -> str:
+    shown = kw * HP_PER_KW if unit == "HP" else kw
+    text = f"{shown:.1f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def parse_power_kw(shown: float, unit: str) -> float:
+    if unit == "HP":
+        return shown / HP_PER_KW
+    return shown
 MPS_PER_MPH = 0.44704
 LBF_TO_KN = 4.448221615 / 1000.0  # 1 lbf → kN
 M2_TO_FT2 = 10.76391041671
@@ -275,6 +289,9 @@ def self_check() -> None:
     n8 = curves[8]
     assert abs(n8[0][0]) < 1e-9
     assert abs(n8[0][1] - 250.0) < 0.5  # adhesion-capped at standstill
+    assert format_power(2000.0, "kW") == "2000"
+    assert format_power(2000.0, "HP") == "2681"
+    assert abs(parse_power_kw(2681.0, "HP") - 2000.0) < 1.0
     assert n8[-1][1] == 0.0
     assert n8[-1][0] * 3.6 == 120.0 or abs(n8[-1][0] * 3.6 - 120.0) < 0.05
     # lower notch has less (or equal) TE at same mid speed
