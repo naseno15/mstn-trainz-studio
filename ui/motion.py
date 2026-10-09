@@ -21,6 +21,7 @@ from PySide6.QtGui import (
     QCursor,
     QFont,
     QFontMetrics,
+    QHelpEvent,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -30,8 +31,11 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractItemView,
     QApplication,
     QGraphicsOpacityEffect,
+    QLabel,
+    QMenu,
     QPushButton,
     QStackedWidget,
     QToolButton,
@@ -474,7 +478,7 @@ class GlassTipBubble(QWidget):
             return ui_font(point_size=9, weight=QFont.Weight.Medium)
         except Exception:
             f = QFont()
-            f.setFamilies(["Noto Sans Thai Looped", "Noto Sans", "Segoe UI"])
+            f.setFamilies(["Noto Sans", "Segoe UI"])
             f.setPointSize(9)
             f.setWeight(QFont.Weight.Medium)
             return f
@@ -585,6 +589,7 @@ class ButtonHoverChrome(QObject):
     def __init__(self) -> None:
         super().__init__()
         self._btn: QWidget | None = None
+        self._qt_tip_owner: QWidget | None = None
         self._installed = False
         self._tip_timer = QTimer(self)
         self._tip_timer.setSingleShot(True)
@@ -614,12 +619,27 @@ class ButtonHoverChrome(QObject):
         """Force-hide bubble/tip — call when buttons are rebuilt/destroyed."""
         self._tip_timer.stop()
         self._hide_timer.stop()
+        self._qt_tip_owner = None
         self._hide_now()
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        # Native QToolTip is a flat rect that fades in Qt's own style.
+        # Every tooltip in the app uses the same caret bubble instead.
+        if et == QEvent.Type.ToolTip and isinstance(obj, QWidget):
+            self._on_qt_tooltip(obj, event)
+            return True
+        if obj is self._qt_tip_owner and et in (
+            QEvent.Type.Leave,
+            QEvent.Type.Hide,
+            QEvent.Type.HideToParent,
+            QEvent.Type.Wheel,
+            QEvent.Type.MouseButtonPress,
+        ):
+            self._qt_tip_owner = None
+            self._hide_tip_only()
         if not isinstance(obj, (QPushButton, QToolButton)):
             return False
-        et = event.type()
         # Hide / destroy must clear chrome even if the button is already disabled.
         if et in (QEvent.Type.Hide, QEvent.Type.HideToParent, QEvent.Type.Destroy):
             if self._btn is obj or (
@@ -814,25 +834,123 @@ class ButtonHoverChrome(QObject):
         br = self._btn_rect_in_window(btn)
         if br is None:
             return
+        self._place_tip(window, tip, text, br)
+
+    def _place_tip(self, window: QWidget, tip: GlassTipBubble, text: str, anchor: QRect) -> None:
+        """Pop the bubble out of the anchor. Never morph size while sliding sideways."""
+        tip.setProperty("glassDark", _glass_dark_of(window))
         tip.set_tip(text, caret_down=True)
-        tx = br.center().x() - tip.width() // 2
-        ty = br.top() - tip.height() - 4
+        tx = anchor.center().x() - tip.width() // 2
+        ty = anchor.top() - tip.height() - 6
+        caret_down = True
         if ty < 4:
             tip.set_tip(text, caret_down=False)
-            ty = br.bottom() + 4
+            ty = anchor.bottom() + 6
+            caret_down = False
         tx = max(4, min(tx, window.width() - tip.width() - 4))
+        ty = max(4, min(ty, window.height() - tip.height() - 4))
         target = QRect(tx, ty, tip.width(), tip.height())
-        first = not tip.isVisible()
+        key = (tip._text, tx, ty, caret_down)
+        if tip.isVisible() and getattr(tip, "_place_key", None) == key:
+            return
+        tip._place_key = key  # type: ignore[attr-defined]
+        self._pop_bubble(tip, target, caret_down=caret_down)
+
+    def _pop_bubble(self, tip: GlassTipBubble, target: QRect, *, caret_down: bool) -> None:
+        """Grow from the caret so the tip reads as a bubble, not a sliding strip."""
         stop_slide(tip)
-        if first:
-            tip.move(tx, ty + 8)
-            tip.show()
-            tip.raise_()
-            slide_to(tip, target, 240, easing=QEasingCurve.Type.OutCubic)
+        stop_pop(tip)
+        anchor = QPoint(
+            target.center().x(),
+            target.bottom() if caret_down else target.top(),
+        )
+        start = QRect(0, 0, max(18, target.width() // 3), max(14, target.height() // 3))
+        start.moveLeft(anchor.x() - start.width() // 2)
+        if caret_down:
+            start.moveBottom(anchor.y())
         else:
-            tip.show()
-            tip.raise_()
-            slide_to(tip, target, 200, easing=QEasingCurve.Type.OutCubic)
+            start.moveTop(anchor.y())
+        tip.setGeometry(start)
+        tip.show()
+        tip.raise_()
+        # Opacity lives on the tip only — never on MainWindow (GL freeze).
+        eff = _ensure_opacity(tip)
+        eff.setOpacity(0.0)
+        op = QPropertyAnimation(eff, b"opacity", tip)
+        op.setDuration(120)
+        op.setStartValue(0.0)
+        op.setEndValue(1.0)
+        op.setEasingCurve(QEasingCurve.Type.OutCubic)
+        geo = QPropertyAnimation(tip, b"geometry", tip)
+        geo.setDuration(170)
+        geo.setStartValue(start)
+        geo.setEndValue(target)
+        geo.setEasingCurve(QEasingCurve.Type.OutBack)
+        tip._slide_anim = geo  # type: ignore[attr-defined]
+        tip._pop_anim = op  # type: ignore[attr-defined]
+
+        def _clear_geo() -> None:
+            if getattr(tip, "_slide_anim", None) is geo:
+                tip._slide_anim = None  # type: ignore[attr-defined]
+
+        def _clear_op() -> None:
+            if getattr(tip, "_pop_anim", None) is op:
+                tip._pop_anim = None  # type: ignore[attr-defined]
+
+        geo.finished.connect(_clear_geo)
+        op.finished.connect(_clear_op)
+        geo.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        op.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _qt_tip_target(self, obj: QWidget, event: QHelpEvent) -> tuple[str, QRect | None]:
+        """Tooltip string plus the rect (in obj coords) the caret should point at."""
+        parent = obj.parentWidget()
+        if isinstance(parent, QAbstractItemView) and obj is parent.viewport():
+            idx = parent.indexAt(event.pos())
+            if not idx.isValid():
+                return "", None
+            raw = idx.data(Qt.ItemDataRole.ToolTipRole)
+            return str(raw or "").strip(), parent.visualRect(idx)
+        if isinstance(obj, QMenu):
+            act = obj.actionAt(event.pos())
+            if act is None:
+                return "", None
+            text = (act.toolTip() or "").strip()
+            label = act.text().split("\t", 1)[0].replace("&", "").strip()
+            if not text or text == label:
+                return "", None
+            return text, obj.actionGeometry(act)
+        text = (obj.toolTip() or "").strip()
+        if isinstance(obj, QAbstractButton):
+            label = obj.text().replace("&", "").split("\t", 1)[0].strip()
+            if text == label:
+                return "", None
+        elif isinstance(obj, QLabel) and text == obj.text().strip():
+            return "", None
+        if not text:
+            return "", None
+        return text, QRect(0, 0, obj.width(), obj.height())
+
+    def _on_qt_tooltip(self, obj: QWidget, event: QEvent) -> None:
+        if not isinstance(event, QHelpEvent):
+            return
+        # Icon chrome already draws this button's tip on hover.
+        if str(obj.property("glassTip") or "").strip():
+            return
+        window = obj.window()
+        if window is None:
+            return
+        text, local = self._qt_tip_target(obj, event)
+        text = short_glass_tip(text)
+        if not text or local is None or local.width() < 2 or local.height() < 2:
+            if self._qt_tip_owner is obj:
+                self._qt_tip_owner = None
+                self._hide_tip_only()
+            return
+        anchor = QRect(obj.mapTo(window, local.topLeft()), local.size())
+        _hl, tip = self._overlays(window)
+        self._qt_tip_owner = obj
+        self._place_tip(window, tip, text, anchor)
 
     def _hide_tip_only(self) -> None:
         app = QApplication.instance()
@@ -842,6 +960,8 @@ class ButtonHoverChrome(QObject):
             tip = getattr(win, "_icon_glass_tip", None)
             if isinstance(tip, GlassTipBubble):
                 stop_slide(tip)
+                stop_pop(tip)
+                tip._place_key = None  # type: ignore[attr-defined]
                 tip.hide()
 
     def _hide_now(self) -> None:
@@ -858,6 +978,8 @@ class ButtonHoverChrome(QObject):
                     hl.hide()
                 if isinstance(tip, GlassTipBubble):
                     stop_slide(tip)
+                    stop_pop(tip)
+                    tip._place_key = None  # type: ignore[attr-defined]
                     tip.hide()
         if _qt_alive(btn):
             try:
