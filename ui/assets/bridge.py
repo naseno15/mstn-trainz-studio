@@ -38,7 +38,7 @@ _CENTER = {
     ),
     "parameter": (
         "Parameter map",
-        "R=Emissive · G=Roughness · B=AO · A=Metallic — edits stay in memory until Save.",
+        "Top: ticked channels overlaid. Bottom: drop a gray image on a channel to replace it.",
     ),
     "denoise": (
         "Bake Denoise",
@@ -73,6 +73,10 @@ _SPLIT_LABELS = {
 _DOCK_GLYPH = {
     "paramOpen": "file_open",
     "paramSave": "save",
+    "exportR": "save_as",
+    "exportG": "save_as",
+    "exportB": "save_as",
+    "exportA": "save_as",
     "paramUndo": "undo",
     "paramRedo": "redo",
     "paramRevert": "history",
@@ -216,7 +220,7 @@ class AssetsBridge(QObject):
         self._brand = side._brand.text()
         self._page_title = t(_PAGE_TITLES[page])
         self._blurb = side._blurb.text()
-        self._show_queue = page == "packages"
+        self._show_queue = page in ("packages", "parameter")
         flags = getattr(side, "_action_enabled", {})
         rows = []
         for label, action, accent in _ACTIONS.get(page, []):
@@ -248,10 +252,16 @@ class AssetsBridge(QObject):
                     }
                 )
         self._footer = json.dumps(foot)
+        if page == "parameter":
+            self._footer_cap = t("Parameter maps")
+            self._foot_note = t("Drop images on the table. Click a row to edit.")
+            remove_tip, clear_tip = t("Remove map"), t("Clear maps")
+        else:
+            remove_tip, clear_tip = t("Remove"), t("Clear queue")
         self._queue_btns = json.dumps(
             [
-                {"id": "remove", "glyph": glyph("delete"), "tip": t("Remove"), "accent": False},
-                {"id": "clear", "glyph": glyph("clear"), "tip": t("Clear queue"), "accent": False},
+                {"id": "remove", "glyph": glyph("delete"), "tip": remove_tip, "accent": False},
+                {"id": "clear", "glyph": glyph("clear"), "tip": clear_tip, "accent": False},
             ]
         )
         self._bump()
@@ -374,10 +384,16 @@ class AssetsBridge(QObject):
 
     @Slot()
     def queueRemove(self) -> None:
+        if self._page == "parameter":
+            self._host.param_page.remove_selected_maps()
+            return
         self._host.packages_page.remove_selected_queue()
 
     @Slot()
     def queueClear(self) -> None:
+        if self._page == "parameter":
+            self._host.param_page.clear_maps()
+            return
         self._host.packages_page.clear_queue()
 
     @Slot(float)
@@ -413,6 +429,15 @@ class AssetsBridge(QObject):
     @Slot(float, float, float, float)
     def placeQueue(self, x: float, y: float, w: float, h: float) -> None:
         rail = self._host.packages_page.queue_rail
+        strip = getattr(getattr(self._host, "param_page", None), "strip_rail", None)
+        if self._page == "parameter" and self._show_queue and strip is not None:
+            rail.hide()
+            if strip.parent() is not self._host:
+                strip.setParent(self._host)
+            self._place(strip, x, y, w, h, hide_small=True)
+            return
+        if strip is not None:
+            strip.hide()
         if not self._show_queue:
             rail.hide()
             return
@@ -642,7 +667,9 @@ class AssetsBridge(QObject):
             blocks = self._mesh_blocks()
         elif kind == "parameter":
             title = "Texture Editor"
-            blocks = self._param_blocks()
+            tabs = ["Adjust", "Overlay", "Paint", "Export"]
+            tab = int(host.param_page._tool_tab)
+            blocks = self._param_blocks(tab)
         elif kind == "denoise":
             title = "Texture Denoiser"
             blocks = self._denoise_blocks()
@@ -778,8 +805,107 @@ class AssetsBridge(QObject):
             self._field("lmAtt", "attachCutOff", f"{host.lm_att.value():.3f}"),
         ]
 
-    def _param_blocks(self) -> list[dict]:
+    def _param_blocks(self, tab: int) -> list[dict]:
         page = self._host.param_page
+        tail: list[dict] = [
+            {
+                "type": "buttons",
+                "items": [
+                    {"id": "paramUndo", "label": "Undo", "accent": False},
+                    {"id": "paramRedo", "label": "Redo", "accent": False},
+                    {"id": "paramRevert", "label": "Revert", "accent": False},
+                ],
+            },
+            {"type": "note", "text": page._stats.text()},
+            {"type": "buttons", "items": [{"id": "paramSave", "label": "Save (overwrite)", "accent": True}]},
+        ]
+        if tab == 1:
+            return [
+                {"type": "note", "text": page._path_lab.text()},
+                {"type": "section", "label": "OVERLAY"},
+                {
+                    "type": "pills",
+                    "id": "ovMode",
+                    "label": "Mode",
+                    "options": [page._ov_mode.itemText(i) for i in range(page._ov_mode.count())],
+                    "value": page._ov_mode.currentText(),
+                    "enabled": True,
+                },
+                {
+                    "type": "pills",
+                    "id": "ovSrc",
+                    "label": "Source",
+                    "options": [page._ov_src.itemText(i) for i in range(page._ov_src.count())],
+                    "value": page._ov_src.currentText(),
+                    "enabled": True,
+                },
+                self._field("ovOpacity", "Opacity", str(page._ov_opacity.value())),
+                {"type": "buttons", "items": [{"id": "paramOverlay", "label": "Overlay image…", "accent": False}]},
+                {"type": "note", "text": "Paint → Stamp uses this mode, source, and opacity."},
+                *tail,
+            ]
+        if tab == 2:
+            return [
+                {"type": "note", "text": page._path_lab.text()},
+                {
+                    "type": "pills",
+                    "id": "paintTool",
+                    "label": "Tool",
+                    "options": ["Brush", "Stamp", "Magic"],
+                    "value": page._paint_tool,
+                    "enabled": True,
+                },
+                {"type": "section", "label": "BRUSH"},
+                self._field("brush", "Radius", str(page._brush.value())),
+                self._field("paintVal", "Value", str(page._paint_val.value())),
+                self._field("hard", "Hardness", str(page._hard.value())),
+                {"type": "section", "label": "MAGIC"},
+                self._field("tol", "Tolerance", str(page._tol.value())),
+                self._check("contig", "Contiguous", page._contiguous),
+                {"type": "section", "label": "STAMP"},
+                {"type": "note", "text": page._stamp_lab.text()},
+                {
+                    "type": "buttons",
+                    "items": [
+                        {"id": "paramStamp", "label": "Apply stamp", "accent": True},
+                        {"id": "paramStampCancel", "label": "Cancel", "accent": False},
+                    ],
+                },
+                {"type": "buttons", "items": [{"id": "paramClearSel", "label": "Clear select", "accent": False}]},
+                *tail,
+            ]
+        if tab == 3:
+            return [
+                {"type": "note", "text": page._path_lab.text()},
+                {"type": "section", "label": "EXPORT"},
+                {
+                    "type": "note",
+                    "text": "Color writes the channel tint. Grey writes black and white.",
+                },
+                {
+                    "type": "pills",
+                    "id": "exportTone",
+                    "label": "Look",
+                    "options": ["Color", "Grey"],
+                    "value": page._export_tone,
+                    "enabled": True,
+                },
+                {
+                    "type": "buttons",
+                    "items": [
+                        {"id": "exportR", "label": "R Emissive", "accent": False},
+                        {"id": "exportG", "label": "G Roughness", "accent": False},
+                    ],
+                },
+                {
+                    "type": "buttons",
+                    "items": [
+                        {"id": "exportB", "label": "B AO", "accent": False},
+                        {"id": "exportA", "label": "A Metallic", "accent": False},
+                    ],
+                },
+                *tail,
+            ]
         blocks: list[dict] = [
             {"type": "note", "text": page._path_lab.text()},
             {"type": "buttons", "items": [{"id": "paramOpen", "label": "Open…", "accent": True}]},
@@ -817,40 +943,7 @@ class AssetsBridge(QObject):
                         {"id": "doInvert", "label": "Invert", "accent": False},
                     ],
                 },
-                {"type": "section", "label": "OVERLAY"},
-                {
-                    "type": "pills",
-                    "id": "ovMode",
-                    "label": "Mode",
-                    "options": [page._ov_mode.itemText(i) for i in range(page._ov_mode.count())],
-                    "value": page._ov_mode.currentText(),
-                    "enabled": True,
-                },
-                {
-                    "type": "pills",
-                    "id": "ovSrc",
-                    "label": "Source",
-                    "options": [page._ov_src.itemText(i) for i in range(page._ov_src.count())],
-                    "value": page._ov_src.currentText(),
-                    "enabled": True,
-                },
-                self._field("ovOpacity", "Opacity", str(page._ov_opacity.value())),
-                {"type": "buttons", "items": [{"id": "paramOverlay", "label": "Overlay image…", "accent": False}]},
-                {"type": "section", "label": "PAINT"},
-                self._check("paint", "Paint mode", page._paint_chk),
-                self._field("brush", "Radius", str(page._brush.value())),
-                self._field("paintVal", "Value", str(page._paint_val.value())),
-                self._field("hard", "Hardness", str(page._hard.value())),
-                {
-                    "type": "buttons",
-                    "items": [
-                        {"id": "paramUndo", "label": "Undo", "accent": False},
-                        {"id": "paramRedo", "label": "Redo", "accent": False},
-                        {"id": "paramRevert", "label": "Revert", "accent": False},
-                    ],
-                },
-                {"type": "note", "text": page._stats.text()},
-                {"type": "buttons", "items": [{"id": "paramSave", "label": "Save (overwrite)", "accent": True}]},
+                *tail,
             ]
         )
         return blocks
@@ -888,8 +981,11 @@ class AssetsBridge(QObject):
     @Slot(int)
     def setFormTab(self, index: int) -> None:
         host = self._host
-        if getattr(host, "_sub_page", "") == "texture":
+        sub = getattr(host, "_sub_page", "")
+        if sub == "texture":
             host._tex_on_side_tab(int(index))
+        elif sub == "parameter":
+            host.param_page.set_tool_tab(int(index))
         self.sync_form()
 
     @Slot(str, str)
@@ -969,7 +1065,13 @@ class AssetsBridge(QObject):
             elif key == "pMean" and page is not None:
                 page._mean.setValue(int(float(raw)))
             elif key == "paint" and page is not None:
-                page._paint_chk.setChecked(raw == "1")
+                page.set_tool_tab(2 if raw == "1" else 0)
+            elif key == "paintTool" and page is not None:
+                page.set_paint_tool(raw)
+            elif key == "tol" and page is not None:
+                page._tol.setValue(int(float(raw)))
+            elif key == "contig" and page is not None:
+                page._contiguous.setChecked(raw == "1")
             elif key == "brush" and page is not None:
                 page._brush.setValue(int(float(raw)))
             elif key == "paintVal" and page is not None:
@@ -986,6 +1088,8 @@ class AssetsBridge(QObject):
                     page._ov_src.setCurrentIndex(idx)
             elif key == "ovOpacity" and page is not None:
                 page._ov_opacity.setValue(int(float(raw)))
+            elif key == "exportTone" and page is not None:
+                page.set_export_tone(raw)
             elif key == "strength" and den is not None:
                 idx = den._strength.findText(raw)
                 if idx >= 0:
@@ -1018,6 +1122,13 @@ class AssetsBridge(QObject):
             "paramRevert": lambda: page and page.revert(),
             "paramSave": lambda: page and page.save(),
             "paramOverlay": lambda: page and page._do_overlay(),
+            "paramStamp": lambda: page and page.apply_stamp(),
+            "paramStampCancel": lambda: page and page.cancel_stamp(),
+            "paramClearSel": lambda: page and page.clear_selection(),
+            "exportR": lambda: page and page.export_channel("R"),
+            "exportG": lambda: page and page.export_channel("G"),
+            "exportB": lambda: page and page.export_channel("B"),
+            "exportA": lambda: page and page.export_channel("A"),
             "primaryPick": lambda: host._tex_pick_map("primary"),
             "alphaPick": lambda: host._tex_pick_map("alpha"),
             "denoiseOpen": lambda: den and den.open_file(),
