@@ -11,7 +11,7 @@ Item {
     readonly property color ink: bridge.dark ? "#f2f4f8" : "#1d1d1f"
     readonly property color mute: bridge.dark ? "#8b93a1" : "#5c6570"
     readonly property color line: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.40)
-    readonly property color well: Qt.rgba(0, 0, 0, bridge.dark ? 0.28 : 0.05)
+    readonly property color well: Qt.rgba(0, 0, 0, bridge.dark ? 0.16 : 0.04)
 
     function slide(key, min, max, value) {
         var span = Math.max(1, max - min)
@@ -34,7 +34,7 @@ Item {
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "Mesh Studio"
+            text: qsTr("Mesh Studio")
             color: side.ink
             font.pixelSize: 15
             font.bold: true
@@ -84,7 +84,7 @@ Item {
                         height: tabWell.height
                         Text {
                             anchors.centerIn: parent
-                            text: modelData
+                            text: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                             color: index === side.bag.tab ? "#ffffff" : side.ink
                             font.pixelSize: 12
                             font.bold: index === side.bag.tab
@@ -125,7 +125,7 @@ Item {
                         height: 22
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: (side.bag.infoOpen ? "▾  " : "▸  ") + "Mesh Info"
+                            text: (side.bag.infoOpen ? qsTr("▾  ") : qsTr("▸  ")) + qsTr("Mesh Info")
                             color: side.ink
                             font.pixelSize: 13
                             font.bold: true
@@ -135,16 +135,98 @@ Item {
                     Column {
                         visible: side.bag.infoOpen === true
                         width: parent.width
-                        spacing: 4
+                        spacing: 6
+                        Text { text: "Meshes in scene"; color: side.ink; font.pixelSize: 12; font.bold: true }
+                        SunkWell {
+                                Row {
+                                    width: parent.width
+                                    height: 16
+                                    spacing: 6
+                                    Text { width: 36; text: "Show"; color: side.mute; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter }
+                                    Text { width: 36; text: "Atts"; color: side.mute; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter }
+                                    Text { text: "Mesh file"; color: side.mute; font.pixelSize: 10 }
+                                }
+                                Rectangle { width: parent.width; height: 1; color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.28) }
+                                Item {
+                                    width: parent.width
+                                    height: 30
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: 7
+                                        visible: (side.bag.file && side.bag.file.name || "").length > 0
+                                        color: "#ff5a1f"
+                                    }
+                                    Row {
+                                        anchors.fill: parent
+                                        spacing: 6
+                                        visible: (side.bag.file && side.bag.file.name || "").length > 0
+                                        Item {
+                                            width: 36
+                                            height: 30
+                                            CheckBox {
+                                                anchors.centerIn: parent
+                                                on: !!(side.bag.file && side.bag.file.show)
+                                                onToggled: bridge.setChecked("fileShow", !(side.bag.file && side.bag.file.show))
+                                            }
+                                        }
+                                        Item {
+                                            width: 36
+                                            height: 30
+                                            CheckBox {
+                                                anchors.centerIn: parent
+                                                on: !!(side.bag.file && side.bag.file.atts)
+                                                onToggled: bridge.setChecked("fileAtts", !(side.bag.file && side.bag.file.atts))
+                                            }
+                                        }
+                                        Text {
+                                            width: parent.width - 84
+                                            height: 30
+                                            verticalAlignment: Text.AlignVCenter
+                                            text: (side.bag.file && side.bag.file.name) || ""
+                                            color: "#ffffff"
+                                            font.pixelSize: 12
+                                            font.bold: true
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                    Text {
+                                        anchors.fill: parent
+                                        visible: (side.bag.file && side.bag.file.name || "").length === 0
+                                        verticalAlignment: Text.AlignVCenter
+                                        horizontalAlignment: Text.AlignHCenter
+                                        text: qsTr("No mesh in the scene")
+                                        color: side.mute
+                                        font.pixelSize: 11
+                                    }
+                                }
+                        }
+                        Row {
+                            width: parent.width
+                            spacing: 6
+                            RaiseButton {
+                                width: (parent.width - 6) / 2
+                                height: 32
+                                label: qsTr("Remove selected")
+                                onClicked: bridge.clickId("removeMesh")
+                            }
+                            RaiseButton {
+                                width: (parent.width - 6) / 2
+                                height: 32
+                                label: qsTr("Clear meshes")
+                                onClicked: bridge.clickId("clearMesh")
+                            }
+                        }
+                        Text { text: "Mesh detail"; color: side.ink; font.pixelSize: 12; font.bold: true }
+                        SunkWell {
                         Repeater {
-                            model: side.bag.stats || []
+                            model: side.bag.detail || []
                             delegate: Item {
                                 required property var modelData
                                 width: parent.width
                                 height: 18
                                 Text {
                                     id: cap
-                                    text: modelData.k
+                                    text: (typeof modelData.k === "string" ? qsTr(modelData.k) : modelData.k)
                                     color: side.mute
                                     font.pixelSize: 12
                                 }
@@ -152,7 +234,7 @@ Item {
                                     anchors.left: cap.right
                                     anchors.right: parent.right
                                     anchors.leftMargin: 8
-                                    text: modelData.v
+                                    text: (typeof modelData.v === "string" ? qsTr(modelData.v) : modelData.v)
                                     color: side.ink
                                     font.pixelSize: 12
                                     horizontalAlignment: Text.AlignRight
@@ -160,36 +242,6 @@ Item {
                                 }
                             }
                         }
-                        Repeater {
-                            model: side.bag.meshes || []
-                            delegate: Row {
-                                required property var modelData
-                                required property int index
-                                width: parent.width
-                                height: 28
-                                spacing: 6
-                                CheckBox {
-                                    y: 6
-                                    on: modelData.show
-                                    onToggled: bridge.toggleMesh(index, 0)
-                                }
-                                CheckBox {
-                                    y: 6
-                                    on: modelData.atts
-                                    onToggled: bridge.toggleMesh(index, 1)
-                                }
-                                Text {
-                                    text: modelData.name
-                                    color: modelData.on ? "#ff5a1f" : side.ink
-                                    font.pixelSize: 12
-                                    font.bold: modelData.on
-                                    width: parent.width - 44
-                                    elide: Text.ElideRight
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                    TapHandler { onTapped: bridge.pickList("mesh", index) }
-                                }
-                            }
                         }
                     }
                 }
@@ -201,7 +253,8 @@ Item {
                 visible: side.bag.tab === 0
 
                 Card {
-                    title: side.bag.attTitle || "Attachments"
+                    visible: bridge.page === "attachs"
+                    title: side.bag.attTitle || qsTr("Attachments")
                     Text {
                         visible: (side.bag.cap || "").length > 0
                         width: parent.width
@@ -210,27 +263,54 @@ Item {
                         font.pixelSize: 11
                         wrapMode: Text.Wrap
                     }
+                    SunkWell {
                     Repeater {
                         model: side.bag.atts || []
                         delegate: PickRow {
                             required property string modelData
                             required property int index
-                            label: modelData
+                            label: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                             on: index === side.bag.att
                             onPicked: bridge.pickList("atts", index)
                         }
                     }
+                    }
                 }
 
                 Card {
-                    title: "Scene"
-                    visible: side.bag.showDs === true || (side.bag.sceneMeshes || []).length > 0 || side.bag.dsOn === true
+                    title: qsTr("Meshes")
+                    visible: bridge.page === "meshes"
+                    Text {
+                        width: parent.width
+                        text: qsTr("Meshes → edit on right")
+                        color: side.mute
+                        font.pixelSize: 11
+                        wrapMode: Text.Wrap
+                    }
+                    SunkWell {
+                    Repeater {
+                        model: side.bag.materials || []
+                        delegate: PickRow {
+                            required property var modelData
+                            required property int index
+                            label: modelData.name || ""
+                            on: modelData.on === true
+                            onPicked: bridge.pickList("mesh", index)
+                        }
+                    }
+                    }
+                }
+
+                Card {
+                    title: qsTr("Scene")
+                    visible: side.bag.showDs === true || side.bag.dsOn === true
                     CheckRow {
                         visible: side.bag.showDs === true
-                        label: "Select all"
+                        label: qsTr("Select all")
                         checked: side.bag.dsAll === true
                         onToggled: bridge.setChecked("dsAll", !side.bag.dsAll)
                     }
+                    SunkWell {
                     Repeater {
                         model: side.bag.sceneMeshes || []
                         delegate: Item {
@@ -248,7 +328,7 @@ Item {
                                 anchors.leftMargin: 24
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: modelData.t
+                                text: (typeof modelData.t === "string" ? qsTr(modelData.t) : modelData.t)
                                 color: modelData.on ? "#ff5a1f" : side.ink
                                 font.pixelSize: 12
                                 elide: Text.ElideRight
@@ -256,20 +336,21 @@ Item {
                             TapHandler { onTapped: bridge.pickList("scene", index) }
                         }
                     }
+                    }
                     RaiseButton {
                         visible: side.bag.dsOn === true
                         width: parent.width
                         height: 34
-                        label: side.bag.dsLabel || "Apply"
+                        label: side.bag.dsLabel || qsTr("Apply")
                         accent: true
                         onClicked: bridge.clickId("dsApply")
                     }
                 }
 
                 Card {
-                    title: "Viewport"
+                    title: qsTr("Viewport")
                     CheckRow {
-                        label: "Face Orientation"
+                        label: qsTr("Face Orientation")
                         checked: side.bag.face === true
                         onToggled: bridge.setChecked("face", !side.bag.face)
                     }
@@ -281,7 +362,7 @@ Item {
                 spacing: 10
                 visible: side.bag.tab === 1
                 Card {
-                    title: "Texture view"
+                    title: qsTr("Texture view")
                     Flow {
                         width: parent.width
                         spacing: 6
@@ -290,7 +371,7 @@ Item {
                             delegate: Chip {
                                 required property string modelData
                                 required property int index
-                                label: modelData
+                                label: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                                 on: index === side.bag.tex.i
                                 onPicked: bridge.setCombo("tex", index)
                             }
@@ -298,7 +379,8 @@ Item {
                     }
                 }
                 Card {
-                    title: "Materials"
+                    title: qsTr("Materials")
+                    SunkWell {
                     Repeater {
                         model: side.bag.mats || []
                         delegate: PickRow {
@@ -310,6 +392,7 @@ Item {
                             onPicked: bridge.pickMat(index)
                         }
                     }
+                    }
                 }
             }
 
@@ -318,28 +401,30 @@ Item {
                 spacing: 10
                 visible: side.bag.tab === 2
                 Card {
-                    title: "Cabin glow"
+                    title: qsTr("Cabin glow")
                     CheckRow {
-                        label: side.bag.moonLab || "Moon"
+                        label: side.bag.moonLab || qsTr("Moon")
                         checked: side.bag.moon === true
                         onToggled: bridge.setChecked("moon", !side.bag.moon)
                     }
                     Slide { key: "moon"; lab: side.bag.moonLab || ""; min: 5; max: 120; val: side.bag.moonInt || 5 }
                 }
                 Card {
-                    title: "Lamps"
+                    title: qsTr("Lamps")
+                    SunkWell {
                     Repeater {
                         model: side.bag.lamps || []
                         delegate: PickRow {
                             required property var modelData
                             required property int index
-                            label: modelData.t
+                            label: (typeof modelData.t === "string" ? qsTr(modelData.t) : modelData.t)
                             on: modelData.on === true
                             onPicked: bridge.pickList("lamp", index)
                         }
                     }
+                    }
                     CheckRow {
-                        label: "Glow + cast"
+                        label: qsTr("Glow + cast")
                         checked: side.bag.lampOn === true
                         onToggled: bridge.setChecked("lamp", !side.bag.lampOn)
                     }
@@ -348,12 +433,12 @@ Item {
                     RaiseButton {
                         width: parent.width
                         height: 34
-                        label: "Color"
+                        label: qsTr("Color")
                         accent: true
                         onClicked: bridge.clickId("lampColor")
                     }
                     CheckRow {
-                        label: "Lamp gizmos"
+                        label: qsTr("Lamp gizmos")
                         checked: side.bag.gizmo === true
                         onToggled: bridge.setChecked("gizmo", !side.bag.gizmo)
                     }
@@ -363,25 +448,25 @@ Item {
                         RaiseButton {
                             width: (parent.width - 12) / 3
                             height: 34
-                            label: "Add"
+                            label: qsTr("Add")
                             onClicked: bridge.clickId("lampAdd")
                         }
                         RaiseButton {
                             width: (parent.width - 12) / 3
                             height: 34
-                            label: "Remove"
+                            label: qsTr("Remove")
                             onClicked: bridge.clickId("lampRemove")
                         }
                         RaiseButton {
                             width: (parent.width - 12) / 3
                             height: 34
-                            label: "Rescan"
+                            label: qsTr("Rescan")
                             onClicked: bridge.clickId("lampRescan")
                         }
                     }
                 }
                 Card {
-                    title: "Bake"
+                    title: qsTr("Bake")
                     Flow {
                         width: parent.width
                         spacing: 6
@@ -390,14 +475,14 @@ Item {
                             delegate: Chip {
                                 required property string modelData
                                 required property int index
-                                label: modelData
+                                label: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                                 on: index === side.bag.bake.i
                                 onPicked: bridge.setCombo("bake", index)
                             }
                         }
                     }
                     CheckRow {
-                        label: "CUDA"
+                        label: qsTr("CUDA")
                         checked: side.bag.cuda === true
                         canUse: side.bag.cudaOn === true
                         onToggled: if (side.bag.cudaOn) bridge.setChecked("cuda", !side.bag.cuda)
@@ -405,7 +490,7 @@ Item {
                     RaiseButton {
                         width: parent.width
                         height: 36
-                        label: "Bake lamps"
+                        label: qsTr("Bake lamps")
                         accent: true
                         onClicked: bridge.clickId("bake")
                     }
@@ -417,27 +502,29 @@ Item {
                 spacing: 10
                 visible: side.bag.tab === 3
                 Card {
-                    title: "Animations"
+                    title: qsTr("Animations")
                     Text {
                         visible: side.bag.animEmpty === true
-                        text: "No .kin beside this mesh"
+                        text: qsTr("No .kin beside this mesh")
                         color: side.mute
                         font.pixelSize: 12
                     }
+                    SunkWell {
                     Repeater {
                         model: side.bag.anims || []
                         delegate: PickRow {
                             required property string modelData
                             required property int index
-                            label: modelData
+                            label: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                             on: index === side.bag.anim
                             onPicked: bridge.pickList("anim", index)
                         }
                     }
+                    }
                     RaiseButton {
                         width: parent.width
                         height: 34
-                        label: "Play"
+                        label: qsTr("Play")
                         accent: true
                         onClicked: bridge.clickId("play")
                     }
@@ -450,7 +537,7 @@ Item {
                 spacing: 10
                 visible: side.bag.tab === 4
                 Card {
-                    title: "Environment"
+                    title: qsTr("Environment")
                     Flow {
                         width: parent.width
                         spacing: 6
@@ -459,46 +546,69 @@ Item {
                             delegate: Chip {
                                 required property string modelData
                                 required property int index
-                                label: modelData
+                                label: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                                 on: index === side.bag.env.i
                                 onPicked: bridge.setCombo("env", index)
                             }
                         }
                     }
                     CheckRow {
-                        label: "Ground plane"
+                        label: qsTr("Ground plane")
                         checked: side.bag.ground === true
                         onToggled: bridge.setChecked("ground", !side.bag.ground)
                     }
                     RaiseButton {
                         width: parent.width
                         height: 34
-                        label: "Reset camera"
+                        label: qsTr("Reset camera")
                         onClicked: bridge.clickId("resetCam")
                     }
                 }
                 Card {
-                    title: "Sun"
+                    title: qsTr("Sun")
                     CheckRow {
-                        label: "Sun mode"
+                        label: qsTr("Sun mode")
                         checked: side.bag.sun === true
                         onToggled: bridge.setChecked("sun", !side.bag.sun)
+                    }
+                    Flow {
+                        width: parent.width
+                        spacing: 6
+                        Repeater {
+                            model: ["Morning", "Day", "Evening", "Night"]
+                            delegate: Chip {
+                                required property string modelData
+                                required property int index
+                                label: (typeof modelData === "string" ? qsTr(modelData) : modelData)
+                                on: index === side.bag.tod
+                                onPicked: bridge.setCombo("tod", index)
+                            }
+                        }
                     }
                     Slide { key: "az"; lab: side.bag.azLab || ""; min: 0; max: 360; val: side.bag.az || 0 }
                     Slide { key: "el"; lab: side.bag.elLab || ""; min: -10; max: 89; val: side.bag.el || 0 }
                     Slide { key: "sunInt"; lab: side.bag.intLab || ""; min: 20; max: 500; val: side.bag.sunInt || 20 }
                 }
                 Card {
-                    title: "Lights"
+                    title: qsTr("Lights")
+                    Text {
+                        width: parent.width
+                        text: qsTr("Array lights (when Sun mode off)")
+                        color: side.mute
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                    }
+                    SunkWell {
                     Repeater {
                         model: side.bag.lights || []
                         delegate: CheckRow {
                             required property var modelData
                             required property int index
-                            label: modelData.t
+                            label: (typeof modelData.t === "string" ? qsTr(modelData.t) : modelData.t)
                             checked: modelData.on === true
                             onToggled: bridge.setChecked("light" + index, !modelData.on)
                         }
+                    }
                     }
                     Slide { key: "emis"; lab: side.bag.emisLab || ""; min: 0; max: 200; val: side.bag.emis || 0 }
                 }
@@ -518,7 +628,7 @@ Item {
             color: side.line
         }
         Text {
-            text: "File"
+            text: qsTr("File")
             color: side.mute
             font.pixelSize: 11
         }
@@ -530,7 +640,7 @@ Item {
                 accent: true
                 glyph: bridge.openGlyph || "●"
                 fontName: bridge.iconFont
-                tip: "Open"
+                tip: qsTr("Open")
                 onClicked: bridge.clickId("open")
             }
             RaiseButton {
@@ -538,7 +648,7 @@ Item {
                 height: 40
                 glyph: bridge.folderGlyph || "●"
                 fontName: bridge.iconFont
-                tip: "Folder"
+                tip: qsTr("Folder")
                 onClicked: bridge.clickId("folder")
             }
         }
@@ -562,11 +672,54 @@ Item {
             spacing: 6
             Text {
                 visible: title.length > 0
-                text: title
+                text: (typeof title === "string" ? qsTr(title) : title)
                 color: side.ink
                 font.pixelSize: 13
                 font.bold: true
             }
+        }
+    }
+
+    component SunkWell: Item {
+        default property alias cells: col.data
+        width: parent ? parent.width : 0
+        implicitHeight: col.implicitHeight + 14
+        height: implicitHeight
+        Rectangle {
+            anchors.fill: parent
+            radius: 10
+            color: Qt.rgba(0, 0, 0, bridge.dark ? 0.46 : 0.10)
+            border.width: 1
+            border.color: Qt.rgba(0, 0, 0, bridge.dark ? 0.55 : 0.18)
+        }
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: 1
+            height: 16
+            radius: 9
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, bridge.dark ? 0.45 : 0.16) }
+                GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0) }
+            }
+        }
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            anchors.bottomMargin: 1
+            height: 1
+            color: Qt.rgba(1, 1, 1, bridge.dark ? 0.10 : 0.45)
+        }
+        Column {
+            id: col
+            x: 7
+            y: 7
+            width: parent.width - 14
+            spacing: 2
         }
     }
 
@@ -609,7 +762,7 @@ Item {
             anchors.leftMargin: 24
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: label
+            text: (typeof label === "string" ? qsTr(label) : label)
             color: side.ink
             font.pixelSize: 12
             elide: Text.ElideRight
@@ -630,7 +783,7 @@ Item {
         Text {
             id: chipLab
             anchors.centerIn: parent
-            text: label
+            text: (typeof label === "string" ? qsTr(label) : label)
             color: on ? "#ffffff" : side.ink
             font.pixelSize: 11
             font.bold: on
@@ -652,7 +805,7 @@ Item {
             x: 8 + indent
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width - x - 8
-            text: label
+            text: (typeof label === "string" ? qsTr(label) : label)
             color: on ? "#ffffff" : side.ink
             font.pixelSize: 12
             font.bold: on
@@ -671,7 +824,7 @@ Item {
         width: parent ? parent.width : 0
         height: 36
         Text {
-            text: lab
+            text: (typeof lab === "string" ? qsTr(lab) : lab)
             color: side.mute
             font.pixelSize: 11
             anchors.left: parent.left

@@ -24,7 +24,7 @@ Item {
         anchors.right: parent.right
         spacing: 4
         Text {
-            text: dock.bag.title || "Editor"
+            text: dock.bag.title || qsTr("Editor")
             color: dock.ink
             font.pixelSize: 15
             font.bold: true
@@ -69,7 +69,7 @@ Item {
                 spacing: 10
                 visible: dock.bag.mode === "meshes"
                 Card {
-                    title: "Material"
+                    title: ""
                     Field { label: "Name"; live: dock.mat.name || ""; onCommit: function (t) { bridge.setText("matName", t) } }
                     Text { text: "Type"; color: dock.mute; font.pixelSize: 11 }
                     Flow {
@@ -80,25 +80,27 @@ Item {
                             delegate: Chip {
                                 required property string modelData
                                 required property int index
-                                label: modelData
+                                label: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                                 on: index === dock.mat.type
                                 onPicked: bridge.setCombo("type", index)
                             }
                         }
                     }
                     CheckRow {
-                        label: "Double Sided"
+                        label: qsTr("Double Sided")
                         checked: dock.mat.two === true
                         onToggled: bridge.setChecked("two", !dock.mat.two)
                     }
-                    Text {
-                        text: "Vertices  " + (dock.mat.vfmt || "—")
-                        color: dock.mute
-                        font.pixelSize: 12
-                    }
+                    Field { label: "Vertices"; live: dock.mat.vfmt || "—"; lock: true; onCommit: function (t) {} }
                 }
                 Card {
-                    title: "Textures"
+                    title: qsTr("Textures")
+                    Row {
+                        width: parent.width
+                        height: 16
+                        Text { width: 88; text: "Map"; color: dock.mute; font.pixelSize: 11 }
+                        Text { text: "File"; color: dock.mute; font.pixelSize: 11 }
+                    }
                     Repeater {
                         model: dock.mat.tex || []
                         delegate: Item {
@@ -107,7 +109,7 @@ Item {
                             height: 48
                             Field {
                                 width: parent.width - 28
-                                label: modelData.k
+                                label: (typeof modelData.k === "string" ? qsTr(modelData.k) : modelData.k)
                                 live: modelData.v || ""
                                 onCommit: function (t) { bridge.setText("tex:" + modelData.k, t) }
                             }
@@ -124,10 +126,10 @@ Item {
                     }
                 }
                 Card {
-                    title: "Color"
-                    Rgba { which: "color"; title: "Material"; ch: dock.mat.color || [0, 0, 0, 255]; pick: "color" }
-                    Rgba { which: "emis"; title: "Emissive"; ch: dock.mat.emis || [0, 0, 0, 255]; pick: "emisPick" }
-                    Rgba { which: "spec"; title: "Specular"; ch: dock.mat.specC || [0, 0, 0, 255]; pick: "specPick" }
+                    title: qsTr("Color")
+                    Rgba { which: "color"; title: "Material Color"; ch: dock.mat.color || [0, 0, 0, 255]; pick: "color" }
+                    Rgba { which: "emis"; title: "matEmissive"; ch: dock.mat.emis || [0, 0, 0, 255]; pick: "emisPick" }
+                    Rgba { which: "spec"; title: "matSpecular"; ch: dock.mat.specC || [0, 0, 0, 255]; pick: "specPick" }
                     Field { label: "specPower"; live: String(dock.mat.spec || 0); onCommit: function (t) { bridge.setSpin("spec", Number(t)) } }
                 }
             }
@@ -137,12 +139,12 @@ Item {
                 spacing: 10
                 visible: dock.bag.mode === "attachs"
                 Card {
-                    title: "Attachment"
+                    title: qsTr("Attachment")
                     Field { label: "Name"; live: dock.att.name || ""; onCommit: function (t) { bridge.setText("attName", t) } }
                     Field { label: "Parent"; live: dock.att.parent || ""; onCommit: function (t) { bridge.setText("attParent", t) } }
                 }
                 Card {
-                    title: "Location"
+                    title: qsTr("Location")
                     Grid {
                         width: parent.width
                         columns: 3
@@ -154,7 +156,7 @@ Item {
                     }
                 }
                 Card {
-                    title: "Rotation"
+                    title: qsTr("Rotation")
                     Grid {
                         width: parent.width
                         columns: 2
@@ -188,7 +190,7 @@ Item {
             RaiseButton {
                 width: (parent.width - 12) / 3
                 height: 34
-                label: "Apply"
+                label: qsTr("Apply")
                 accent: true
                 enabled: dock.bag.applyOn === true
                 onClicked: bridge.clickId("apply")
@@ -196,20 +198,20 @@ Item {
             RaiseButton {
                 width: (parent.width - 12) / 3
                 height: 34
-                label: "Add"
+                label: qsTr("Add")
                 enabled: dock.bag.addOn === true
                 onClicked: bridge.clickId("add")
             }
             RaiseButton {
                 width: (parent.width - 12) / 3
                 height: 34
-                label: "Delete"
+                label: qsTr("Delete")
                 enabled: dock.bag.delOn === true
                 onClicked: bridge.clickId("del")
             }
         }
         Text {
-            text: "File"
+            text: qsTr("File")
             color: dock.mute
             font.pixelSize: 11
         }
@@ -222,7 +224,7 @@ Item {
                 enabled: dock.bag.saveOn === true
                 glyph: bridge.saveGlyph
                 fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
-                tip: "Save"
+                tip: qsTr("Save")
                 onClicked: bridge.clickId("save")
             }
             RaiseButton {
@@ -231,7 +233,7 @@ Item {
                 enabled: dock.bag.saveOn === true
                 glyph: bridge.saveGlyph
                 fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
-                tip: "Save As"
+                tip: qsTr("Save As")
                 onClicked: bridge.clickId("saveAs")
             }
         }
@@ -255,7 +257,7 @@ Item {
             spacing: 6
             Text {
                 visible: title.length > 0
-                text: title
+                text: (typeof title === "string" ? qsTr(title) : title)
                 color: dock.ink
                 font.pixelSize: 13
                 font.bold: true
@@ -291,7 +293,7 @@ Item {
             anchors.leftMargin: 8
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: parent.label
+            text: (typeof parent.label === "string" ? qsTr(parent.label) : parent.label)
             color: dock.ink
             font.pixelSize: 12
             elide: Text.ElideRight
@@ -313,7 +315,7 @@ Item {
         Text {
             id: chipLab
             anchors.centerIn: parent
-            text: label
+            text: (typeof label === "string" ? qsTr(label) : label)
             color: on ? "#ffffff" : dock.ink
             font.pixelSize: 11
             font.bold: on
@@ -325,6 +327,7 @@ Item {
     component Field: Item {
         property string label: ""
         property string live: ""
+        property bool lock: false
         signal commit(string text)
         width: parent ? parent.width : 200
         height: label.length > 0 ? 48 : 32
@@ -335,7 +338,7 @@ Item {
             anchors.right: parent.right
             anchors.top: parent.top
             height: visible ? 14 : 0
-            text: label
+            text: (typeof label === "string" ? qsTr(label) : label)
             color: dock.mute
             font.pixelSize: 11
             elide: Text.ElideRight
@@ -349,21 +352,30 @@ Item {
             Rectangle {
                 anchors.fill: parent
                 radius: 8
-                color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                color: Qt.rgba(0, 0, 0, bridge.dark ? 0.50 : 0.10)
                 border.width: 1
-                border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.35)
+                border.color: Qt.rgba(0, 0, 0, bridge.dark ? 0.55 : 0.18)
             }
             Rectangle {
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.margins: 1
-                height: 7
-                radius: 7
+                height: 10
+                radius: 8
                 gradient: Gradient {
-                    GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, bridge.dark ? 0.40 : 0.12) }
+                    GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, bridge.dark ? 0.45 : 0.14) }
                     GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0) }
                 }
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 6
+                anchors.rightMargin: 6
+                height: 1
+                color: Qt.rgba(1, 1, 1, bridge.dark ? 0.10 : 0.40)
             }
             TextInput {
                 id: input
@@ -373,10 +385,11 @@ Item {
                 verticalAlignment: TextInput.AlignVCenter
                 color: dock.ink
                 font.pixelSize: 12
-                selectByMouse: true
+                selectByMouse: !lock
+                readOnly: lock
                 clip: true
                 text: input.activeFocus ? input.text : live
-                onEditingFinished: commit(text)
+                onEditingFinished: if (!lock) commit(text)
             }
         }
     }
@@ -401,7 +414,7 @@ Item {
                     Text {
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        text: modelData
+                        text: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                         color: dock.mute
                         font.pixelSize: 10
                     }
@@ -411,9 +424,21 @@ Item {
                         width: 34
                         height: 28
                         radius: 6
-                        color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                        color: Qt.rgba(0, 0, 0, bridge.dark ? 0.50 : 0.10)
                         border.width: 1
-                        border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.35)
+                        border.color: Qt.rgba(0, 0, 0, bridge.dark ? 0.55 : 0.18)
+                        Rectangle {
+                            anchors.top: parent.top
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.margins: 1
+                            height: 8
+                            radius: 6
+                            gradient: Gradient {
+                                GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, bridge.dark ? 0.40 : 0.12) }
+                                GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0) }
+                            }
+                        }
                         TextInput {
                             anchors.fill: parent
                             horizontalAlignment: TextInput.AlignHCenter
