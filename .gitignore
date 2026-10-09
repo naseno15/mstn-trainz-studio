@@ -22,3 +22,4 @@ pack/shell/bin/
 assets/hdri/*
 !assets/hdri/.gitkeep
 !assets/hdri/README*
+build-static/
