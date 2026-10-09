@@ -239,7 +239,7 @@ Item {
                 z: 2
                 Text {
                     anchors.centerIn: parent
-                    text: label
+                    text: (typeof label === "string" ? qsTr(label) : label)
                     color: hot ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
                     font.pixelSize: 13
                     font.bold: hot
@@ -259,14 +259,14 @@ Item {
                 id: tunerChip
                 x: 6
                 key: "tuner"
-                label: bridge.tuner
+                label: (typeof bridge.tuner === "string" ? qsTr(bridge.tuner) : bridge.tuner)
                 hot: bridge.page === "tuner"
             }
             NavChip {
                 id: simChip
                 x: 118
                 key: "simulation"
-                label: bridge.simulation
+                label: (typeof bridge.simulation === "string" ? qsTr(bridge.simulation) : bridge.simulation)
                 hot: bridge.page === "simulation"
             }
 
@@ -278,7 +278,7 @@ Item {
                 z: 2
                 Text {
                     anchors.centerIn: parent
-                    text: bridge.homeLabel
+                    text: (typeof bridge.homeLabel === "string" ? qsTr(bridge.homeLabel) : bridge.homeLabel)
                     font.family: mi.name.length > 0 ? mi.name : bridge.iconFont
                     font.pixelSize: 22
                     color: homeH.hovered ? "#ff5a1f" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
@@ -291,7 +291,7 @@ Item {
                 id: paramChip
                 x: 314
                 key: "parameters"
-                label: bridge.parameters
+                label: (typeof bridge.parameters === "string" ? qsTr(bridge.parameters) : bridge.parameters)
                 hot: bridge.page === "parameters"
             }
 
@@ -302,7 +302,7 @@ Item {
                 z: 2
                 Text {
                     anchors.centerIn: parent
-                    text: bridge.autoTune
+                    text: (typeof bridge.autoTune === "string" ? qsTr(bridge.autoTune) : bridge.autoTune)
                     font.pixelSize: 13
                     font.bold: bridge.autoOn
                     color: bridge.autoOn ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")

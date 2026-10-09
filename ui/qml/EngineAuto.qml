@@ -39,7 +39,7 @@ Item {
                 anchors.right: parent.right
                 spacing: 6
                 Text {
-                    text: bridge.autoKind === "air" ? "Air brake" : "Auto Tune"
+                    text: bridge.autoKind === "air" ? qsTr("Air brake") : qsTr("Auto Tune")
                     color: dock.ink
                     font.pixelSize: 15
                     font.bold: true
@@ -47,7 +47,7 @@ Item {
                 Text {
                     width: parent.width
                     text: bridge.autoKind === "air"
-                          ? "Pressures, reservoirs, and the decel cap. Preview then Apply."
+                          ? qsTr("Pressures, reservoirs, and the decel cap. Preview then Apply.")
                           : "TE generate · Davis resistance · Preview then Apply"
                     color: dock.mute
                     font.pixelSize: 11
@@ -105,7 +105,7 @@ Item {
                             height: parent.height
                             Text {
                                 anchors.centerIn: parent
-                                text: "Generate"
+                                text: qsTr("Generate")
                                 color: bridge.autoTab === 0 ? "#ffffff" : dock.ink
                                 font.pixelSize: 13
                                 font.bold: bridge.autoTab === 0
@@ -124,7 +124,7 @@ Item {
                             height: parent.height
                             Text {
                                 anchors.centerIn: parent
-                                text: "Friction"
+                                text: qsTr("Friction")
                                 color: bridge.autoTab === 1 ? "#ffffff" : dock.ink
                                 font.pixelSize: 13
                                 font.bold: bridge.autoTab === 1
@@ -151,7 +151,7 @@ Item {
                 spacing: 8
                 Text {
                     width: parent.width
-                    text: bridge.autoSummary
+                    text: (typeof bridge.autoSummary === "string" ? qsTr(bridge.autoSummary) : bridge.autoSummary)
                     color: dock.mute
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap
@@ -162,12 +162,12 @@ Item {
                     spacing: 8
                     RaiseButton {
                         width: (parent.width - 8) / 2
-                        label: "Preview"
+                        label: qsTr("Preview")
                         onClicked: bridge.previewAuto()
                     }
                     RaiseButton {
                         width: (parent.width - 8) / 2
-                        label: "Apply"
+                        label: qsTr("Apply")
                         accent: true
                         onClicked: bridge.applyAuto()
                     }
@@ -207,24 +207,24 @@ Item {
                     spacing: 10
 
                     AutoCard {
-                        title: "Max Power"
+                        title: qsTr("Max Power")
                         FieldGrid {
                             AirField { label: "Power"; unit: dock.val("powerUnit").length > 0 ? dock.val("powerUnit") : "kW"; unitTap: true; value: dock.val("powerKw"); onEdited: bridge.setAutoField("powerKw", text); onUnitClicked: bridge.cyclePowerUnit() }
                             AirField { label: "Coeff"; value: dock.val("powerCoeff"); onEdited: bridge.setAutoField("powerCoeff", text) }
                         }
                     }
                     AutoCard {
-                        title: "Max Speed"
+                        title: qsTr("Max Speed")
                         FieldGrid {
                             AirField { label: "Speed"; unit: "km/h"; value: dock.val("speedKmh"); onEdited: bridge.setAutoField("speedKmh", text) }
                             AirField { label: "Coeff"; value: dock.val("speedCoeff"); onEdited: bridge.setAutoField("speedCoeff", text) }
                         }
                     }
                     AutoCard {
-                        title: "Adhesion Limit"
+                        title: qsTr("Adhesion Limit")
                         FieldGrid {
                             AirField {
-                                label: "Max TE"
+                                label: qsTr("Max TE")
                                 unit: "kN"
                                 value: dock.val("maxTe")
                                 fieldEnabled: dock.onFlag("maxTeOn")
@@ -232,20 +232,20 @@ Item {
                             }
                         }
                         CheckRow {
-                            label: "Estimate from adhesion weight"
+                            label: qsTr("Estimate from adhesion weight")
                             checked: dock.onFlag("estTe")
                             onToggled: bridge.setAutoField("estTe", checked ? "0" : "1")
                         }
                         FieldGrid {
                             AirField {
-                                label: "Friction"
+                                label: qsTr("Friction")
                                 unit: "%"
                                 value: dock.val("frictionPct")
                                 fieldEnabled: dock.onFlag("fricOn")
                                 onEdited: bridge.setAutoField("frictionPct", text)
                             }
                             AirField {
-                                label: "Adhesion"
+                                label: qsTr("Adhesion")
                                 unit: "t"
                                 value: dock.val("adhesionT")
                                 fieldEnabled: dock.onFlag("fricOn")
@@ -254,7 +254,7 @@ Item {
                         }
                     }
                     AutoCard {
-                        title: "Curve"
+                        title: qsTr("Curve")
                         FieldGrid {
                             AirField { label: "Notch"; unit: "×"; value: dock.val("notchCoeff"); onEdited: bridge.setAutoField("notchCoeff", text) }
                             AirField { label: "Nodes"; value: dock.val("nodeCount"); onEdited: bridge.setAutoField("nodeCount", text) }
@@ -263,7 +263,7 @@ Item {
                         CheckRow { label: "Regenerate throttle curves"; checked: dock.onFlag("regen"); onToggled: bridge.setAutoField("regen", checked ? "0" : "1") }
                         Text {
                             width: parent.width
-                            text: "TE = Power×308/Speed. Diesel coeff ~1–2, electric ~2–3. Uncheck regenerate to only update resistance."
+                            text: qsTr("TE = Power×308/Speed. Diesel coeff ~1–2, electric ~2–3. Uncheck regenerate to only update resistance.")
                             color: dock.mute
                             font.pixelSize: 11
                             wrapMode: Text.WordWrap
@@ -285,7 +285,7 @@ Item {
                     width: parent.width
                     spacing: 10
                     AutoCard {
-                        title: "Engine"
+                        title: qsTr("Engine")
                         FieldGrid {
                             AirField { label: "Mass"; unit: "t"; value: dock.val("engMass"); onEdited: bridge.setAutoField("engMass", text) }
                             AirField { label: "Area"; unit: "m²"; value: dock.val("engArea"); onEdited: bridge.setAutoField("engArea", text) }
@@ -295,7 +295,7 @@ Item {
                         }
                     }
                     AutoCard {
-                        title: "Cars"
+                        title: qsTr("Cars")
                         FieldGrid {
                             AirField { label: "Count"; unit: "×"; value: dock.val("carCount"); onEdited: bridge.setAutoField("carCount", text) }
                             AirField { label: "Mass"; unit: "t"; value: dock.val("carMass"); onEdited: bridge.setAutoField("carMass", text) }
@@ -306,7 +306,7 @@ Item {
                         }
                     }
                     AutoCard {
-                        title: "Track & acceleration"
+                        title: qsTr("Track & acceleration")
                         FieldGrid {
                             AirField { label: "Grade"; unit: "%"; value: dock.val("grade"); onEdited: bridge.setAutoField("grade", text) }
                             AirField { label: "From"; unit: "km/h"; value: dock.val("accelV0"); onEdited: bridge.setAutoField("accelV0", text) }
@@ -338,7 +338,7 @@ Item {
                     width: airDock.width
                     spacing: 10
                     AutoCard {
-                        title: "Pressures"
+                        title: qsTr("Pressures")
                         FieldGrid {
                             AirField { label: "BP rel"; unit: dock.val("pressUnit"); unitTap: true; value: dock.val("bpRel"); onEdited: bridge.setAutoField("bpRel", text); onUnitClicked: bridge.cyclePressUnit() }
                             AirField { label: "BP ini"; unit: dock.val("pressUnit"); unitTap: true; value: dock.val("bpIni"); onEdited: bridge.setAutoField("bpIni", text); onUnitClicked: bridge.cyclePressUnit() }
@@ -350,7 +350,7 @@ Item {
                         }
                         Text {
                             width: parent.width
-                            text: "Tap the unit to switch kPa, bar, and psi. BP ini is the minimum reduction and is not written."
+                            text: qsTr("Tap the unit to switch kPa, bar, and psi. BP ini is the minimum reduction and is not written.")
                             color: dock.mute
                             font.pixelSize: 11
                             wrapMode: Text.WordWrap
@@ -365,7 +365,7 @@ Item {
                         }
                     }
                     AutoCard {
-                        title: "Reservoirs"
+                        title: qsTr("Reservoirs")
                         FieldGrid {
                             AirField { label: "MR"; unit: "L"; value: dock.val("volMr"); onEdited: bridge.setAutoField("volMr", text) }
                             AirField { label: "Aux"; unit: "L"; value: dock.val("volAux"); onEdited: bridge.setAutoField("volAux", text) }
@@ -375,23 +375,23 @@ Item {
                         }
                     }
                     AutoCard {
-                        title: "Brake force"
+                        title: qsTr("Brake force")
                         FieldGrid {
                             AirField { label: "Ratio"; unit: "ratio"; value: dock.val("brakeRatio"); onEdited: bridge.setAutoField("brakeRatio", text) }
                             AirField { label: "Decel"; unit: "mm/s²"; value: dock.val("maxDecel"); onEdited: bridge.setAutoField("maxDecel", text) }
                         }
                         Text {
                             width: parent.width
-                            text: "max-decel is mm/s², the same number as config.txt. 4500 mm/s² = 4.5 m/s². Not newtons. Ratio is brakeratio, a scale with no force unit."
+                            text: qsTr("max-decel is mm/s², the same number as config.txt. 4500 mm/s² = 4.5 m/s². Not newtons. Ratio is brakeratio, a scale with no force unit.")
                             color: dock.mute
                             font.pixelSize: 11
                             wrapMode: Text.WordWrap
                         }
                     }
                     AutoCard {
-                        title: "Flow rates"
+                        title: qsTr("Flow rates")
                         CheckRow {
-                            label: "Write train-pipe flows on Apply"
+                            label: qsTr("Write train-pipe flows on Apply")
                             checked: dock.onFlag("advanced")
                             onToggled: bridge.setAutoField("advanced", checked ? "0" : "1")
                         }
@@ -404,20 +404,20 @@ Item {
                         }
                     }
                     AutoCard {
-                        title: "Stop test"
+                        title: qsTr("Stop test")
                         FieldGrid {
                             AirField { label: "Speed"; unit: "km/h"; value: dock.val("speedKmh"); onEdited: bridge.setAutoField("speedKmh", text) }
                             AirField { label: "Mass"; unit: "t"; value: dock.val("massT"); onEdited: bridge.setAutoField("massT", text) }
                             AirField { label: "Grade"; unit: "%"; value: dock.val("grade"); onEdited: bridge.setAutoField("grade", text) }
                         }
                         CheckRow {
-                            label: "Emergency"
+                            label: qsTr("Emergency")
                             checked: dock.onFlag("emergency")
                             onToggled: bridge.setAutoField("emergency", checked ? "0" : "1")
                         }
                         RaiseButton {
                             width: parent.width
-                            label: "JNR 5 bar"
+                            label: qsTr("JNR 5 bar")
                             onClicked: bridge.presetAir()
                         }
                     }
@@ -455,7 +455,7 @@ Item {
             anchors.margins: 8
             spacing: 6
             Text {
-                text: title
+                text: (typeof title === "string" ? qsTr(title) : title)
                 color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
                 font.pixelSize: 13
                 font.bold: true
@@ -490,7 +490,7 @@ Item {
             anchors.left: box.right
             anchors.leftMargin: 8
             anchors.verticalCenter: parent.verticalCenter
-            text: parent.label
+            text: (typeof parent.label === "string" ? qsTr(parent.label) : parent.label)
             color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
             font.pixelSize: 12
         }
@@ -509,7 +509,7 @@ Item {
             anchors.right: parent.right
             anchors.top: parent.top
             height: 14
-            text: parent.label
+            text: (typeof parent.label === "string" ? qsTr(parent.label) : parent.label)
             color: bridge.dark ? "#8b93a1" : "#5c6570"
             font.pixelSize: 11
             elide: Text.ElideRight

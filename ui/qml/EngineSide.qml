@@ -45,7 +45,7 @@ GlassPlate {
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "Engine Tuner"
+                text: qsTr("Engine Tuner")
                 color: side.ink
                 font.pixelSize: 15
                 font.bold: true
@@ -75,7 +75,7 @@ GlassPlate {
                 color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.35)
             }
             Text {
-                text: "File"
+                text: qsTr("File")
                 color: side.mute
                 font.pixelSize: 11
             }
@@ -149,7 +149,7 @@ GlassPlate {
                         anchors.margins: 8
                         spacing: 4
                         Text {
-                            text: "Enginespec"
+                            text: qsTr("Enginespec")
                             color: side.ink
                             font.pixelSize: 13
                             font.bold: true
@@ -162,7 +162,7 @@ GlassPlate {
                                 height: 18
                                 Text {
                                     id: cap
-                                    text: modelData.cap
+                                    text: (typeof modelData.cap === "string" ? qsTr(modelData.cap) : modelData.cap)
                                     color: side.mute
                                     font.pixelSize: 12
                                 }
@@ -170,7 +170,7 @@ GlassPlate {
                                     anchors.left: cap.right
                                     anchors.right: parent.right
                                     anchors.leftMargin: 8
-                                    text: modelData.val
+                                    text: (typeof modelData.val === "string" ? qsTr(modelData.val) : modelData.val)
                                     color: side.ink
                                     font.pixelSize: 12
                                     horizontalAlignment: Text.AlignRight
@@ -196,7 +196,7 @@ GlassPlate {
                         anchors.margins: 8
                         spacing: 8
                         Text {
-                            text: "Clone curves"
+                            text: qsTr("Clone curves")
                             color: side.ink
                             font.pixelSize: 13
                             font.bold: true
@@ -204,7 +204,7 @@ GlassPlate {
                         Row {
                             spacing: 8
                             Text {
-                                text: "From"
+                                text: qsTr("From")
                                 color: side.mute
                                 font.pixelSize: 12
                                 anchors.verticalCenter: parent.verticalCenter
@@ -218,7 +218,7 @@ GlassPlate {
                                 TapHandler { onTapped: bridge.setCloneFrom(bridge.cloneFrom - 1) }
                             }
                             Text {
-                                text: bridge.cloneFrom
+                                text: (typeof bridge.cloneFrom === "string" ? qsTr(bridge.cloneFrom) : bridge.cloneFrom)
                                 color: side.ink
                                 font.pixelSize: 14
                                 font.bold: true
@@ -234,7 +234,7 @@ GlassPlate {
                             }
                         }
                         Text {
-                            text: "Targets"
+                            text: qsTr("Targets")
                             color: side.mute
                             font.pixelSize: 12
                         }
@@ -251,7 +251,7 @@ GlassPlate {
                                     spacing: 2
                                     Text {
                                         anchors.horizontalCenter: parent.horizontalCenter
-                                        text: notch
+                                        text: (typeof notch === "string" ? qsTr(notch) : notch)
                                         color: side.ink
                                         font.pixelSize: 11
                                         font.bold: true
@@ -274,12 +274,12 @@ GlassPlate {
                             spacing: 6
                             RaiseButton {
                                 width: (parent.width - 6) / 2
-                                label: "Clone"
+                                label: qsTr("Clone")
                                 onClicked: bridge.doClone()
                             }
                             RaiseButton {
                                 width: (parent.width - 6) / 2
-                                label: "→ N+1..8"
+                                label: qsTr("→ N+1..8")
                                 onClicked: bridge.doCloneHigher()
                             }
                         }
@@ -288,7 +288,7 @@ GlassPlate {
 
                 Text {
                     width: parent.width
-                    text: "Use the bottom bar to switch Tuner · Simulation · Parameters."
+                    text: qsTr("Use the bottom bar to switch Tuner · Simulation · Parameters.")
                     color: side.mute
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap

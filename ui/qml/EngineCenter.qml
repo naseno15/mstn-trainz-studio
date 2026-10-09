@@ -74,7 +74,7 @@ Item {
     component Cell: TextInput {
         property string cell: ""
         signal commit(string text)
-        text: cell
+        text: (typeof cell === "string" ? qsTr(cell) : cell)
         color: center.ink
         font.pixelSize: 12
         selectByMouse: true
@@ -137,7 +137,7 @@ Item {
 
                             Text {
                                 width: parent.width
-                                text: "N" + col.modelData.n
+                                text: qsTr("N") + col.modelData.n
                                 color: col.modelData.color
                                 font.pixelSize: 13
                                 font.bold: true
@@ -147,14 +147,14 @@ Item {
                                 width: parent.width
                                 Text {
                                     width: parent.width / 2
-                                    text: "km/h"
+                                    text: qsTr("km/h")
                                     color: center.mute
                                     font.pixelSize: 10
                                     horizontalAlignment: Text.AlignRight
                                 }
                                 Text {
                                     width: parent.width / 2
-                                    text: "kN"
+                                    text: qsTr("kN")
                                     color: center.mute
                                     font.pixelSize: 10
                                     horizontalAlignment: Text.AlignRight
@@ -245,7 +245,7 @@ Item {
                                 RaiseButton {
                                     width: (parent.width - 4) / 2
                                     height: 28
-                                    label: "−"
+                                    label: qsTr("−")
                                     onClicked: bridge.delPoint(col.modelData.n, col.pick)
                                 }
                             }
@@ -267,34 +267,34 @@ Item {
             RaiseButton {
                 width: 118
                 height: 32
-                label: "Resistance"
+                label: qsTr("Resistance")
                 accent: !!center.bag.resist
                 onClicked: bridge.setResist(!center.bag.resist)
             }
             SunkField {
                 width: 168
                 height: 32
-                label: "km/h"
+                label: qsTr("km/h")
                 value: center.bag.maxKmh || ""
                 onEdited: function(text) { bridge.setGraphMax(text, center.bag.maxKn || "80") }
             }
             SunkField {
                 width: 140
                 height: 32
-                label: "kN"
+                label: qsTr("kN")
                 value: center.bag.maxKn || ""
                 onEdited: function(text) { bridge.setGraphMax(center.bag.maxKmh || "120", text) }
             }
             RaiseButton {
                 width: 64
                 height: 32
-                label: "Fit"
+                label: qsTr("Fit")
                 onClicked: bridge.fitGraph()
             }
             Text {
                 width: Math.max(40, tools.width - 118 - 168 - 140 - 64 - 32)
                 height: 32
-                text: "Drag points on the graph · Ctrl snap 10 · Shift adds to the selection"
+                text: qsTr("Drag points on the graph · Ctrl snap 10 · Shift adds to the selection")
                 color: center.mute
                 font.pixelSize: 11
                 verticalAlignment: Text.AlignVCenter
@@ -337,7 +337,7 @@ Item {
 
         Text {
             id: title
-            text: "Simulation preview"
+            text: qsTr("Simulation preview")
             color: center.ink
             font.pixelSize: 16
             font.bold: true
@@ -361,14 +361,14 @@ Item {
             RaiseButton {
                 width: 110
                 height: 32
-                label: "Emergency"
+                label: qsTr("Emergency")
                 accent: center.bag.sim && center.bag.sim.emergency === "1"
                 onClicked: bridge.setSim("emergency", (center.bag.sim && center.bag.sim.emergency === "1") ? "0" : "1")
             }
             RaiseButton {
                 width: 132
                 height: 32
-                label: "Run"
+                label: qsTr("Run")
                 accent: true
                 onClicked: bridge.runSim()
             }
@@ -425,7 +425,7 @@ Item {
             anchors.margins: 8
             spacing: 4
             Text {
-                text: bagCol.title
+                text: (typeof bagCol.title === "string" ? qsTr(bagCol.title) : bagCol.title)
                 color: center.ink
                 font.pixelSize: 13
                 font.bold: true
@@ -476,7 +476,7 @@ Item {
                 RaiseButton {
                     width: 36
                     height: 28
-                    label: "−"
+                    label: qsTr("−")
                     onClicked: {
                         if (bagCol.pick < 0 || bagCol.pick >= bagCol.rows.length)
                             return
@@ -492,7 +492,7 @@ Item {
 
         Text {
             id: title
-            text: "Engine & air brake parameters"
+            text: qsTr("Engine & air brake parameters")
             color: center.ink
             font.pixelSize: 16
             font.bold: true
@@ -501,7 +501,7 @@ Item {
             id: tip
             anchors.top: title.bottom
             anchors.topMargin: 2
-            text: "Trainz ×1000 ≈ bar · 1 bar = 100 kPa · edit any pressure column"
+            text: qsTr("Trainz ×1000 ≈ bar · 1 bar = 100 kPa · edit any pressure column")
             color: center.mute
             font.pixelSize: 11
         }
@@ -519,28 +519,28 @@ Item {
                 width: (bags.width - 18) / 4
                 height: bags.height
                 bagName: "motor"
-                title: "motor"
+                title: qsTr("motor")
                 rows: (center.bag.bags && center.bag.bags.motor) || []
             }
             BagColumn {
                 width: (bags.width - 18) / 4
                 height: bags.height
                 bagName: "mass"
-                title: "mass"
+                title: qsTr("mass")
                 rows: (center.bag.bags && center.bag.bags.mass) || []
             }
             BagColumn {
                 width: (bags.width - 18) / 4
                 height: bags.height
                 bagName: "flowsize"
-                title: "flowsize"
+                title: qsTr("flowsize")
                 rows: (center.bag.bags && center.bag.bags.flowsize) || []
             }
             BagColumn {
                 width: (bags.width - 18) / 4
                 height: bags.height
                 bagName: "volume"
-                title: "volume"
+                title: qsTr("volume")
                 rows: (center.bag.bags && center.bag.bags.volume) || []
             }
         }
@@ -566,7 +566,7 @@ Item {
                 anchors.margins: 8
                 spacing: 4
                 Text {
-                    text: "pressure"
+                    text: qsTr("pressure")
                     color: center.ink
                     font.pixelSize: 13
                     font.bold: true
@@ -632,7 +632,7 @@ Item {
                     RaiseButton {
                         width: 36
                         height: 28
-                        label: "−"
+                        label: qsTr("−")
                         onClicked: {
                             var rows = center.bag.pressure || []
                             if (press.pick < 0 || press.pick >= rows.length)
