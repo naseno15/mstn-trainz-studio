@@ -4,7 +4,11 @@ Item {
     id: root
 
     Rectangle {
+        id: card
         anchors.fill: parent
+        transformOrigin: Item.Top
+        scale: 0.94
+        opacity: 0
         radius: 16
         color: bridge.dark ? Qt.rgba(0.10, 0.12, 0.16, 0.94) : Qt.rgba(0.96, 0.97, 0.98, 0.96)
         border.width: 1
@@ -42,6 +46,7 @@ Item {
                         anchors.fill: parent
                         radius: 10
                         color: rowHover.hovered ? "#ff5a1f" : "transparent"
+                        Behavior on color { ColorAnimation { duration: 110; easing.type: Easing.OutCubic } }
                         Row {
                             anchors.fill: parent
                             anchors.leftMargin: 10
@@ -80,5 +85,16 @@ Item {
                 }
             }
         }
+    }
+
+    ParallelAnimation {
+        id: pop
+        NumberAnimation { target: card; property: "opacity"; from: 0; to: 1; duration: 140; easing.type: Easing.OutCubic }
+        NumberAnimation { target: card; property: "scale"; from: 0.94; to: 1; duration: 170; easing.type: Easing.OutBack }
+    }
+
+    Connections {
+        target: bridge
+        function onMenuOpened() { pop.restart() }
     }
 }
