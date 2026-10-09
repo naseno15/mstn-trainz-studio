@@ -101,22 +101,21 @@ Item {
                     title: "Textures"
                     Repeater {
                         model: dock.mat.tex || []
-                        delegate: Row {
+                        delegate: Item {
                             required property var modelData
                             width: parent.width
                             height: 48
-                            spacing: 6
                             Field {
-                                width: parent.width - 36
+                                width: parent.width - 28
                                 label: modelData.k
                                 live: modelData.v || ""
                                 onCommit: function (t) { bridge.setText("tex:" + modelData.k, t) }
                             }
                             Text {
+                                x: parent.width - 16
+                                y: 26
                                 text: modelData.lock ? "🔒" : "📁"
                                 font.pixelSize: 14
-                                anchors.bottom: parent.bottom
-                                anchors.bottomMargin: 8
                                 opacity: modelData.lock ? 0.4 : 1
                                 HoverHandler { enabled: !modelData.lock; cursorShape: Qt.PointingHandCursor }
                                 TapHandler { onTapped: if (!modelData.lock) bridge.clickId("texBrowse:" + modelData.k) }

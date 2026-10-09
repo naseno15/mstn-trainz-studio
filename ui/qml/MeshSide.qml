@@ -120,23 +120,15 @@ Item {
                 Column {
                     width: parent.width
                     spacing: 6
-                    Row {
+                    Item {
                         width: parent.width
                         height: 22
                         Text {
-                            text: side.bag.infoOpen ? "▾" : "▸"
-                            color: side.mute
-                            font.pixelSize: 12
                             anchors.verticalCenter: parent.verticalCenter
-                        }
-                        Text {
-                            text: "Mesh Info"
+                            text: (side.bag.infoOpen ? "▾  " : "▸  ") + "Mesh Info"
                             color: side.ink
                             font.pixelSize: 13
                             font.bold: true
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.left: parent.left
-                            anchors.leftMargin: 16
                         }
                         TapHandler { onTapped: bridge.clickId("info") }
                     }
@@ -407,7 +399,7 @@ Item {
                     CheckRow {
                         label: "CUDA"
                         checked: side.bag.cuda === true
-                        enabled: side.bag.cudaOn === true
+                        canUse: side.bag.cudaOn === true
                         onToggled: if (side.bag.cudaOn) bridge.setChecked("cuda", !side.bag.cuda)
                     }
                     RaiseButton {
@@ -580,6 +572,7 @@ Item {
 
     component CheckBox: Rectangle {
         property bool on: false
+        property bool hit: true
         signal toggled()
         width: 16
         height: 16
@@ -594,22 +587,22 @@ Item {
             radius: 2
             color: on ? "#ff5a1f" : "transparent"
         }
-        HoverHandler { cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: toggled() }
+        HoverHandler { enabled: hit; cursorShape: Qt.PointingHandCursor }
+        TapHandler { enabled: hit; onTapped: toggled() }
     }
 
     component CheckRow: Item {
         property string label: ""
         property bool checked: false
-        property bool enabled: true
+        property bool canUse: true
         signal toggled()
         width: parent ? parent.width : 0
         height: 22
-        opacity: enabled ? 1 : 0.4
+        opacity: canUse ? 1 : 0.4
         CheckBox {
             y: 3
             on: checked
-            onToggled: if (enabled) parent.toggled()
+            hit: false
         }
         Text {
             anchors.left: parent.left
@@ -621,7 +614,7 @@ Item {
             font.pixelSize: 12
             elide: Text.ElideRight
         }
-        TapHandler { onTapped: if (enabled) toggled() }
+        TapHandler { onTapped: if (canUse) toggled() }
     }
 
     component Chip: Rectangle {
