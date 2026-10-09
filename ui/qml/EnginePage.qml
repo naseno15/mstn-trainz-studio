@@ -1,9 +1,10 @@
 import QtQuick
 
-// Engine Tuner stage. Sidebar + editor stay real widgets in the wells.
-// This page only paints depth: sunk content well, raised nav capsule.
+// Engine Tuner stage. Center pages are QML. Matplotlib graphs sit in the graph well.
 Item {
     id: root
+
+    Chrome { id: chrome }
 
     Rectangle {
         anchors.fill: parent
@@ -22,7 +23,7 @@ Item {
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         anchors.topMargin: 8
-        anchors.bottomMargin: 8
+        anchors.bottomMargin: chrome.stageMargin
 
         EngineSide {
             id: side
@@ -34,7 +35,7 @@ Item {
                 var o = mapToItem(root, 0, 0)
                 if (o.x + width <= nav.x + 8 || o.x >= nav.x + nav.width - 8)
                     return 0
-                return nav.height
+                return chrome.contentInset(nav.height)
             }
         }
 
@@ -50,14 +51,14 @@ Item {
                 var o = mapToItem(root, 0, 0)
                 if (o.x + width <= nav.x + 8 || o.x >= nav.x + nav.width - 8)
                     return 0
-                return nav.height
+                return chrome.contentInset(nav.height)
             }
             Behavior on width {
                 NumberAnimation { duration: 280; easing.type: Easing.OutCubic }
             }
         }
 
-        Item {
+        EngineCenter {
             id: editorSlot
             anchors.left: side.right
             anchors.leftMargin: 8
@@ -65,19 +66,7 @@ Item {
             anchors.rightMargin: autoDock.width > 8 ? 8 : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            anchors.bottomMargin: nav.height
-
-            function sync() {
-                if (width > 2 && height > 2) {
-                    var p = mapToItem(root, 0, 0)
-                    bridge.placeEditor(p.x, p.y, width, height)
-                }
-            }
-            onXChanged: sync()
-            onYChanged: sync()
-            onWidthChanged: sync()
-            onHeightChanged: sync()
-            Component.onCompleted: sync()
+            anchors.bottomMargin: chrome.contentInset(nav.height)
         }
 
         MouseArea {
@@ -111,7 +100,7 @@ Item {
         readonly property real laneLeft: stage.x + side.width
         readonly property real laneRight: stage.x + stage.width - autoDock.width
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 14
+        anchors.bottomMargin: chrome.barMargin
         width: Math.min(Math.max(160, laneRight - laneLeft - 16), 640)
         x: laneLeft + (laneRight - laneLeft - width) / 2
         height: 76
