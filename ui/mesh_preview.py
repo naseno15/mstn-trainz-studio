@@ -268,8 +268,11 @@ class _PreviewSurface(QWidget):
     def _on_geo(self, scene, gen: int | None = None) -> None:
         if gen is not None and gen != self._load_gen:
             return
+        show_atts = (not self._preview_fast) or (
+            not scene.parts and bool(scene.attachments)
+        )
+        self.view.set_show_attachments(show_atts)
         self.view.set_scene(scene)
-        self.view.set_show_attachments(False if self._preview_fast else True)
         self.view.set_show_lamp_gizmos(False)
         self.view.set_environment("none")
         self.view.set_sun(True, 135.0, 45.0, 1.4)
@@ -280,10 +283,16 @@ class _PreviewSurface(QWidget):
         note = scene.note or scene.kind or ""
         name = self._path.name if self._path else "?"
         if self._preview_fast:
-            self.status.setText(
-                f"{name}  ·  solid  ·  {scene.vertex_count:,}v  {scene.face_count:,}f"
-                + (f"  ·  {note}" if note else "")
-            )
+            if scene.parts:
+                self.status.setText(
+                    f"{name}  ·  solid  ·  {scene.vertex_count:,}v  {scene.face_count:,}f"
+                    + (f"  ·  {note}" if note else "")
+                )
+            else:
+                self.status.setText(
+                    f"{name}  ·  {len(scene.attachments)} a.*  ·  no mesh"
+                    + (f"  ·  {note}" if note else "")
+                )
             return
         self.status.setText(
             f"{name}  ·  PBR  ·  {scene.vertex_count:,}v  {scene.face_count:,}f"
