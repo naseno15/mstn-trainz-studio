@@ -46,6 +46,14 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "mesh frame %dx%d lit %d\n", frame.width(), frame.height(), lit);
     assert(lit > 40);
+    // Preview Asset: two meshes in one scene, labelled per asset; a bad path is skipped, not fatal.
+    const QString fx = QFileInfo(fixture).absoluteFilePath();
+    page.loadScene({fx, fx, QStringLiteral("nope.im")}, {QStringLiteral("Alpha"), QStringLiteral("Beta"), QStringLiteral("Gone")}, {0.0, 3.14159, 0.0});
+    app.processEvents();
+    assert(!page.loadOpen());
+    assert(page.sideJson().contains(QStringLiteral("Alpha: ")) && page.sideJson().contains(QStringLiteral("Beta: ")));
+    assert(!page.sideJson().contains(QStringLiteral("Gone")));
+    assert(page.sideJson().contains(QStringLiteral("2 meshes")));
     assert(pie_sector(0.f, -40.f, 4, 3) == 0);
     assert(pie_sector(40.f, 0.f, 4, 3) == 1);
     assert(pie_sector(0.f, 40.f, 4, 3) == 2);

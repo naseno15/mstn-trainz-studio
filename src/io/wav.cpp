@@ -171,6 +171,146 @@ std::vector<QcFinding> analyze_pcm(const std::vector<int16_t>& samples, int rate
             }
         }
     }
+    for (QcFinding& glitch : scan_glitches(samples, rate)) findings.push_back(std::move(glitch));
     if (findings.empty()) findings.push_back({"ok", "ok", "ok"});
     return findings;
+}
+
+std::vector<int16_t> resample_linear(const std::vector<int16_t>& samples, int from_rate, int to_rate) {
+    if (from_rate == to_rate || from_rate < 1 || to_rate < 1 || samples.size() < 2) return samples;
+    const size_t count = static_cast<size_t>(static_cast<double>(samples.size()) * to_rate / from_rate);
+    std::vector<int16_t> out(count);
+    for (size_t i = 0; i < count; ++i) {
+        const double pos = static_cast<double>(i) * from_rate / to_rate;
+        const size_t a = std::min(static_cast<size_t>(pos), samples.size() - 1);
+        const size_t b = std::min(a + 1, samples.size() - 1);
+        const double frac = pos - static_cast<double>(a);
+        out[i] = static_cast<int16_t>(std::lround(samples[a] * (1.0 - frac) + samples[b] * frac));
+    }
+    return out;
+}
+
+namespace {
+size_t fade_len(int rate, size_t limit) { return std::min(static_cast<size_t>(std::max(rate, 1) / 4), limit); }
+int16_t clamp16(double v) { return static_cast<int16_t>(std::lround(std::clamp(v, -32768.0, 32767.0))); }
+}  // namespace
+
+std::vector<int16_t> make_loop(const std::vector<int16_t>& s, int rate) {
+    const size_t f = fade_len(rate, s.size() / 4);
+    if (f < 2) return s;
+    const size_t len = s.size() - f;
+    std::vector<int16_t> out(s.begin(), s.begin() + static_cast<std::ptrdiff_t>(len));
+    for (size_t i = 0; i < f; ++i) {
+        const double t = (static_cast<double>(i) + 0.5) / static_cast<double>(f) * 1.5707963267948966;
+        out[i] = clamp16(s[i] * std::sin(t) + s[len + i] * std::cos(t));
+    }
+    return out;
+}
+
+std::vector<int16_t> make_transition(const std::vector<int16_t>& from, const std::vector<int16_t>& to, int rate) {
+    const size_t f = fade_len(rate, std::min(from.size(), to.size()) / 2);
+    if (f < 2) return from;
+    std::vector<int16_t> out(from.begin(), from.end());
+    for (size_t i = 0; i < f; ++i) {
+        const double t = (static_cast<double>(i) + 0.5) / static_cast<double>(f) * 1.5707963267948966;
+        out[from.size() - f + i] = clamp16(from[from.size() - f + i] * std::cos(t) + to[to.size() - f + i] * std::sin(t));
+    }
+    return out;
+}
+
+std::vector<int16_t> apply_gain_db(const std::vector<int16_t>& samples, double db) {
+    if (db == 0.0) return samples;
+    const double g = std::pow(10.0, db / 20.0);
+    std::vector<int16_t> out(samples.size());
+    for (size_t i = 0; i < samples.size(); ++i) out[i] = clamp16(samples[i] * g);
+    return out;
+}
+
+// ponytail: local-scale jump detector. |x[i]-x[i-1]| vs RMS of neighbouring differences (+-1024 samples, self excluded).
+// Engine noise stays under ~9x locally; real pops/splices reach 14x+ (measured on idle 2 @5.83s, idle 3 @7.07s).
+// Ceiling: a very sparse tonal clip has tiny local scale, so the absolute floor (kMinJump) guards false hits.
+std::vector<QcFinding> scan_glitches(const std::vector<int16_t>& s, int rate, size_t limit) {
+    std::vector<QcFinding> out;
+    constexpr size_t W = 1024;
+    constexpr double kWarn = 10.0, kFail = 18.0, kMinJump = 600.0;
+    if (rate < 1 || s.size() < 2 * W + 4) return out;
+    const size_t n = s.size() - 1;  // number of differences
+    std::vector<double> prefix(n + 1, 0.0);
+    for (size_t i = 0; i < n; ++i) {
+        const double d = static_cast<double>(s[i + 1]) - s[i];
+        prefix[i + 1] = prefix[i] + d * d;
+    }
+    struct Hit { size_t at; double ratio; double jump; bool clip; };
+    std::vector<Hit> hits;
+    for (size_t i = W; i + W < n; ++i) {
+        const double d = static_cast<double>(s[i + 1]) - s[i];
+        const double self = d * d;
+        if (self < kMinJump * kMinJump) continue;
+        const double scale2 = (prefix[i + W] - prefix[i - W] - self) / (2.0 * W - 1.0);
+        const double ratio = std::abs(d) / std::sqrt(scale2 + 1.0);
+        if (ratio < kWarn) continue;
+        // merge events within 20 ms into the strongest one
+        if (!hits.empty() && i - hits.back().at < static_cast<size_t>(rate / 50)) {
+            if (ratio > hits.back().ratio) hits.back() = {i, ratio, d, false};
+            continue;
+        }
+        hits.push_back({i, ratio, d, false});
+    }
+    // clipping: runs of >=4 full-scale samples, reported once as a summary (loud engine loops clip often)
+    size_t clip_runs = 0, first_clip = 0;
+    for (size_t i = 0; i + 4 < s.size();) {
+        size_t j = i;
+        while (j < s.size() && (s[j] >= 32760 || s[j] <= -32760)) ++j;
+        if (j - i >= 4) {
+            if (clip_runs++ == 0) first_clip = i;
+            i = j + static_cast<size_t>(rate / 50);
+        } else i = std::max(j, i + 1);
+    }
+    // dropout: 10 ms RMS >18 dB under both +-60 ms neighbours
+    const size_t hop = std::max<size_t>(1, static_cast<size_t>(rate / 100));
+    const size_t blocks = s.size() / hop;
+    std::vector<double> db(blocks);
+    for (size_t b = 0; b < blocks; ++b) {
+        double sum = 0;
+        for (size_t k = 0; k < hop; ++k) sum += static_cast<double>(s[b * hop + k]) * s[b * hop + k];
+        db[b] = 20.0 * std::log10(std::sqrt(sum / static_cast<double>(hop)) + 1.0);
+    }
+    for (size_t b = 7; b + 7 < blocks; ++b) {
+        double around = 0;
+        for (size_t k = 1; k <= 6; ++k) around += db[b - k] + db[b + k];
+        around /= 12.0;
+        if (around > 40.0 && around - db[b] > 18.0) {
+            hits.push_back({b * hop, 50.0, around - db[b], true});
+            b += 6;
+        }
+    }
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.ratio > b.ratio; });
+    if (hits.size() > limit) hits.resize(limit);
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.at < b.at; });
+    if (clip_runs > 0) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "%.3fs  clipping: %zu flat full-scale runs (first shown)", static_cast<double>(first_clip) / rate, clip_runs);
+        QcFinding f;
+        f.time = static_cast<double>(first_clip) / rate;
+        f.kind = "clip";
+        f.severity = "warn";
+        f.message = buf;
+        out.push_back(std::move(f));
+    }
+    for (const Hit& h : hits) {
+        char buf[160];
+        const double t = static_cast<double>(h.at) / rate;
+        QcFinding f;
+        f.time = t;
+        if (h.clip) {
+            std::snprintf(buf, sizeof(buf), "%.3fs  dropout -%.0f dB for ~10ms", t, h.jump);
+            f.kind = "dropout"; f.severity = "fail";
+        } else {
+            std::snprintf(buf, sizeof(buf), "%.3fs  jump %.0fx local level (step %.0f)", t, h.ratio, h.jump);
+            f.kind = "glitch"; f.severity = h.ratio >= kFail ? "fail" : "warn";
+        }
+        f.message = buf;
+        out.push_back(std::move(f));
+    }
+    return out;
 }

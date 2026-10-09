@@ -37,6 +37,7 @@ int main(int argc, char** argv) {
     assert(window.page() == QLatin1String("home"));
     window.triggerItem(QStringLiteral("sounds"));
     assert(window.page() == QLatin1String("sounds"));
+    if (qEnvironmentVariableIsSet("TRAINZ_SNAP")) { window.resize(1200, 750); for (int i = 0; i < 20; ++i) { app.processEvents(); QThread::msleep(30); } window.grab().save(qEnvironmentVariable("TRAINZ_SNAP")); }
     const auto alive = [&](const QString& menu_key, const QString& label) {
         for (const QVariant& row : window.menuRows(menu_key)) {
             const QVariantMap map = row.toMap();

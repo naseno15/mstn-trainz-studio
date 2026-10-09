@@ -249,7 +249,46 @@ static void check_files() {
     }
 }
 
+// Multi-chunk v2 archive built from stored (uncompressed) deflate blocks, 16-byte chunks.
+// Files straddle chunk edges; selective and whole reads must agree.
+static void check_tzarc_chunks() {
+    const std::vector<std::pair<std::string, std::string>> files = {
+        {"config.txt", "username \"x\"\nkind \"traincar\"\n"}, {"mesh/b.bin", std::string(70, 'B') + "end"}, {"c.png", std::string(40, 'C')}};
+    std::vector<uint8_t> inner = {0, 0, 0, static_cast<uint8_t>(files.size())};
+    for (const auto& f : files) {
+        inner.push_back(static_cast<uint8_t>(f.first.size()));
+        inner.insert(inner.end(), f.first.begin(), f.first.end());
+        for (int s = 56; s >= 0; s -= 8) inner.push_back(static_cast<uint8_t>((uint64_t(f.second.size()) >> s) & 0xFF));
+    }
+    inner.insert(inner.end(), {0, 0, 0, 0});
+    for (const auto& f : files) inner.insert(inner.end(), f.second.begin(), f.second.end());
+    const size_t chunk = 16, n = (inner.size() + chunk - 1) / chunk;
+    std::vector<uint8_t> out = {'T', 'Z', 'a', 'c', 0, 0, 0, 2};
+    auto le = [&](uint64_t v, int bytes) {
+        for (int i = 0; i < bytes; ++i) out.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
+    };
+    le(inner.size(), 8);
+    le(n, 4);
+    std::vector<size_t> sizes;
+    for (size_t i = 0; i < n; ++i) sizes.push_back(std::min(chunk, inner.size() - i * chunk));
+    for (size_t s : sizes) le(s + 10, 2);  // zlib hdr 2 + stored hdr 5 + data + adler 4, minus 1
+    for (size_t i = 0; i < n; ++i) {
+        out.insert(out.end(), {0x78, 0x01, 0x01});
+        le(sizes[i], 2);
+        le(~sizes[i] & 0xFFFF, 2);
+        out.insert(out.end(), inner.begin() + i * chunk, inner.begin() + i * chunk + sizes[i]);
+        out.insert(out.end(), {0, 0, 0, 0});
+    }
+    const auto config = read_tzarc_config(out.data(), out.size());
+    assert(std::string(config.begin(), config.end()) == files[0].second);
+    const auto one = read_tzarc_select(out.data(), out.size(), [](const std::string& name) { return name == "mesh/b.bin"; });
+    assert(one.size() == 1 && std::string(one[0].second.begin(), one[0].second.end()) == files[1].second);
+    const auto all = read_tzarc_all(out.data(), out.size());
+    assert(all.size() == 3 && std::string(all[2].second.begin(), all[2].second.end()) == files[2].second);
+}
+
 int main() {
+    check_tzarc_chunks();
     check_kuid();
     check_lzss();
     check_files();

@@ -7,6 +7,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QStringList>
@@ -14,7 +15,9 @@
 
 #include "io/chump.h"
 #include "io/config_id.h"
+#include "ui/asset_preview.h"
 #include "ui/icons.h"
+#include "ui/mesh_page.h"
 #include "ui/install_queue.h"
 #include "ui/shell_window.h"
 #include "ui/trainz_meta.h"
@@ -180,9 +183,81 @@ static void check_meta() {
     assert(meta.value(QStringLiteral("<kuid:7:8>")).build == QLatin1String("5.0"));
 }
 
+static void write_file(const QString& path, const QByteArray& body) {
+    QDir().mkpath(QFileInfo(path).path());
+    QFile f(path);
+    assert(f.open(QIODevice::WriteOnly));
+    f.write(body);
+}
+
+// Real shape of a KIHA config: meshes live in another asset (mesh-asset), `.lm` names compile to
+// .trainzmesh, LOD>0 and auto-create 0 entries are not shown, and livery assets listed only in
+// kuid-table are not walked.
+static void check_preview() {
+    QTemporaryDir tmp;
+    assert(tmp.isValid());
+    const QString t = QStringLiteral("<kuid:1:100>"), w = QStringLiteral("<kuid:1:300>"), x = QStringLiteral("<kuid:9:9>"), livery = QStringLiteral("<kuid:5:5>");
+    const QString root = tmp.path();
+    const QString cfg = "username \"Train\"\nkuid " + t + "\ninterior " + x + "\nkuid-table { 0 " + livery + " }\nsoundscript { s { sound-asset " + livery + " } }\n" +
+                        "mesh-table {\n"
+                        " default { mesh-asset " + w + " mesh \"mesh/wheel.lm\" auto-create 1 lod-level 0 effects { e { texture \"a.texture\" } } }\n"
+                        " back { mesh-asset " + w + " mesh \"mesh/wheel.lm\" orientation 0.0,0.0,3.14159 auto-create 1 }\n"
+                        " far { mesh-asset " + w + " mesh \"mesh/wheel.lm\" auto-create 1 lod-level 1 }\n"
+                        " hidden { mesh-asset " + w + " mesh \"mesh/wheel.lm\" auto-create 0 }\n"
+                        " gone { mesh-asset " + w + " mesh \"mesh/gone.lm\" auto-create 1 }\n}\n";
+    write_file(root + "/w/mesh/wheel.trainzmesh", "x");
+    write_file(root + "/w/mesh/wheel.im", "x");
+    write_file(root + "/w/mesh/wheel.fbx", "x");
+    const QHash<QString, QString> configs = {{t, cfg}, {w, "username \"Wheel\"\n"}};
+    QSet<QString> asked;
+    const QList<PreviewNode> nodes = resolve_preview(
+        t, [&](const QString& k) { return configs.value(k); },
+        [&](const QString& k) {
+            asked.insert(k);
+            return k == w ? root + "/w" : QString();
+        });
+    assert(nodes.size() == 3);  // livery never walked; w reached through mesh-asset
+    assert(nodes[0].name == "Train" && nodes[0].scene.size() == 2 && nodes[0].unresolved == 1);
+    assert(nodes[0].scene[0].label == "default" && nodes[0].scene[0].path.endsWith("/w/mesh/wheel.trainzmesh") && nodes[0].scene[0].yaw == 0);
+    assert(nodes[0].scene[1].label == "back" && qAbs(nodes[0].scene[1].yaw - 3.14159) < 1e-9);
+    assert(nodes[1].kuid == x && nodes[1].missing);
+    assert(nodes[2].kuid == w && nodes[2].name == "Wheel" && nodes[2].scene.isEmpty());
+    assert(asked == QSet<QString>{w});  // only mesh owners are unpacked
+    assert(preview_text(nodes).contains("3 assets, 2 meshes, 1 missing"));
+    const PreviewScene scene = preview_scene(nodes);
+    assert(scene.paths.size() == 2 && scene.labels == QStringList({"default", "back"}) && scene.yaws.size() == 2);
+    assert(preview_scene(nodes, 1).paths.size() == 1);
+    assert(preview_dependencies("a <kuid:1:2>\nkuid-table { b <kuid:3:4> }\nbogeys { 0 { bogey <kuid2:5:6:7> } }", "") == QStringList({"<kuid:1:2>", "<kuid2:5:6:7>"}));
+    assert(parse_mesh_table("username x").isEmpty());
+}
+// Optional: TRAINZ_DATA=<data dir> previews the real KIHA 40 from its archives.
+static void check_real_library() {
+    const QString data = qEnvironmentVariable("TRAINZ_DATA");
+    if (data.isEmpty()) return;
+    const ContentIndex index = index_content(content_roots(data));
+    const IndexSource source = index_source(index);
+    QElapsedTimer clock;
+    clock.start();
+    const QList<PreviewNode> nodes = resolve_preview(QStringLiteral("<kuid:1125787:100058>"), source.read_config, source.locate);
+    std::fprintf(stderr, "resolve: %lld ms\n", static_cast<long long>(clock.elapsed()));
+    std::fprintf(stderr, "%s\n", preview_text(nodes).toUtf8().constData());
+    const PreviewScene scene = preview_scene(nodes);
+    std::fprintf(stderr, "scene meshes: %lld\n", static_cast<long long>(scene.paths.size()));
+    assert(!nodes.isEmpty() && !nodes[0].missing && scene.paths.size() > 10);
+    MeshStudioPage page;
+    page.resize(960, 640);
+    page.show();
+    clock.restart();
+    page.loadScene(scene.paths, scene.labels, scene.yaws);
+    std::fprintf(stderr, "load scene: %lld ms\n", static_cast<long long>(clock.elapsed()));
+    assert(!page.loadOpen());
+}
+
 int main(int argc, char** argv) {
     prepare_qt_runtime();
     QApplication app(argc, argv);
+    check_preview();
+    check_real_library();
     check_meta();
     check_identity();
     check_find();
