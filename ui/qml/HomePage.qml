@@ -13,6 +13,7 @@ Item {
     }
 
     Column {
+        id: hubCol
         anchors.centerIn: parent
         spacing: 10
         width: Math.min(parent.width - 48, 1280)
@@ -53,7 +54,7 @@ Item {
                     required property string title
                     required property string blurb
                     required property string glyph
-                    width: 200
+                    width: Math.min(188, Math.floor((hubCol.width - 12 * Math.max(0, bridge.cards.length - 1)) / Math.max(1, bridge.cards.length)))
                     height: 188
                     dark: bridge.dark
                     lit: cardHover.hovered
