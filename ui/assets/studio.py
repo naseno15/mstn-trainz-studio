@@ -1071,6 +1071,10 @@ class AssetsStudioHost(QWidget):
         self.sidebar.hide()
         rail = self.packages_page.queue_rail
         rail.setParent(self)
+        strip = getattr(getattr(self, "param_page", None), "strip_rail", None)
+        if strip is not None:
+            strip.setParent(self)
+            strip.hide()
         self._mid_host.setParent(self)
         self._right_dock_host.setParent(self)
         dock_lay = self._right_dock_host.layout()
@@ -1376,6 +1380,7 @@ class AssetsStudioHost(QWidget):
 
         self.param_page = ParameterPage()
         self.param_page.status.connect(self._msg)
+        self.sidebar.mount_param_strip(self.param_page.strip_rail)
         self.denoise_page = DenoisePage()
         self.denoise_page.status.connect(self._msg)
         # Order must match _TEXMESH_SUB_PAGES (meshops, texture, parameter, denoise).
