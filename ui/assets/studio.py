@@ -134,7 +134,9 @@ _TEX_ROW_H = 64  # badge + title + subtitle — 52 clipped the second line
 _DOCK_ANIM_MS = 560
 _DOCK_TICK_MS = 24
 from ..smooth_scroll import enable_smooth_scroll_area, enable_smooth_table
+from ..icons import apply_icon
 from ..theme import app_font
+from .export_cdp import ExportCdpPage
 from .kuid import count_kuids, describe_kuid, normalize_list
 from .denoise_page import DenoisePage
 from .nav import AccentPill, AssetsPageNav, AssetsSubNav
@@ -232,6 +234,26 @@ class _PageSlideHost(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._sync_geometry(animate=False)
+
+
+class _ForwardDrop(QObject):
+    """Canvas leaves its page, so file drops on the well are handed back."""
+
+    def __init__(self, target: QWidget) -> None:
+        super().__init__(target)
+        self._target = target
+
+    def eventFilter(self, obj: QObject, event) -> bool:  # noqa: N802
+        et = event.type()
+        if et in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+            if event.mimeData().hasUrls():
+                event.acceptProposedAction()
+                return True
+        elif et == QEvent.Type.Drop:
+            self._target.dropEvent(event)
+            return True
+        return False
+
 
 _LM_MESH_EXTS = {".trainzmesh", ".im", ".fbx"}
 _LM_CALC_POINTS = ("center", "near", "far")
@@ -848,12 +870,15 @@ class AssetsStudioHost(QWidget):
         on_home: Callable[[], None],
         on_theme: Callable[[], None] | None = None,
         theme_mode: str = "dark",
+        shell: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_home = on_home
         self._on_theme = on_theme
         self._theme = theme_mode if theme_mode in ("dark", "light") else "dark"
+        self._shell = shell
+        self._surface_ready = False
         self._page = "packages"
         self._sub_page = "texture"
         self._suite = "assets"  # assets | texmesh — Home cards share one host
@@ -888,6 +913,7 @@ class AssetsStudioHost(QWidget):
             bridge.set_dark(dark)
             bridge.sync_nav()
             self._drop_qml_plates()
+            self._resink_center_viewers()
 
     def _build(self) -> None:
         root = QHBoxLayout(self)
@@ -899,6 +925,9 @@ class AssetsStudioHost(QWidget):
         split.setHandleWidth(6)
         self._main_split = split
 
+        from ...util.preload import boot_log
+
+        boot_log("Assets · AssetsSidebar")
         self.sidebar = AssetsSidebar()
         self.sidebar.set_theme(self._theme)
         self.sidebar.native_action.connect(self._on_native)
@@ -939,10 +968,16 @@ class AssetsStudioHost(QWidget):
         self._pkg_split_saved: list[int] | None = None
 
         self._stack = QStackedWidget()
+        boot_log("Assets · packages page")
         self._stack.addWidget(self._build_packages_page())  # 0
+        boot_log("Assets · config page")
         self._stack.addWidget(self._build_config_page())  # 1
+        boot_log("Assets · texture / mesh page")
         self._stack.addWidget(self._build_texmesh_page())  # 2 Texture & Mesh Lods
+        boot_log("Assets · kuid page")
         self._stack.addWidget(self._build_kuid_page())  # 3
+        boot_log("Assets · export page")
+        self._stack.addWidget(self._build_export_page())  # 4
         mid.addWidget(self._stack, 1)
         apply_code_edit_theme(self, self._theme)
 
@@ -978,10 +1013,22 @@ class AssetsStudioHost(QWidget):
         root.addWidget(split, 1)
         # Packages is the default page — open full-height Viewer dock immediately.
         self._sync_right_dock(animate=False)
+        boot_log("Assets · AssetsPage.qml")
+        if self._shell:
+            return
         self._mount_qml()
+        self._surface_ready = True
+
+    def finish_surface(self) -> None:
+        """Glass page, once. Packages, editors, and docks already exist."""
+        if self._surface_ready:
+            return
+        self._shell = False
+        self._mount_qml()
+        self._surface_ready = True
 
     def _mount_qml(self) -> None:
-        """Sunk stage + raised nav in QML. Center pages, queue, and docks stay widgets."""
+        """Sunk stage + raised nav in QML. Tables, editors, and canvases stay in the wells."""
         from PySide6.QtQuickWidgets import QQuickWidget
 
         from ..qml_host import _quick
@@ -1032,6 +1079,8 @@ class AssetsStudioHost(QWidget):
         self._bind_side_mirror()
         self._bind_viewer_mirror()
         self._drop_qml_plates()
+        self._collapse_center_heads()
+        self._lift_texmesh_wells()
         open_dock = self._page == "packages" or (
             self._page == "texmesh" and self._sub_page in _TEXMESH_DOCK_INDEX
         )
@@ -1047,6 +1096,56 @@ class AssetsStudioHost(QWidget):
         sheet = widget.styleSheet()
         if rule not in sheet:
             widget.setStyleSheet((sheet + "\n" + rule).strip())
+
+    def _lift_texmesh_wells(self) -> None:
+        """Table, previews, and canvases sit in the QML center wells."""
+        wells = (
+            self.tex_list,
+            self.tex_preview,
+            self.tex_log,
+            self.lm_table,
+            self.lm_preview,
+            self.lm_log,
+            self.param_page._canvas,
+            self.denoise_page._preview,
+        )
+        for widget in wells:
+            widget.setParent(self)
+            widget.setMinimumSize(0, 0)
+            widget.setMaximumSize(16777215, 16777215)
+            widget.hide()
+        for canvas, page in (
+            (self.param_page._canvas, self.param_page),
+            (self.denoise_page._preview, self.denoise_page),
+        ):
+            canvas.setAcceptDrops(True)
+            canvas.installEventFilter(_ForwardDrop(page))
+        self._texmesh_lifted = True
+        self._resink_center_viewers()
+
+    def _resink_center_viewers(self) -> None:
+        if not getattr(self, "_texmesh_lifted", False):
+            return
+        for edit in (self.tex_preview, self.tex_log, self.lm_preview, self.lm_log):
+            self._sink_viewer(edit)
+
+    def _collapse_center_heads(self) -> None:
+        """Page title and blurb live on the QML center plate."""
+        if not self._qml_active():
+            return
+        for lab in self._stack.findChildren(QLabel):
+            if lab.objectName() not in ("pageHead", "pageBlurb"):
+                continue
+            lab.hide()
+            lab.setMaximumHeight(0)
+        for index in range(self._stack.count()):
+            page = self._stack.widget(index)
+            if page is None:
+                continue
+            for frame in page.findChildren(QFrame, "glassPanel"):
+                lay = frame.layout()
+                if lay is not None:
+                    lay.setContentsMargins(0, 0, 0, 0)
 
     def _drop_qml_plates(self) -> None:
         """Center column and right dock sit on the QML stage — no extra black plate."""
@@ -1240,12 +1339,14 @@ class AssetsStudioHost(QWidget):
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(16, 16, 16, 16)
         pl.setSpacing(8)
-        pl.addWidget(self._title("Config / chump"))
+        head = self._title("Config / chump")
+        head.setObjectName("pageHead")
+        pl.addWidget(head)
         tip = QLabel(
             "Edit config.chump as text (ChumpLib-style), save binary, "
             "or pack / export config.txt."
         )
-        tip.setObjectName("mutedTip")
+        tip.setObjectName("pageBlurb")
         tip.setWordWrap(True)
         pl.addWidget(tip)
         self.chump_edit = CodeEdit(syntax="trainzconfig")
@@ -1363,13 +1464,15 @@ class AssetsStudioHost(QWidget):
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(16, 16, 16, 16)
         pl.setSpacing(8)
-        pl.addWidget(self._title("Texture.txt"))
+        head = self._title("Texture.txt")
+        head.setObjectName("pageHead")
+        pl.addWidget(head)
         tip = QLabel(
             "Drop PBR maps onto the table — groups albedo/normal/parameter. "
             "Dims · channels · size · VE rules auto-scan (37/39/65…). "
             "Double-click a row to select the whole set."
         )
-        tip.setObjectName("mutedTip")
+        tip.setObjectName("pageBlurb")
         tip.setWordWrap(True)
         pl.addWidget(tip)
 
@@ -1439,7 +1542,8 @@ class AssetsStudioHost(QWidget):
         prev_lab.setObjectName("mutedTip")
         prev_row.addWidget(prev_lab)
         prev_row.addStretch(1)
-        refresh = QPushButton("Refresh")
+        refresh = QPushButton()
+        apply_icon(refresh, "refresh", tip="Refresh preview", kind="icon", size=18, square=32)
         refresh.clicked.connect(self._tex_refresh_preview)
         prev_row.addWidget(refresh)
         ph.addLayout(prev_row)
@@ -1451,10 +1555,12 @@ class AssetsStudioHost(QWidget):
         self.tex_preview = CodeEdit(syntax="trainzconfig")
         self.tex_preview.setReadOnly(True)
         self.tex_preview.setPlaceholderText("Drop an image → preview")
+        self._sink_viewer(self.tex_preview)
         twin.addWidget(self.tex_preview)
         self.tex_log = CodeEdit(syntax="plain")
         self.tex_log.setReadOnly(True)
         self.tex_log.setPlaceholderText("Check / scan results…")
+        self._sink_viewer(self.tex_log)
         twin.addWidget(self.tex_log)
         twin.setStretchFactor(0, 1)
         twin.setStretchFactor(1, 1)
@@ -1513,6 +1619,7 @@ class AssetsStudioHost(QWidget):
         self.tex_alpha = QLineEdit()
         self.tex_alpha.setPlaceholderText("optional alpha map…")
         self.tex_alpha.textChanged.connect(lambda _="": self._tex_refresh_preview())
+        self._tex_alpha_on = False
 
         self.tex_tile = _SegPills(_TEX_TILE_OPTS, value="st")
         self.tex_tile.changed.connect(lambda _="": self._tex_refresh_preview())
@@ -1801,13 +1908,15 @@ class AssetsStudioHost(QWidget):
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(16, 16, 16, 16)
         pl.setSpacing(8)
-        pl.addWidget(self._title("LM.txt LOD"))
+        head = self._title("LM.txt LOD")
+        head.setObjectName("pageHead")
+        pl.addWidget(head)
         tip = QLabel(
             "Drop meshes onto the table → Save all writes one .lm.txt each. "
             "Tick LOD to combine those rows into a shared LOD table instead. "
             "FBX / trainzmesh material names are checked for .m.pbrmetal / .m.onetex."
         )
-        tip.setObjectName("mutedTip")
+        tip.setObjectName("pageBlurb")
         tip.setWordWrap(True)
         pl.addWidget(tip)
 
@@ -1852,7 +1961,8 @@ class AssetsStudioHost(QWidget):
         prev_lab.setObjectName("mutedTip")
         prev_row.addWidget(prev_lab)
         prev_row.addStretch(1)
-        refresh = QPushButton("Refresh")
+        refresh = QPushButton()
+        apply_icon(refresh, "refresh", tip="Refresh preview", kind="icon", size=18, square=32)
         refresh.clicked.connect(self._lm_refresh_preview)
         prev_row.addWidget(refresh)
         ph.addLayout(prev_row)
@@ -1864,12 +1974,14 @@ class AssetsStudioHost(QWidget):
         self.lm_preview = CodeEdit(syntax="trainzconfig")
         self.lm_preview.setReadOnly(True)
         self.lm_preview.setPlaceholderText("Drop meshes or Add row → preview")
+        self._sink_viewer(self.lm_preview)
         twin.addWidget(self.lm_preview)
         self.lm_log = CodeEdit(syntax="plain")
         self.lm_log.setReadOnly(True)
         self.lm_log.setPlaceholderText(
             "Material names… drop .fbx / .trainzmesh to check .m.pbrmetal / .m.onetex"
         )
+        self._sink_viewer(self.lm_log)
         twin.addWidget(self.lm_log)
         twin.setStretchFactor(0, 1)
         twin.setStretchFactor(1, 1)
@@ -1941,9 +2053,11 @@ class AssetsStudioHost(QWidget):
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(16, 16, 16, 16)
         pl.setSpacing(8)
-        pl.addWidget(self._title("KUID"))
+        head = self._title("KUID")
+        head.setObjectName("pageHead")
+        pl.addWidget(head)
         tip = QLabel("Paste CM text → normalize. Hex + hash-XX from public KUID format.")
-        tip.setObjectName("mutedTip")
+        tip.setObjectName("pageBlurb")
         tip.setWordWrap(True)
         pl.addWidget(tip)
         self.kuid_in = CodeEdit(syntax="trainzconfig")
@@ -1958,6 +2072,10 @@ class AssetsStudioHost(QWidget):
         pl.addWidget(self.kuid_count)
         lay.addWidget(panel, 1)
         return page
+
+    def _build_export_page(self) -> QWidget:
+        self.export_page = ExportCdpPage(on_status=self._msg)
+        return self.export_page
 
     # ── nav / theme ──────────────────────────────────────────
 
@@ -2231,6 +2349,7 @@ class AssetsStudioHost(QWidget):
             "config": 1,
             "texmesh": 2,
             "kuid": 3,
+            "export": 4,
         }.get(page, 0)
         changed = prev != page
         sub_changed = (
@@ -2253,7 +2372,7 @@ class AssetsStudioHost(QWidget):
         if self._suite == "texmesh":
             self._nav.set_page(self._sub_page, emit=False, animate=True)
         else:
-            pill = page if page in ("packages", "config", "kuid") else "packages"
+            pill = page if page in ("packages", "config", "kuid", "export") else "packages"
             self._nav.set_page(pill, emit=False, animate=True)
 
         if page == "texmesh":
@@ -2271,6 +2390,7 @@ class AssetsStudioHost(QWidget):
                 "packages": "Packages",
                 "config": "Config",
                 "kuid": "KUID",
+                "export": "Export",
             }.get(page, page)
 
         # Defer sidebar rebuild + sub-nav fade until dock motion finishes —
@@ -2349,6 +2469,10 @@ class AssetsStudioHost(QWidget):
             "normalize_kuids": self._normalize_kuids,
             "kuid_hash": self._kuid_hash,
             "copy_kuids": self._copy_kuids,
+            "export_read": self.export_page.read_list,
+            "export_all": self.export_page.select_all,
+            "export_each": self.export_page.export_each,
+            "export_one": self.export_page.export_one,
         }
         fn = handlers.get(action)
         if fn is not None:
@@ -2496,6 +2620,57 @@ class AssetsStudioHost(QWidget):
 
     # ── texture ──────────────────────────────────────────────
 
+    def _sink_viewer(self, edit) -> None:
+        """Inset the preview / scan log so it sits in the stage, not as a flat plate."""
+        dark = self._theme != "light"
+        if dark:
+            fill = "rgba(0, 0, 0, 0.46)"
+            top, side, bot = "rgba(0,0,0,0.72)", "rgba(0,0,0,0.40)", "rgba(255,255,255,0.14)"
+            base = QColor(6, 8, 12, 210)
+        else:
+            fill = "rgba(255, 255, 255, 0.62)"
+            top, side, bot = "rgba(0,0,0,0.16)", "rgba(0,0,0,0.08)", "rgba(255,255,255,0.90)"
+            base = QColor(255, 255, 255, 210)
+        edit.setStyleSheet(
+            "QPlainTextEdit {"
+            f"background: {fill}; color: {'#f2f4f8' if dark else '#1d1d1f'};"
+            "border-radius: 12px;"
+            f"border-top: 1px solid {top};"
+            f"border-left: 1px solid {side};"
+            f"border-bottom: 1px solid {bot};"
+            f"border-right: 1px solid {bot};"
+            "padding: 6px;"
+            "}"
+        )
+        from PySide6.QtGui import QPalette
+
+        view = edit.viewport()
+        view.setAutoFillBackground(True)
+        pal = view.palette()
+        pal.setColor(QPalette.ColorRole.Base, base)
+        view.setPalette(pal)
+
+    def _tex_pick_map(self, which: str) -> None:
+        start = str(getattr(self, "_tex_source_dir", "") or "")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select texture",
+            start,
+            "Images (*.tga *.png *.jpg *.jpeg *.bmp *.dds *.texture *.texture.txt);;All (*.*)",
+        )
+        if not path:
+            return
+        name = Path(path).name
+        if name.lower().endswith(".texture.txt"):
+            name = name[: -len(".txt")]
+        self._tex_source_dir = Path(path).parent
+        if which == "alpha":
+            self._tex_alpha_on = True
+            self.tex_alpha.setText(name)
+        else:
+            self.tex_primary.setText(name)
+        self._tex_refresh_preview()
+
     def _tex_seg_val(self, seg: _SegPills) -> str:
         v = seg.value()
         return "" if v == _TEX_OMIT else v
@@ -2504,9 +2679,10 @@ class AssetsStudioHost(QWidget):
         seg.set_value(value if value else _TEX_OMIT)
 
     def _tex_keys(self) -> dict[str, str]:
+        alpha = self.tex_alpha.text().strip() if getattr(self, "_tex_alpha_on", False) else ""
         keys = default_texture_keys(
             primary=self.tex_primary.text().strip(),
-            alpha=self.tex_alpha.text().strip(),
+            alpha=alpha,
             usage=self._tex_seg_val(self.tex_usage) or None,
             normal=self._tex_seg_val(self.tex_normal) == "normalmap",
             tile=self._tex_seg_val(self.tex_tile),
@@ -2521,7 +2697,7 @@ class AssetsStudioHost(QWidget):
         """Sidebar Tile/Compression + stem-detected UsageHint / NormalMapHint."""
         return keys_for_image(
             primary,
-            alpha=self.tex_alpha.text().strip(),
+            alpha=self.tex_alpha.text().strip() if getattr(self, "_tex_alpha_on", False) else "",
             tile=self._tex_seg_val(self.tex_tile),
             compression=self._tex_seg_val(self.tex_compress),
         )
@@ -2825,6 +3001,7 @@ class AssetsStudioHost(QWidget):
         self.tex_alpha.blockSignals(True)
         self.tex_primary.setText(keys.get("Primary", ""))
         self.tex_alpha.setText(keys.get("Alpha", ""))
+        self._tex_alpha_on = bool(keys.get("Alpha", "").strip())
         self.tex_primary.blockSignals(False)
         self.tex_alpha.blockSignals(False)
         self._tex_set_seg(self.tex_tile, keys.get("Tile", ""))
@@ -3671,5 +3848,8 @@ def build_assets_studio(
     on_home: Callable[[], None],
     on_theme: Callable[[], None] | None = None,
     theme_mode: str = "dark",
+    shell: bool = False,
 ) -> AssetsStudioHost:
-    return AssetsStudioHost(on_home=on_home, on_theme=on_theme, theme_mode=theme_mode)
+    return AssetsStudioHost(
+        on_home=on_home, on_theme=on_theme, theme_mode=theme_mode, shell=shell
+    )
