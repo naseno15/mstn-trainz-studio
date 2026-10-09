@@ -1,4 +1,5 @@
 #include "sounds_page.h"
+#include "res_path.h"
 #include "feedback.h"
 
 #include "shell_window.h"
@@ -24,11 +25,7 @@
 namespace {
 
 QString qml_dir() {
-#ifdef QML_DIR
-    return QStringLiteral(QML_DIR);
-#else
-    return {};
-#endif
+return res_qml_dir();
 }
 
 bool same_file(const QString& left, const QString& right) {
@@ -353,7 +350,7 @@ SoundsPage::SoundsPage(QWidget* parent) : QWidget(parent) {
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
     view_->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
     view_->setClearColor(QColor(QStringLiteral("#12161c")));
-    view_->setSource(QUrl::fromLocalFile(qml_dir() + QStringLiteral("/SoundsPage.qml")));
+    view_->setSource(res_url(qml_dir() + QStringLiteral("/SoundsPage.qml")));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(view_);

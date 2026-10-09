@@ -1,4 +1,5 @@
 #include "ui/i18n.h"
+#include "res_path.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -16,11 +17,8 @@
 namespace {
 
 QString i18n_dir() {
-#ifdef I18N_DIR
-    return QStringLiteral(I18N_DIR);
-#else
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/i18n");
-#endif
+const QString d = res_i18n_dir();
+    return d.isEmpty() ? QCoreApplication::applicationDirPath() + QStringLiteral("/i18n") : d;
 }
 
 // Text worth translating: has a letter, is not a path / KUID / number / file name.

@@ -67,6 +67,27 @@ qt_add_executable(trainz_studio_cpp src/main.cpp)
 target_link_libraries(trainz_studio_cpp PRIVATE trainz_ui)
 set_target_properties(trainz_studio_cpp PROPERTIES WIN32_EXECUTABLE TRUE)
 
+# Embed QML, i18n catalogs and the icon font so the exe is self-contained (res_path.h prefers :/studio).
+file(GLOB studio_qml CONFIGURE_DEPENDS ui/qml/*.qml)
+file(GLOB studio_i18n CONFIGURE_DEPENDS assets/i18n/*.json)
+set(studio_font assets/fonts/MaterialIcons-Regular.ttf)
+foreach(f ${studio_qml})
+    get_filename_component(n ${f} NAME)
+    set_source_files_properties(${f} PROPERTIES QT_RESOURCE_ALIAS qml/${n})
+endforeach()
+foreach(f ${studio_i18n})
+    get_filename_component(n ${f} NAME)
+    set_source_files_properties(${f} PROPERTIES QT_RESOURCE_ALIAS i18n/${n})
+endforeach()
+set_source_files_properties(${studio_font} PROPERTIES QT_RESOURCE_ALIAS fonts/MaterialIcons-Regular.ttf)
+qt_add_resources(trainz_studio_cpp studio PREFIX /studio FILES ${studio_qml} ${studio_i18n} ${studio_font})
+
+# Static Qt (tools/build_qt_static.ps1): one exe, no DLLs.
+if(TRAINZ_STATIC)
+    qt_import_qml_plugins(trainz_studio_cpp)
+    target_link_options(trainz_studio_cpp PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
+
 function(trainz_ui_check name)
     add_executable(${name} checks/${name}.cpp)
     target_link_libraries(${name} PRIVATE trainz_ui)

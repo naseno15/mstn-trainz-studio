@@ -1,4 +1,5 @@
 #include "shell_window.h"
+#include "res_path.h"
 
 #include "assets_page.h"
 #include "engine_page.h"
@@ -88,11 +89,7 @@ QString page_verb(const QString& page, const QString& verb) {
 QSettings studio_settings() { return QSettings(QStringLiteral("MSTN"), QStringLiteral("TrainzStudio")); }
 
 QString qml_dir() {
-#ifdef QML_DIR
-    return QStringLiteral(QML_DIR);
-#else
-    return {};
-#endif
+return res_qml_dir();
 }
 
 struct StudioCard {
@@ -469,7 +466,7 @@ QQuickWidget* ShellWindow::load_quick(const QString& file, bool translucent) {
         view->setClearColor(QColor(QStringLiteral("#12161c")));
         view->setAttribute(Qt::WA_OpaquePaintEvent, true);
     }
-    view->setSource(QUrl::fromLocalFile(qml_dir() + QLatin1Char('/') + file));
+    view->setSource(res_url(qml_dir() + QLatin1Char('/') + file));
     return view;
 }
 

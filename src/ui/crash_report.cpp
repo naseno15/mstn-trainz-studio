@@ -1,4 +1,5 @@
 #include "ui/crash_report.h"
+#include "res_path.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -34,11 +35,7 @@ QMutex g_log_mutex;
 QtMessageHandler g_prev_handler = nullptr;
 
 QString qml_dir() {
-#ifdef QML_DIR
-    return QStringLiteral(QML_DIR);
-#else
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/qml");
-#endif
+{ const QString d = res_qml_dir(); return d.isEmpty() ? QCoreApplication::applicationDirPath() + QStringLiteral("/qml") : d; }
 }
 
 QString tail_lines(const QString& path, int count) {
@@ -194,7 +191,7 @@ QDialog* make_crash_dialog(const QString& title, const QString& summary, const Q
     view->setAttribute(Qt::WA_AlwaysStackOnTop, true);
     view->setClearColor(Qt::transparent);
     view->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge);
-    view->setSource(QUrl::fromLocalFile(qml_dir() + QStringLiteral("/CrashDialog.qml")));
+    view->setSource(res_url(qml_dir() + QStringLiteral("/CrashDialog.qml")));
     auto* lay = new QVBoxLayout(dialog);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->addWidget(view);

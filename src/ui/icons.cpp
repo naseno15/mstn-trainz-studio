@@ -1,4 +1,5 @@
 #include "icons.h"
+#include "res_path.h"
 
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -50,11 +51,7 @@ const Glyph kGlyphs[] = {
 };
 
 QString font_file() {
-#ifdef QML_DIR
-    return QFileInfo(QStringLiteral(QML_DIR)).dir().filePath(QStringLiteral("../assets/fonts/MaterialIcons-Regular.ttf"));
-#else
-    return {};
-#endif
+return res_icon_font();
 }
 
 }  // namespace
@@ -70,7 +67,7 @@ QString material_icon_family() { return QStringLiteral("Material Icons"); }
 QString material_icon_url() {
     const QString path = QFileInfo(font_file()).absoluteFilePath();
     if (!QFileInfo::exists(path)) return {};
-    return QUrl::fromLocalFile(path).toString();
+    return res_url(path).toString();
 }
 
 QString material_glyph(const char* name) {

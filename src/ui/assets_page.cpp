@@ -1,4 +1,5 @@
 #include "assets_page.h"
+#include "res_path.h"
 #include "feedback.h"
 
 #include "shell_window.h"
@@ -70,11 +71,7 @@
 namespace {
 
 QString qml_dir() {
-#ifdef QML_DIR
-    return QStringLiteral(QML_DIR);
-#else
-    return {};
-#endif
+return res_qml_dir();
 }
 
 QString safe_kuid(const std::string& kuid) {
@@ -2113,7 +2110,7 @@ AssetsPage::AssetsPage(QWidget* parent) : QWidget(parent) {
     view_->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
     view_->setClearColor(QColor(QStringLiteral("#12161c")));
     view_->setAttribute(Qt::WA_AlwaysStackOnTop, true);
-    view_->setSource(QUrl::fromLocalFile(qml_dir() + QStringLiteral("/AssetsPage.qml")));
+    view_->setSource(res_url(qml_dir() + QStringLiteral("/AssetsPage.qml")));
     view_->raise();
 }
 

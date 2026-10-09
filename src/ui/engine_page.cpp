@@ -1,4 +1,5 @@
 #include "engine_page.h"
+#include "res_path.h"
 
 #include "shell_window.h"
 
@@ -20,11 +21,7 @@ namespace {
 const char* kColors[] = {"#94a3b8", "#22c55e", "#84cc16", "#eab308", "#f59e0b", "#f97316", "#ef4444", "#ec4899", "#a855f7"};
 
 QString qml_dir() {
-#ifdef QML_DIR
-    return QStringLiteral(QML_DIR);
-#else
-    return {};
-#endif
+return res_qml_dir();
 }
 
 bool parse_num(const QString& text, double& out) {
@@ -370,7 +367,7 @@ EngineTunerPage::EngineTunerPage(QWidget* parent) : QWidget(parent) {
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
     view_->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
     view_->setClearColor(QColor(QStringLiteral("#12161c")));
-    view_->setSource(QUrl::fromLocalFile(qml_dir() + QStringLiteral("/EnginePage.qml")));
+    view_->setSource(res_url(qml_dir() + QStringLiteral("/EnginePage.qml")));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(view_);

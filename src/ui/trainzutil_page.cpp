@@ -1,4 +1,5 @@
 #include "trainzutil_page.h"
+#include "res_path.h"
 
 #include "asset_preview.h"
 #include "i18n.h"
@@ -57,11 +58,7 @@ struct TrainzScanGate {
 namespace {
 
 QString qml_file() {
-#ifdef QML_DIR
-    return QStringLiteral(QML_DIR "/TrainzUtilPage.qml");
-#else
-    return {};
-#endif
+return res_qml_dir() + QStringLiteral("/TrainzUtilPage.qml");
 }
 
 QString glyph(const char* name) { return material_glyph(name); }
@@ -2522,7 +2519,7 @@ TrainzUtilPage::TrainzUtilPage(QWidget* parent, bool start_probe) : QWidget(pare
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
     view_->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
     view_->setClearColor(QColor(QStringLiteral("#12161c")));
-    view_->setSource(QUrl::fromLocalFile(qml_file()));
+    view_->setSource(res_url(qml_file()));
     if (start_probe) bridge_->refreshLauncher();
 }
 

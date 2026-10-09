@@ -1,4 +1,5 @@
 #include "mesh_page.h"
+#include "res_path.h"
 
 #include "icons.h"
 #include "mesh_view.h"
@@ -51,11 +52,7 @@
 namespace {
 
 QString qml_file() {
-#ifdef QML_DIR
-    return QStringLiteral(QML_DIR "/MeshPage.qml");
-#else
-    return {};
-#endif
+return res_qml_dir() + QStringLiteral("/MeshPage.qml");
 }
 
 QString fixture_path() {
@@ -1368,7 +1365,7 @@ MeshStudioPage::MeshStudioPage(QWidget* parent) : QWidget(parent) {
     view_->setAttribute(Qt::WA_AlwaysStackOnTop, true);
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
     view_->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
-    view_->setSource(QUrl::fromLocalFile(qml_file()));
+    view_->setSource(res_url(qml_file()));
     view_->raise();
     view_->installEventFilter(this);
     qApp->installEventFilter(this);
