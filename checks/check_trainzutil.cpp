@@ -17,6 +17,7 @@
 #include "ui/icons.h"
 #include "ui/install_queue.h"
 #include "ui/shell_window.h"
+#include "ui/trainz_meta.h"
 #include "ui/trainzutil_page.h"
 
 static std::vector<uint8_t> tzarc_v1(const std::string& name, const std::string& payload) {
@@ -77,7 +78,7 @@ static void check_identity() {
     out.write(reinterpret_cast<const char*>(archive.data()), static_cast<qint64>(archive.size()));
     out.close();
 
-    TrainzUtilPage page;
+    TrainzUtilPage page(nullptr, false);
     page.open_archive(path);
     assert(page.library_rows() == 1);
     assert(page.cell(0, 0) == QLatin1String("KIHA"));
@@ -132,13 +133,84 @@ static void check_queue() {
     assert(!order.contains(QStringLiteral("c")));
 }
 
+static void check_meta() {
+    assert(category_label(QStringLiteral("TR;CMP;ESPC")) == QLatin1String("Engine Spec"));
+    assert(category_is_enginespec(QStringLiteral("TR;CMP;ESPC")));
+    assert(category_label(QStringLiteral("SLIB")) != QLatin1String("SLIB"));
+    assert(status_bits(QString(), false, false) == QStringList({QStringLiteral("Installed")}));
+    assert(status_bits(QStringLiteral("IF"), true, false) == QStringList({QStringLiteral("Edit"), QStringLiteral("Faulty")}));
+    assert(kuid_from_archive_name(QStringLiteral("kuid2 1 2 3.tzarc")) == QLatin1String("<kuid2:1:2:3>"));
+    assert(kuid_from_archive_name(QStringLiteral("kuid 5 6.tzarc")) == QLatin1String("<kuid:5:6>"));
+    assert(kuid_from_archive_name(QStringLiteral("readme.txt")).isEmpty());
+    assert(kuid_user_id(QStringLiteral("<kuid2:1190880:100154:1>")) == 1190880);
+    QByteArray tdx("junk\x05\0\0\0", 8);
+    auto put = [&tdx](quint32 v) { for (int s = 0; s < 32; s += 8) tdx.append(char((v >> s) & 0xFF)); };
+    put(16);
+    for (quint32 i = 0; i < 16; ++i) {
+        const QByteArray name = "user" + QByteArray::number(i);
+        put(quint32(name.size() + 1));
+        tdx.append(name).append('\0');
+        put(7);
+        put(1000 + i);
+    }
+    const QHash<qint64, QString> owners = parse_kuid_owners(tdx);
+    assert(owners.size() == 16 && owners.value(1003) == QLatin1String("user3"));
+    if (QFile::exists(QStringLiteral("C:/trs22/assets.tdx"))) {
+        const QHash<qint64, QString> real = read_kuid_owners(QStringLiteral("C:/trs22/assets.tdx"));
+        std::printf("assets.tdx owners: %d, 1144998=%s\n", int(real.size()), real.value(1144998).toUtf8().constData());
+    }
+    assert(format_bytes(512) == QLatin1String("512 B"));
+    assert(format_bytes(2048) == QLatin1String("2.0 KB"));
+
+    QTemporaryDir dir;
+    assert(dir.isValid());
+    QDir().mkpath(dir.filePath(QStringLiteral("local/3f")));
+    const std::vector<uint8_t> archive = tzarc_v1("config.txt", "author \"Boonnop\"\ntrainz-build 5.0\n");
+    QFile out(dir.filePath(QStringLiteral("local/3f/kuid 7 8.tzarc")));
+    assert(out.open(QIODevice::WriteOnly));
+    out.write(reinterpret_cast<const char*>(archive.data()), static_cast<qint64>(archive.size()));
+    out.close();
+    const ContentIndex index = index_content({dir.path()});
+    const QHash<QString, ArchiveHit> chosen = index.chosen();
+    assert(chosen.contains(QStringLiteral("<kuid:7:8>")));
+    assert(chosen.value(QStringLiteral("<kuid:7:8>")).size == static_cast<qint64>(archive.size()));
+    assert(chosen.value(QStringLiteral("<kuid:7:8>")).mtime_ns > 0);
+    const QHash<QString, AssetMeta> meta = scan_archive_meta(index, dir.filePath(QStringLiteral("cache.json")), {});
+    assert(meta.value(QStringLiteral("<kuid:7:8>")).author == QLatin1String("Boonnop"));
+    assert(meta.value(QStringLiteral("<kuid:7:8>")).build == QLatin1String("5.0"));
+}
+
 int main(int argc, char** argv) {
     prepare_qt_runtime();
     QApplication app(argc, argv);
+    check_meta();
     check_identity();
     check_find();
     check_queue();
-    TrainzUtilPage page;
+    const QList<LibraryAsset> listed = parse_installed_library(
+        "+ <kuid:1:2> : IFL : ESPC : Broken loco\n"
+        "+ <kuid2:3:4:1> : I : TRK : Good track\n"
+        "+ <kuid:9:9> : F : TRK : Not installed\n");
+    assert(listed.size() == 2);
+    assert(listed.first().faulty);
+    assert(listed.first().name == QLatin1String("Broken loco"));
+    assert(listed.last().kuid == QLatin1String("<kuid2:3:4:1>"));
+    {
+        LibraryList scoped;
+        scoped.replace(listed);
+        scoped.click_pick(QStringLiteral("<kuid:1:2>"), false, false);
+        scoped.set_scope({QStringLiteral("<kuid2:3:4:1>"), QStringLiteral("<kuid:7:7>")}, QStringLiteral("Dependencies of Broken loco"));
+        assert(scoped.count() == 2 && scoped.selected_kuids().isEmpty());
+        assert(!scoped.contains(QStringLiteral("<kuid:7:7>")));
+        assert(scoped.cell(scoped.index_of(QStringLiteral("<kuid:7:7>")), 0) == QLatin1String("<kuid:7:7>"));
+        assert(scoped.summary().contains(QLatin1String("1 not installed")));
+        scoped.pop_scope();
+        assert(scoped.count() == 2 && scoped.selected_kuids() == QStringList({QStringLiteral("<kuid:1:2>")}));
+    }
+    assert(parse_installation_data_path("+ <NULL> : C:\\Trainz Data\\build\n") == QLatin1String("C:\\Trainz Data\\build"));
+    assert(parse_installation_data_path("+ <NULL> : <unresolved>\n").isEmpty());
+
+    TrainzUtilPage page(nullptr, false);
     page.show();
     app.processEvents();
     if (!page.qmlReady()) {

@@ -167,6 +167,7 @@ static void check_files() {
     ChumpFile chump = read_chump(chump_bin.data(), chump_bin.size());
     expect_eq(summarize_chump(chump), read_text(dir + "/chump.txt"), "chump");
     assert(encode_chump(chump) == chump_bin);
+    expect_eq(summarize_chump(text_to_chump(chump_to_text(chump))), summarize_chump(chump), "chump text");
 
     auto cdp_bin = read_bin(dir + "/demo.cdp");
     auto kuids = list_cdp_kuids(cdp_bin.data(), cdp_bin.size());
@@ -216,6 +217,36 @@ static void check_files() {
     }
     tz_got << "albedo " << sub.albedo << "\nmat " << sub.material_type << "\n";
     expect_eq(tz_got.str(), read_text(dir + "/tzmf.txt"), "tzmf");
+
+    auto named = tz;
+    const size_t tail = sub.tail_off;
+    assert(tail <= named.size());
+    auto le = [](const char* text) {
+        const std::string body = std::string(text) + '\0';
+        std::string out(4 + body.size(), '\0');
+        const uint32_t n = static_cast<uint32_t>(body.size());
+        std::memcpy(out.data(), &n, 4);
+        std::memcpy(out.data() + 4, body.data(), body.size());
+        return out;
+    };
+    const std::string block = le("pbrmetal") + le("body.m.pbrmetal") + std::string("\0\0\0\0\x01", 5) + std::string(16, '\0') + std::string("\0\0\0\x01", 4) + le("txAlbedo") + le("body.texture");
+    named.insert(named.begin() + static_cast<std::ptrdiff_t>(tail), block.begin(), block.end());
+    const TrainzMesh tagged = parse_trainzmesh(named.data(), named.size());
+    assert(tagged.submeshes[0].name == "body.m.pbrmetal");
+    assert(tagged.submeshes[0].material_type == "pbrmetal");
+    const auto mats = parse_tzmf_materials(named.data(), named.size());
+    assert(mats.size() == 1);
+    assert(mats[0].name == "body.m.pbrmetal");
+    assert(mats[0].textures.size() == 1);
+    assert(mats[0].textures[0].key == "txAlbedo");
+    const std::string door = "c:/trs22/backups/26-10-03/kuid 1125787 100060 MSTN KIHA _ ______40/door/doorintback.trainzmesh";
+    if (std::ifstream(door, std::ios::binary)) {
+        const auto door_bin = read_bin(door);
+        const auto door_mats = parse_tzmf_materials(door_bin.data(), door_bin.size());
+        assert(door_mats.size() == 3);
+        assert(door_mats[0].name == "rubber.m.pbrmetal");
+        assert(door_mats[0].textures.size() == 6);
+    }
 }
 
 int main() {
