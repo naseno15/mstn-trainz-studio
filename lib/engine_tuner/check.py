@@ -115,6 +115,12 @@ def check_autotune() -> None:
     self_check()
 
 
+def check_airtune() -> None:
+    from .airtune import self_check
+
+    self_check()
+
+
 def check_pressure_units() -> None:
     from trainz_studio.ui.engine.pressure import (
         from_bar,
@@ -157,6 +163,21 @@ def check_ui_builds() -> None:
         assert host._stack.currentIndex() == 1
         host._nav.set_page("parameters", emit=True)
         assert host._stack.currentIndex() == 2
+        host.open_autotune()
+        assert host._auto_kind == "air"
+        assert host._stack.currentIndex() == 2
+        host.preset_air_fields()
+        host.apply_air_fields()
+        assert abs(host.cfg.pressure["brakefull"] * 1000 - 3.5) < 1e-6
+        assert "bpini" not in host.cfg.pressure
+        host.undo()
+        host.close_autotune()
+        host._nav.set_page("tuner", emit=True)
+        host.open_autotune()
+        assert host._auto_kind == "engine"
+        assert host._stack.currentIndex() == 0
+        host.close_autotune()
+        host._nav.set_page("parameters", emit=True)
         assert len(host.cfg.throttle_power) >= 1
         host.throttle_editor._redraw()
         # pressure bar column present
@@ -225,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         ("config_io", check_config_io),
         ("physics", check_physics),
         ("autotune", check_autotune),
+        ("airtune", check_airtune),
         ("pressure_units", check_pressure_units),
     ]
     if not fast:
