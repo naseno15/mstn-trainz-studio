@@ -42,7 +42,7 @@ _PAGE_BLURBS = {
     "packages": "Queue — ลากโฟลเดอร์ asset หรือ .cdp · Pack ≤500 / ≤800 / max 1 GB",
     "config": "Edit config.chump · pack/export config.txt · VE rules on asset folder.",
     "texture": "Texture Params · VE37/39/65… · .texture.txt · Resize → _prep/.",
-    "parameter": "Texture Editor · m.pbrmetal R/G/B/A · paint · Save overwrite.",
+    "parameter": "Drop maps on the table · click a row to edit · Clear removes them.",
     "denoise": "Texture Denoiser · OIDN + OpenCV · preview then Save overwrite.",
     "meshops": "Mesh Lods · material rules · .lm.txt · .m.pbrmetal / .m.onetex.",
     "kuid": "Normalize · hex · hash-XX folder (chump buckets).",
@@ -208,6 +208,7 @@ class AssetsSidebar(FrostGlassFrame):
         self._page = "packages"
         self._page_anim = None
         self._queue_rail: QWidget | None = None
+        self._param_rail: QWidget | None = None
 
         outer = QVBoxLayout(self)
         # inset for soft shadow ring painted inside FrostGlassFrame (same as Mesh)
@@ -313,6 +314,17 @@ class AssetsSidebar(FrostGlassFrame):
         self._packages_host_lay.addWidget(rail, 1)
         self._sync_packages_visibility()
 
+    def mount_param_strip(self, rail: QWidget) -> None:
+        """Park the Texture Editor image table in the left sidebar."""
+        if self._param_rail is rail:
+            return
+        if self._param_rail is not None:
+            self._packages_host_lay.removeWidget(self._param_rail)
+            self._param_rail.setParent(None)
+        self._param_rail = rail
+        self._packages_host_lay.addWidget(rail, 1)
+        self._sync_packages_visibility()
+
     def set_theme(self, mode: str) -> None:
         self._theme = mode if mode in ("dark", "light") else "dark"
         self._logo.setPixmap(_logo_pixmap(108, mode=self._theme))
@@ -398,8 +410,16 @@ class AssetsSidebar(FrostGlassFrame):
 
     def _sync_packages_visibility(self) -> None:
         is_pkg = self._page == "packages"
-        self._packages_host.setVisible(is_pkg and self._queue_rail is not None)
-        self._actions_scroll.setVisible(not is_pkg)
+        is_param = self._page == "parameter"
+        if self._queue_rail is not None:
+            self._queue_rail.setVisible(is_pkg)
+        if self._param_rail is not None:
+            self._param_rail.setVisible(is_param)
+        self._packages_host.setVisible(
+            (is_pkg and self._queue_rail is not None)
+            or (is_param and self._param_rail is not None)
+        )
+        self._actions_scroll.setVisible(not is_pkg and not is_param)
         self._footer.setVisible(is_pkg)
 
     def _rebuild_footer(self) -> None:
