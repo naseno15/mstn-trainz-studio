@@ -24,11 +24,13 @@ set(trainz_ui_sources
     src/ui/ve_rules.cpp
     src/ui/install_queue.cpp
     src/ui/trainz_meta.cpp
+    src/ui/asset_preview.cpp
     src/ui/trainzutil_page.cpp
     src/ui/engine_page.cpp
     src/ui/assets_page.cpp
     src/ui/texmesh.cpp
     src/ui/sounds_page.cpp
+    src/ui/wave_player.cpp
     src/ui/mesh_page.cpp
     src/ui/mesh_view.cpp
 )
