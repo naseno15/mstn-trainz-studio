@@ -25,11 +25,6 @@ GlassPlate {
         Item {
         anchors.fill: parent
 
-        GlassTip {
-            id: glassTip
-            dark: bridge.dark
-        }
-
         Column {
             id: head
             anchors.top: parent.top
@@ -83,7 +78,6 @@ GlassPlate {
             contentHeight: actionCol.height
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            onContentYChanged: glassTip.hide()
 
             Column {
                 id: actionCol
@@ -100,30 +94,26 @@ GlassPlate {
                         model: actionCol.icons()
                         delegate: Item {
                             required property var modelData
-                            width: 40
+                            readonly property bool faced: (modelData.face || "").length > 0
+                            width: faced ? Math.min(actionCol.width, 34 + faceMeasure.implicitWidth + 22) : 40
                             height: 40
+                            Text {
+                                id: faceMeasure
+                                visible: false
+                                text: modelData.face || ""
+                                font.pixelSize: 12
+                                font.bold: true
+                            }
                             RaiseButton {
                                 anchors.fill: parent
                                 accent: !!modelData.accent
                                 enabled: modelData.enabled !== false
                                 opacity: enabled ? 1 : 0.4
                                 glyph: modelData.glyph
+                                label: modelData.face || ""
+                                tip: modelData.tip || ""
                                 fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                                 onClicked: bridge.runAction(modelData.id)
-                            }
-                            HoverHandler {
-                                onHoveredChanged: {
-                                    tipWait.stop()
-                                    if (hovered && modelData.tip)
-                                        tipWait.restart()
-                                    else
-                                        glassTip.hide()
-                                }
-                            }
-                            Timer {
-                                id: tipWait
-                                interval: 360
-                                onTriggered: glassTip.showFor(parent, modelData.tip)
                             }
                         }
                     }
@@ -185,22 +175,9 @@ GlassPlate {
                         RaiseButton {
                             anchors.fill: parent
                             glyph: modelData.glyph
+                            tip: modelData.tip || ""
                             fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                             onClicked: modelData.id === "clear" ? bridge.queueClear() : bridge.queueRemove()
-                        }
-                        HoverHandler {
-                            onHoveredChanged: {
-                                queueTipWait.stop()
-                                if (hovered && modelData.tip)
-                                    queueTipWait.restart()
-                                else
-                                    glassTip.hide()
-                            }
-                        }
-                        Timer {
-                            id: queueTipWait
-                            interval: 360
-                            onTriggered: glassTip.showFor(parent, modelData.tip)
                         }
                     }
                 }
@@ -230,22 +207,9 @@ GlassPlate {
                             anchors.fill: parent
                             accent: !!modelData.accent
                             glyph: modelData.glyph
+                            tip: modelData.tip || ""
                             fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                             onClicked: bridge.runAction(modelData.id)
-                        }
-                        HoverHandler {
-                            onHoveredChanged: {
-                                footTipWait.stop()
-                                if (hovered && modelData.tip)
-                                    footTipWait.restart()
-                                else
-                                    glassTip.hide()
-                            }
-                        }
-                        Timer {
-                            id: footTipWait
-                            interval: 360
-                            onTriggered: glassTip.showFor(parent, modelData.tip)
                         }
                     }
                 }
