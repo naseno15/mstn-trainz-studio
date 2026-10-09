@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from PySide6.QtCore import Qt
 
-    # Cover → warm Mesh → reveal HOME. Sounds/Engine/Assets warm idle after.
+    # Cover → Mesh view → reveal HOME. Other studios build on first open.
     win.go_home()
     # MeshView must exist before first show — otherwise Windows recreates the HWND
     # when the first QOpenGLWidget lands (looks like close + reopen mid-warm).
@@ -113,31 +113,49 @@ def main(argv: list[str] | None = None) -> int:
     if not win.isMaximized():
         win.showMaximized()
 
-    win._overlay.set_stage("Warming Mesh Studio…", 35)
+    win._overlay.set_stage("Importing studio modules", 18)
     app.processEvents()
 
-    # Finish background imports before building Mesh chrome trees.
-    join_hub_module_preload(timeout=12.0)
+    # Editor must be imported before Mesh chrome. Pump the bar while the rest imports.
+    from ..util.preload import drain_boot_log, preload_progress, set_boot_logger
+
+    import time
+
+    set_boot_logger(win._overlay.log)
+    deadline = time.monotonic() + 12.0
+    while time.monotonic() < deadline:
+        drain_boot_log()
+        name, done, total = preload_progress()
+        pct = 18 + int(16 * done / max(1, total))
+        short = name.rsplit(".", 1)[-1] if name else "modules"
+        win._overlay.set_stage(f"Importing {short}", pct)
+        win._raise_overlay_chrome()
+        app.processEvents()
+        if join_hub_module_preload(timeout=0.03):
+            drain_boot_log()
+            break
 
     _last_pe = [0.0]
 
     def _boot_stage(text: str, pct: int) -> None:
+        drain_boot_log()
         win._overlay.set_stage(text, pct)
+        win._overlay.log(text)
         # Keep title bar above cover — processEvents / resize can bury it.
         win._raise_overlay_chrome()
-        # Throttle processEvents — every stage was re-entering the event loop hard.
-        import time
-
+        # One pump so the log line and the easing bar paint before the next call.
         now = time.monotonic()
-        if now - _last_pe[0] >= 0.05 or pct >= 100:
+        if now - _last_pe[0] >= 0.016 or pct >= 100:
             _last_pe[0] = now
             app.processEvents()
 
     win.warmup_hub_studios(on_stage=_boot_stage)
     win._layout_viewer_pane()
     # Theme/logo already warm before MainWindow — no second rebuild here.
+    drain_boot_log()
     win._overlay.set_stage("Ready", 100)
     app.processEvents()
+    set_boot_logger(None)
     win._hide_overlay()
     # Boot must end maximized — frameless drag / early HWND create can leave restored.
     win.showMaximized()
