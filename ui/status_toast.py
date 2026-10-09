@@ -15,14 +15,24 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QRect,
+    QRectF,
     Qt,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QPainter, QRadialGradient
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -56,6 +66,7 @@ _SAVE_POS = (
     "保存完了",
 )
 _SAVE_NEG = (
+    "unsaved",  # "saved" is a substring of unsaved
     "autosaved",
     "autosave",
     "failed",
@@ -114,6 +125,81 @@ def format_drop_detail(paths: list) -> str:
     if len(paths) > 6:
         names.append(f"+{len(paths) - 6}")
     return " · ".join(names)
+
+
+def _toast_text_qss(dark: bool) -> str:
+    """One type ramp for every toast label — beats global ``* { font-size: 13px }``."""
+    title = "#f5f5f7" if dark else "#1d1d1f"
+    muted = "rgba(235,235,245,0.62)" if dark else "rgba(29,29,31,0.58)"
+    return (
+        "QLabel#toastTitle, QLabel#toastDetail, QLabel#toastPct {"
+        " background: transparent; padding: 0; margin: 0; }"
+        f"QLabel#toastTitle {{ color: {title}; font-size: 12px; font-weight: 600; }}"
+        "QLabel#toastDetail, QLabel#toastPct {"
+        f" color: {muted}; font-size: 12px; font-weight: 500; }}"
+    )
+
+
+def _pin_line(lab: QLabel) -> None:
+    """Lock one text line to its font box so the chip cannot collapse."""
+    lab.ensurePolished()
+    h = max(16, lab.fontMetrics().height())
+    lab.setFixedHeight(h)
+
+
+class _ToastCard(QFrame):
+    """Compact glass chip. Panel frost insets (14/11/16) crush a two-line toast."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._dark = True
+        self.setObjectName("toastCard")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+
+    def set_dark(self, dark: bool) -> None:
+        self._dark = bool(dark)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        dark = self._dark
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        full = QRectF(self.rect())
+        if full.width() < 8 or full.height() < 8:
+            return
+        # Shadow air only — text margins sit inside this plate.
+        side, top, bot = 5.0, 3.0, 6.0
+        r = full.adjusted(side, top, -side, -bot)
+        from .frost import paint_soft_shadow
+
+        paint_soft_shadow(
+            p,
+            r,
+            radius=12.0,
+            dark=dark,
+            clip=full.adjusted(1.0, 1.0, -1.0, -1.0),
+            max_spread=5.0,
+            dy=1.5,
+            peak_alpha=32.0,
+            layers=8,
+        )
+        rad = min(12.0, r.width() * 0.5, r.height() * 0.5)
+        path = QPainterPath()
+        path.addRoundedRect(r, rad, rad)
+        fill = QLinearGradient(r.topLeft(), r.bottomLeft())
+        if dark:
+            fill.setColorAt(0.0, QColor(48, 54, 64, 210))
+            fill.setColorAt(1.0, QColor(16, 20, 26, 230))
+            rim = QColor(255, 255, 255, 48)
+        else:
+            fill.setColorAt(0.0, QColor(246, 248, 251, 230))
+            fill.setColorAt(1.0, QColor(220, 226, 234, 235))
+            rim = QColor(255, 255, 255, 160)
+        p.fillPath(path, fill)
+        p.setPen(QPen(rim, 1.0))
+        p.drawPath(path)
 
 
 def _theme_dark() -> bool:
@@ -281,16 +367,17 @@ class GlassToastBubble(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         root = QVBoxLayout(self)
-        # Room for soft bloom only — keep the chip itself short + wide.
-        root.setContentsMargins(10, 8, 10, 10)
+        root.setContentsMargins(2, 2, 2, 2)
 
-        card = FrostGlassFrame(radius=10.0)
-        card.setObjectName("toastCard")
+        card = _ToastCard(self)
         card.set_dark(self._dark)
+        card.setStyleSheet(_toast_text_qss(self._dark))
+        card.setMinimumWidth(300)
         self._card = card
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(10, 6, 12, 6)
-        cl.setSpacing(3)
+        # Inside the plate (paint inset 5/3/6) so glyphs are not clipped.
+        cl.setContentsMargins(14, 10, 16, 12)
+        cl.setSpacing(2)
 
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -305,39 +392,33 @@ class GlassToastBubble(QWidget):
         )
         row.addWidget(self._mark, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # Do NOT use #welcomeTitle — theme sets it to 34px (HOME hero).
         texts = QVBoxLayout()
         texts.setSpacing(1)
         head, sub = _toast_lines(title, detail)
-        title_ink = "#f5f5f7" if self._dark else "#1d1d1f"
-        muted_ink = "rgba(235,235,245,0.62)" if self._dark else "rgba(29,29,31,0.58)"
         self._title = QLabel(head)
         self._title.setObjectName("toastTitle")
-        self._title.setFont(app_font(12, QFont.Weight.DemiBold))
-        self._title.setStyleSheet(f"QLabel#toastTitle {{ color: {title_ink}; }}")
         texts.addWidget(self._title)
         self._detail = QLabel("")
         self._detail.setObjectName("toastDetail")
         self._detail.setWordWrap(False)
         self._detail.setTextFormat(Qt.TextFormat.PlainText)
-        self._detail.setMinimumWidth(240)
-        self._detail.setMaximumWidth(380)
-        self._detail.setFont(app_font(10, QFont.Weight.Medium))
-        self._detail.setStyleSheet(f"QLabel#toastDetail {{ color: {muted_ink}; }}")
+        self._detail.setMinimumWidth(220)
+        self._detail.setMaximumWidth(420)
         self._set_detail(sub)
         texts.addWidget(self._detail)
         row.addLayout(texts, 1)
 
         self._pct_lab = QLabel("")
         self._pct_lab.setObjectName("toastPct")
-        self._pct_lab.setFont(app_font(10, QFont.Weight.DemiBold))
         self._pct_lab.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self._pct_lab.setMinimumWidth(32)
-        self._pct_lab.setStyleSheet(f"QLabel#toastPct {{ color: {muted_ink}; }}")
+        self._pct_lab.setMinimumWidth(36)
         row.addWidget(self._pct_lab, 0, Qt.AlignmentFlag.AlignVCenter)
         cl.addLayout(row)
+        _pin_line(self._title)
+        _pin_line(self._detail)
+        _pin_line(self._pct_lab)
 
         self._bar = QProgressBar()
         self._bar.setObjectName("toastProgress")
