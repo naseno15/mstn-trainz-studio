@@ -150,6 +150,199 @@ def open_tzarc(path: Path) -> TzarcIndex:
     raise ValueError(f"tzarc version {version} not supported")
 
 
+def _parse_directory_head(blob: bytes, *, be: bool) -> tuple[list[TzarcEntry], int] | None:
+    """Name table only. Payloads may still be missing, so a short buffer returns None."""
+    if len(blob) < 4:
+        return None
+    count, off = _u32(blob, 0, be)
+    if count > 1_000_000:
+        return None
+    entries: list[TzarcEntry] = []
+    cursor_sizes: list[tuple[str, int]] = []
+    for _ in range(count):
+        if off >= len(blob):
+            return None
+        nlen = blob[off]
+        off += 1
+        if off + nlen + 8 > len(blob):
+            return None
+        name = blob[off : off + nlen].decode("utf-8", errors="replace")
+        off += nlen
+        size, off = _u64(blob, off, be)
+        cursor_sizes.append((name, int(size)))
+    if off + 4 > len(blob):
+        return None
+    off += 4
+    cursor = off
+    for name, size in cursor_sizes:
+        entries.append(TzarcEntry(name=name, size=size, offset=cursor))
+        cursor += size
+    return entries, off
+
+
+def _config_entry(entries: list[TzarcEntry]) -> TzarcEntry | None:
+    ranked: list[tuple[int, TzarcEntry]] = []
+    for ent in entries:
+        base = ent.name.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        if base == "config.txt":
+            ranked.append((0, ent))
+        elif base == "config.chump":
+            ranked.append((1, ent))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[0])
+    return ranked[0][1]
+
+
+def _named_entry(entries: list[TzarcEntry], names: tuple[str, ...]) -> TzarcEntry | None:
+    """First archive file that matches a requested name. Earlier names win."""
+    wanted = [name.replace("\\", "/").lstrip("/").casefold() for name in names]
+    best: tuple[int, TzarcEntry] | None = None
+    for ent in entries:
+        full = ent.name.replace("\\", "/").lstrip("/").casefold()
+        base = full.rsplit("/", 1)[-1]
+        for rank, name in enumerate(wanted):
+            if full == name or base == name:
+                if best is None or rank < best[0]:
+                    best = (rank, ent)
+                break
+    return None if best is None else best[1]
+
+
+def read_tzarc_named(path: Path, names: tuple[str, ...]) -> bytes:
+    """One named file, stopping once that entry is in hand.
+
+    Same early-out as the config reader: a screenshot near the front does not
+    pull the texture payloads behind it.
+    """
+    path = Path(path)
+    with path.open("rb") as fh:
+        head = fh.read(8)
+        if len(head) < 8 or head[:4] != MAGIC:
+            raise ValueError(f"not a tzarc: {path.name}")
+        version, be = _detect_endian_version(head)
+        if version == 1:
+            window = bytearray()
+            while True:
+                block = fh.read(65536)
+                window.extend(block)
+                parsed = _parse_directory_head(window, be=be)
+                if parsed is None:
+                    if not block:
+                        return b""
+                    continue
+                hit = _named_entry(parsed[0], names)
+                if hit is None:
+                    return b""
+                fh.seek(8 + hit.offset)
+                return fh.read(hit.size)
+        if version != 2:
+            raise ValueError(f"tzarc version {version} not supported")
+        counts = fh.read(12)
+        if len(counts) < 12:
+            raise ValueError("tzarc v2 header truncated")
+        nchunk = struct.unpack_from("<I", counts, 8)[0]
+        if nchunk < 1 or nchunk > 1_000_000:
+            raise ValueError(f"tzarc v2 bad chunk count: {nchunk}")
+        table = fh.read(2 * nchunk)
+        if len(table) < 2 * nchunk:
+            raise ValueError("tzarc v2 truncated chunk table")
+        sizes = [struct.unpack_from("<H", table, 2 * i)[0] for i in range(nchunk)]
+        got = bytearray()
+        hit: TzarcEntry | None = None
+        need = 0
+        for csize in sizes:
+            left = csize + 1
+            dec = zlib.decompressobj()
+            try:
+                while left > 0:
+                    piece = fh.read(min(65536, left))
+                    if not piece:
+                        raise ValueError("tzarc v2 truncated chunk")
+                    left -= len(piece)
+                    got.extend(dec.decompress(piece))
+                    if hit is None:
+                        parsed = _parse_directory_head(got, be=True)
+                        if parsed is not None:
+                            hit = _named_entry(parsed[0], names)
+                            if hit is None:
+                                return b""
+                            need = hit.offset + hit.size
+                    if hit is not None and len(got) >= need:
+                        return bytes(got[hit.offset : hit.offset + hit.size])
+                got.extend(dec.flush())
+            except zlib.error as exc:
+                raise ValueError(f"tzarc v2 zlib error: {exc}") from exc
+        return b""
+
+
+def read_tzarc_config(path: Path) -> bytes:
+    """config.txt or config.chump bytes, stopping once that entry is in hand.
+
+    TRS22 stores the config at the front of most archives, so this does not
+    inflate the texture payloads behind it.
+    """
+    path = Path(path)
+    with path.open("rb") as fh:
+        head = fh.read(8)
+        if len(head) < 8 or head[:4] != MAGIC:
+            raise ValueError(f"not a tzarc: {path.name}")
+        version, be = _detect_endian_version(head)
+        if version == 1:
+            window = bytearray()
+            while True:
+                block = fh.read(65536)
+                window.extend(block)
+                parsed = _parse_directory_head(window, be=be)
+                if parsed is None:
+                    if not block:
+                        return b""
+                    continue
+                cfg = _config_entry(parsed[0])
+                if cfg is None:
+                    return b""
+                fh.seek(8 + cfg.offset)
+                return fh.read(cfg.size)
+        if version != 2:
+            raise ValueError(f"tzarc version {version} not supported")
+        counts = fh.read(12)
+        if len(counts) < 12:
+            raise ValueError("tzarc v2 header truncated")
+        nchunk = struct.unpack_from("<I", counts, 8)[0]
+        if nchunk < 1 or nchunk > 1_000_000:
+            raise ValueError(f"tzarc v2 bad chunk count: {nchunk}")
+        table = fh.read(2 * nchunk)
+        if len(table) < 2 * nchunk:
+            raise ValueError("tzarc v2 truncated chunk table")
+        sizes = [struct.unpack_from("<H", table, 2 * i)[0] for i in range(nchunk)]
+        got = bytearray()
+        cfg: TzarcEntry | None = None
+        need = 0
+        for csize in sizes:
+            left = csize + 1
+            dec = zlib.decompressobj()
+            try:
+                while left > 0:
+                    piece = fh.read(min(65536, left))
+                    if not piece:
+                        raise ValueError("tzarc v2 truncated chunk")
+                    left -= len(piece)
+                    got.extend(dec.decompress(piece))
+                    if cfg is None:
+                        parsed = _parse_directory_head(got, be=True)
+                        if parsed is not None:
+                            cfg = _config_entry(parsed[0])
+                            if cfg is None:
+                                return b""
+                            need = cfg.offset + cfg.size
+                    if cfg is not None and len(got) >= need:
+                        return bytes(got[cfg.offset : cfg.offset + cfg.size])
+                got.extend(dec.flush())
+            except zlib.error as exc:
+                raise ValueError(f"tzarc v2 zlib error: {exc}") from exc
+        return b""
+
+
 def list_tzarc(path: Path) -> list[str]:
     return [e.name for e in open_tzarc(path).entries]
 
