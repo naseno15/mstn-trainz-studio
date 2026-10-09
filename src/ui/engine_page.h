@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/status_hub.h"
+
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -52,10 +54,11 @@ class EngineBridge : public QObject {
 public:
     explicit EngineBridge(QObject* parent = nullptr);
 
-    bool dark() const { return true; }
+    bool dark() const { return ui_dark(); }
     int sideW() const { return side_w_; }
     bool autoOn() const { return auto_on_; }
     bool sideLocked() const { return false; }
+    bool cdpSession() const { return cdp_session_; }
     QString iconFontUrl() const { return material_icon_url(); }
     QString iconFont() const { return material_icon_family(); }
     QString tuner() const { return QStringLiteral("Tuner"); }
@@ -67,7 +70,7 @@ public:
     QString centerJson() const { return center_json_; }
     int notchFocus() const { return notch_focus_; }
     QString fileTips() const { return file_tips_; }
-    bool showBack() const { return false; }
+    bool showBack() const { return cdp_session_; }
     QString backGlyph() const { return material_glyph("arrow_back"); }
     QString openGlyph() const { return material_glyph("file_open"); }
     QString saveGlyph() const { return material_glyph("save"); }
@@ -85,6 +88,7 @@ public:
     QStringList shapeNames() const { return {}; }
 
     void load_text(const QString& text, const QString& path = {});
+    void load_cdp_text(const QString& text);
     QString spec_text() const;
 
     Q_INVOKABLE void setPage(const QString& page);
@@ -94,6 +98,7 @@ public:
     Q_INVOKABLE void setCloneFrom(int notch);
     Q_INVOKABLE void toggleTarget(int notch);
     Q_INVOKABLE void openFile();
+    Q_INVOKABLE QStringList veContextPaths() const;
     Q_INVOKABLE void saveFile();
     Q_INVOKABLE void saveFileAs();
     Q_INVOKABLE void undoEdit();
@@ -129,6 +134,7 @@ public:
 signals:
     void changed();
     void homeRequested();
+    void cdpSaveRequested(const QString& text);
 
 private:
     void refresh();
@@ -160,6 +166,7 @@ private:
     int auto_tab_ = 0;
     bool auto_on_ = false;
     bool resist_ = false;
+    bool cdp_session_ = false;
 };
 
 class EngineTunerPage : public QWidget {
@@ -171,14 +178,17 @@ public:
     bool qmlReady() const;
     QStringList qmlErrors() const;
     void loadText(const QString& text);
+    void loadCdpText(const QString& text);
     QString centerJson() const;
     QString specText() const;
+    bool cdpSession() const;
     QString pageName() const;
     void editPoint(int notch, int index, int column, const QString& text);
     void setPage(const QString& page);
 
 signals:
     void homeRequested();
+    void cdpSaveRequested(const QString& text);
 
 private:
     EngineBridge* bridge_ = nullptr;

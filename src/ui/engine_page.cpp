@@ -6,6 +6,7 @@
 
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -41,6 +42,20 @@ EngineBridge::EngineBridge(QObject* parent) : QObject(parent) { refresh(); }
 void EngineBridge::load_text(const QString& text, const QString& path) {
     spec_ = parse_enginespec(text.toStdString());
     spec_.path = path.toStdString();
+    cdp_session_ = false;
+    undo_.clear();
+    redo_.clear();
+    refresh();
+}
+QStringList EngineBridge::veContextPaths() const {
+    const QString path = QString::fromStdString(spec_.path);
+    return path.isEmpty() ? QStringList() : QStringList{path, QFileInfo(path).absolutePath()};
+}
+
+void EngineBridge::load_cdp_text(const QString& text) {
+    spec_ = parse_enginespec(text.toStdString());
+    spec_.path.clear();
+    cdp_session_ = true;
     undo_.clear();
     redo_.clear();
     refresh();
@@ -162,6 +177,10 @@ void EngineBridge::openFile() {
     load_text(QString::fromUtf8(file.readAll()), path);
 }
 void EngineBridge::saveFile() {
+    if (cdp_session_) {
+        emit cdpSaveRequested(spec_text());
+        return;
+    }
     if (spec_.path.empty()) return;
     QFile file(QString::fromStdString(spec_.path));
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
@@ -345,6 +364,7 @@ void EngineBridge::presetAir() {}
 EngineTunerPage::EngineTunerPage(QWidget* parent) : QWidget(parent) {
     bridge_ = new EngineBridge(this);
     connect(bridge_, &EngineBridge::homeRequested, this, &EngineTunerPage::homeRequested);
+    connect(bridge_, &EngineBridge::cdpSaveRequested, this, &EngineTunerPage::cdpSaveRequested);
     view_ = new QQuickWidget(this);
     view_->setResizeMode(QQuickWidget::SizeRootObjectToView);
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
@@ -366,8 +386,10 @@ QStringList EngineTunerPage::qmlErrors() const {
 }
 
 void EngineTunerPage::loadText(const QString& text) { bridge_->load_text(text); }
+void EngineTunerPage::loadCdpText(const QString& text) { bridge_->load_cdp_text(text); }
 QString EngineTunerPage::centerJson() const { return bridge_->centerJson(); }
 QString EngineTunerPage::specText() const { return bridge_->spec_text(); }
+bool EngineTunerPage::cdpSession() const { return bridge_->cdpSession(); }
 QString EngineTunerPage::pageName() const { return bridge_->page(); }
 void EngineTunerPage::editPoint(int notch, int index, int column, const QString& text) { bridge_->editPoint(notch, index, column, text); }
 void EngineTunerPage::setPage(const QString& page) { bridge_->setPage(page); }
