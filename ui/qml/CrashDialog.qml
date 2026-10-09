@@ -4,11 +4,6 @@ import QtQuick
 Item {
     id: root
 
-    Rectangle {
-        anchors.fill: parent
-        color: bridge.dark ? "#e0101418" : "#e8eef1f6"
-    }
-
     GlassPlate {
         id: card
         anchors.centerIn: parent

@@ -17,6 +17,7 @@
 #include "io/cdp.h"
 #include "ui/texmesh.h"
 
+class MeshView;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -283,7 +284,11 @@ private:
     void preview_file(int row);
     void apply_edited_bytes(std::vector<uint8_t> bytes);
     void clear_preview();
+    void sync_mesh_view();
+    bool show_mesh_inline(const QString& path);
     QString stage_selected_asset();
+    MeshView* mesh_view_ = nullptr;  // inline fast preview, parked over the viewer well
+    bool mesh_on_ = false;
     void sync_pages();
     void read_kuid_list();
     void start_export(bool one_file);

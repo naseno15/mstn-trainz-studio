@@ -125,6 +125,7 @@ public:
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void changeEvent(QEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 
 private:
@@ -159,6 +160,7 @@ private:
     QString engine_kuid_;
     std::function<void(const QString&, int)> boot_;
     bool moving_ = false;
+    bool closing_ = false;
 
     void boot_stage(const QString& text, int pct);
 };

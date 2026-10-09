@@ -139,7 +139,7 @@ Item {
             DropZone {
                 id: dropHover
                 anchors.fill: parent
-                onDropped: function (drop) {
+                onFilesDropped: function (drop) {
                     var urls = []
                     for (var i = 0; i < drop.urls.length; ++i)
                         urls.push(String(drop.urls[i]))

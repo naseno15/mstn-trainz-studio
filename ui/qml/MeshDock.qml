@@ -116,8 +116,10 @@ Item {
                             Text {
                                 x: parent.width - 16
                                 y: 26
-                                text: modelData.lock ? "🔒" : "📁"
-                                font.pixelSize: 14
+                                text: modelData.lock ? "\ue897" : bridge.folderGlyph
+                                font.family: mi.name.length > 0 ? mi.name : bridge.iconFont
+                                color: dock.mute
+                                font.pixelSize: 16
                                 opacity: modelData.lock ? 0.4 : 1
                                 HoverHandler { enabled: !modelData.lock; cursorShape: Qt.PointingHandCursor }
                                 TapHandler { onTapped: if (!modelData.lock) bridge.clickId("texBrowse:" + modelData.k) }

@@ -59,7 +59,8 @@ QHash<QString, AssetMeta> scan_archive_meta(
 QString meta_cache_file();
 
 QString asset_cover_path(const ContentIndex& index, const QString& kuid);
-QString asset_browse_dir(const ContentIndex& index, const QString& kuid);
+// preview_only unpacks just meshes and texture images (into a separate cache) - far less to inflate and write.
+QString asset_browse_dir(const ContentIndex& index, const QString& kuid, bool preview_only = false);
 QString config_in_editing(const QString& editing, const QString& kuid);
 
 struct AssetBackup {

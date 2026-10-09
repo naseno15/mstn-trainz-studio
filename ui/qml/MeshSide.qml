@@ -109,6 +109,7 @@ Item {
         contentHeight: body.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        NumberAnimation { id: scrollAnim; target: scroller; property: "contentY"; duration: 380; easing.type: Easing.OutCubic }
 
         Column {
             id: body
@@ -379,13 +380,56 @@ Item {
                     }
                 }
                 Card {
+                    id: matCard
                     title: qsTr("Materials")
+                    // group = text before ":" (the mesh/part set); "" = all
+                    property string group: ""
+                    readonly property var groups: {
+                        var g = [], m = side.bag.mats || []
+                        for (var i = 0; i < m.length; ++i) {
+                            var k = String(m[i].t).indexOf(":") > 0 ? String(m[i].t).split(":")[0] : ""
+                            if (k && g.indexOf(k) < 0) g.push(k)
+                        }
+                        return g
+                    }
+                    // Shift+click in viewport marks a row "on": jump to its group
+                    readonly property string activeGroup: {
+                        var m = side.bag.mats || []
+                        for (var i = 0; i < m.length; ++i)
+                            if (m[i].on === true) return String(m[i].t).split(":")[0]
+                        return ""
+                    }
+                    onActiveGroupChanged: if (activeGroup && groups.indexOf(activeGroup) >= 0) group = activeGroup
+                    Flickable {
+                        width: parent.width
+                        height: 32
+                        visible: matCard.groups.length > 1
+                        contentWidth: groupRow.width
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        flickableDirection: Flickable.HorizontalFlick
+                        Row {
+                            id: groupRow
+                            spacing: 6
+                            Chip { label: qsTr("All"); on: matCard.group === ""; onPicked: matCard.group = "" }
+                            Repeater {
+                                model: matCard.groups
+                                delegate: Chip {
+                                    required property string modelData
+                                    label: modelData
+                                    on: matCard.group === modelData
+                                    onPicked: matCard.group = modelData
+                                }
+                            }
+                        }
+                    }
                     SunkWell {
                     Repeater {
                         model: side.bag.mats || []
                         delegate: PickRow {
                             required property var modelData
                             required property int index
+                            visible: matCard.group === "" || String(modelData.t).split(":")[0] === matCard.group
                             label: modelData.t + (modelData.a ? "   " + modelData.a : "")
                             on: modelData.on === true
                             indent: modelData.d * 14
@@ -777,7 +821,10 @@ Item {
         width: chipLab.implicitWidth + 16
         height: 28
         radius: 8
-        color: on ? "#ff5a1f" : Qt.rgba(0, 0, 0, bridge.dark ? 0.35 : 0.06)
+        color: on ? "#ff5a1f" : (chipHover.hovered ? Qt.rgba(1, 0.35, 0.12, 0.2) : Qt.rgba(0, 0, 0, bridge.dark ? 0.35 : 0.06))
+        scale: chipTap.pressed ? 0.94 : (chipHover.hovered ? 1.06 : 1.0)
+        Behavior on color { ColorAnimation { duration: 180 } }
+        Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutBack; easing.overshoot: 2.2 } }
         border.width: on ? 0 : 1
         border.color: side.line
         Text {
@@ -788,8 +835,8 @@ Item {
             font.pixelSize: 11
             font.bold: on
         }
-        HoverHandler { cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: picked() }
+        HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { id: chipTap; onTapped: picked() }
     }
 
     component PickRow: Rectangle {
@@ -800,7 +847,18 @@ Item {
         width: parent ? parent.width : 0
         height: 30
         radius: 8
-        color: on ? "#ff5a1f" : "transparent"
+        color: on ? "#ff5a1f" : (rowHover.hovered ? Qt.rgba(1, 0.35, 0.12, 0.16) : "transparent")
+        scale: rowTap.pressed ? 0.96 : (rowHover.hovered || on ? 1.025 : 1.0)
+        Behavior on color { ColorAnimation { duration: 180 } }
+        Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutBack; easing.overshoot: 2.2 } }
+        onOnChanged: if (on) Qt.callLater(function () {
+            var y = mapToItem(body, 0, 0).y
+            if (y < scroller.contentY || y + height > scroller.contentY + scroller.height)
+                scrollAnim.to = Math.max(0, Math.min(scroller.contentHeight - scroller.height, y - scroller.height / 2))
+            else
+                return
+            scrollAnim.restart()
+        })
         Text {
             x: 8 + indent
             anchors.verticalCenter: parent.verticalCenter
@@ -811,8 +869,8 @@ Item {
             font.bold: on
             elide: Text.ElideRight
         }
-        HoverHandler { cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: picked() }
+        HoverHandler { id: rowHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { id: rowTap; onTapped: picked() }
     }
 
     component Slide: Item {

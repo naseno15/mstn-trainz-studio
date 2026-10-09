@@ -135,7 +135,7 @@ Item {
                     }
                     DropZone {
                         anchors.fill: parent
-                        onDropped: function (drop) { bridge.dropCenter(drop.urls) }
+                        onFilesDropped: function (drop) { bridge.dropCenter(drop.urls) }
                     }
                     ListView {
                         id: fileList

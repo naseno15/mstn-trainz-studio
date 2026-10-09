@@ -96,6 +96,8 @@ private:
     void run_denoise();
     void show_denoise(bool original);
     void save_denoise();
+    void denoise_channel(int ch);
+    bool ch_orig_[4] = {false, false, false, false};
     QImage param_view() const;
     void pick_magic(int x, int y);
     void clear_magic();

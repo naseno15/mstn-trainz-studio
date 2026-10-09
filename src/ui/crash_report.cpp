@@ -8,7 +8,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMouseEvent>
 #include <QMutex>
+#include <QWindow>
+#include "ui/i18n.h"
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickWidget>
@@ -142,17 +145,54 @@ void CrashBridge::copyError(const QString& selected) {
 }
 
 void CrashBridge::dismiss() {
+    dialog_->hide();  // translucent QQuickWidget windows can linger on Windows until hidden explicitly
     dialog_->accept();
     if (quit_on_ok_) QCoreApplication::quit();
 }
 
+namespace {
+// Drag a frameless dialog by any background press the content did not take.
+class DragFilter : public QObject {
+public:
+    using QObject::QObject;
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        auto* dialog = qobject_cast<QDialog*>(obj);
+        if (dialog && event->type() == QEvent::MouseButtonPress && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton && dialog->windowHandle())
+            dialog->windowHandle()->startSystemMove();
+        return false;
+    }
+};
+}  // namespace
+
+void make_borderless(QDialog* dialog) {
+    dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    dialog->setAttribute(Qt::WA_TranslucentBackground, true);  // no grey square behind rounded corners
+    dialog->installEventFilter(new DragFilter(dialog));
+}
+
+QMessageBox::StandardButton ui_box(QMessageBox::Icon icon, QWidget* parent, const QString& title, const QString& text,
+                                   QMessageBox::StandardButtons buttons, QMessageBox::StandardButton def) {
+    QMessageBox box(icon, ui_tr(title), ui_tr(text), buttons, parent);
+    make_borderless(&box);
+    box.setDefaultButton(def);
+    box.setStyleSheet(themed_qss(QStringLiteral(
+        "QMessageBox { background:#12161c; border:1px solid #ff5a1f; border-radius:12px; }"
+        "QLabel { color:#f2f4f8; font-size:13px; }"
+        "QPushButton { background:#2a3140; color:#f2f4f8; border:none; border-radius:8px; padding:6px 18px; min-width:64px; }"
+        "QPushButton:hover { background:#ff5a1f; }")));
+    return static_cast<QMessageBox::StandardButton>(box.exec());
+}
+
 QDialog* make_crash_dialog(const QString& title, const QString& summary, const QString& detail, const QString& kind, bool quit_on_ok) {
     auto* dialog = new QDialog;
+    make_borderless(dialog);
     dialog->setWindowTitle(QStringLiteral("Trainz Studio"));
     dialog->resize(640, 560);
     auto* view = new QQuickWidget(dialog);
     auto* bridge = new CrashBridge(dialog, title, summary, detail, kind, quit_on_ok);
     view->setResizeMode(QQuickWidget::SizeRootObjectToView);
+    view->setAttribute(Qt::WA_AlwaysStackOnTop, true);
+    view->setClearColor(Qt::transparent);
     view->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge);
     view->setSource(QUrl::fromLocalFile(qml_dir() + QStringLiteral("/CrashDialog.qml")));
     auto* lay = new QVBoxLayout(dialog);

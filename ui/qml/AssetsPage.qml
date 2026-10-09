@@ -135,7 +135,7 @@ Item {
                 }
 
                 Flickable {
-                    visible: bridge.viewPane === 0 && bridge.previewImage.length === 0 && !bridge.previewAudio
+                    visible: !bridge.viewEditor && bridge.previewImage.length === 0 && !bridge.previewAudio
                     anchors.fill: parent
                     anchors.margins: 10
                     contentWidth: viewerText.implicitWidth
@@ -200,7 +200,7 @@ Item {
 
                 Flickable {
                     id: editorFlick
-                    visible: bridge.viewPane === 1
+                    visible: bridge.viewEditor
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     anchors.left: editorGutter.right
@@ -213,7 +213,7 @@ Item {
                     TextEdit {
                         id: editorText
                         width: Math.max(previewSlot.width, implicitWidth)
-                        readOnly: false
+                        readOnly: bridge.viewPane === 0 // Viewer = same render as Editor, just locked
                         selectByMouse: true
                         wrapMode: TextEdit.NoWrap
                         textFormat: TextEdit.PlainText
@@ -234,7 +234,7 @@ Item {
                 }
                 Item {
                     id: editorGutter
-                    visible: bridge.viewPane === 1
+                    visible: bridge.viewEditor
                     anchors.left: parent.left
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
@@ -753,7 +753,7 @@ Item {
                                     }
                                     TapHandler {
                                         onTapped: bridge.pickFinder(modelData.row)
-                                        onDoubleTapped: if (modelData.kind === "asset" || modelData.kind === "dir") bridge.openFinder(modelData.row)
+                                        onDoubleTapped: bridge.openFinder(modelData.row)
                                     }
                                 }
                             }

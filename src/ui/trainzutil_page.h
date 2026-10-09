@@ -84,6 +84,7 @@ public:
     void set_visible_picked(bool on);
     QStringList selected_kuids() const;
     QString name_for(const QString& kuid) const;
+    qint64 size_of(const QString& kuid) const { return file_sizes_.value(kuid); }
     QString flags_for(const QString& kuid) const;
     QString tuner_kuid() const;
     QVariantMap card(const QString& kuid, const QString& note) const;
@@ -183,10 +184,12 @@ class TrainzUtilBridge : public QObject {
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(QString reportText READ reportText NOTIFY changed)
     Q_PROPERTY(bool reportOn READ reportOn NOTIFY changed)
+    Q_PROPERTY(int previewPct READ previewPct NOTIFY changed)
     Q_PROPERTY(bool detailOn READ detailOn NOTIFY changed)
     Q_PROPERTY(QString detailKuid READ detailKuid NOTIFY changed)
     Q_PROPERTY(QString detailTitle READ detailTitle NOTIFY changed)
     Q_PROPERTY(QVariantList detailDeps READ detailDeps NOTIFY changed)
+    Q_PROPERTY(QString detailTotal READ detailTotal NOTIFY changed)
     Q_PROPERTY(QVariantList detailStatus READ detailStatus NOTIFY changed)
     Q_PROPERTY(QVariantList detailCards READ detailCards NOTIFY changed)
     Q_PROPERTY(QString coverUrl READ coverUrl NOTIFY changed)
@@ -232,11 +235,13 @@ public:
     QString glyphCopy() const;
     bool busy() const { return fill_library_ || fill_dates_ || fill_meta_; }
     QString reportText() const { return report_text_; }
+    int previewPct() const { return preview_pct_; }  // -1 when no preview is running
     bool reportOn() const { return !report_text_.trimmed().isEmpty(); }
     bool detailOn() const { return detail_on_; }
     QString detailKuid() const { return detail_kuid_; }
     QString detailTitle() const { return detail_title_; }
     QVariantList detailDeps() const { return detail_deps_; }
+    QString detailTotal() const { return dep_cache_.value(detail_kuid_).total; }
     QVariantList detailStatus() const { return detail_status_; }
     QVariantList detailCards() const { return detail_cards_; }
     QString coverUrl() const { return cover_url_; }
@@ -294,6 +299,7 @@ public:
     Q_INVOKABLE void inspectDepends();
     Q_INVOKABLE void measurePacked();
     Q_INVOKABLE void openEngine(const QString& kuid);
+    Q_INVOKABLE void previewAsset(const QString& kuid);
     Q_INVOKABLE void exportTogether();
     Q_INVOKABLE void exportEach();
     Q_INVOKABLE void pickVisible(bool on);
@@ -307,6 +313,7 @@ signals:
     void changed();
     void homeRequested();
     void engineRequested(const QString& kuid, const QString& text, const QString& name);
+    void sceneRequested(const QStringList& paths, const QStringList& labels, const QList<double>& yaws);
     void packagesRequested(const QString& folder);
     void contentsReady(const QVariantList& rows);
     void sourcesReady(const QVariantList& rows);
@@ -329,6 +336,7 @@ private:
     struct DepNote {
         QString note;
         QVariantList deps;
+        QString total;  // self + all dependencies, "" until known
     };
 
     void note(const QString& text);
@@ -392,6 +400,7 @@ private:
     QString status_text_;
     QString library_summary_ = QStringLiteral("Installed assets from Content Manager");
     QString report_text_;
+    int preview_pct_ = -1;
     bool load_on_ = false;
     QString load_detail_;
     QString load_log_;
@@ -440,6 +449,7 @@ public:
 signals:
     void homeRequested();
     void engineRequested(const QString& kuid, const QString& text, const QString& name);
+    void sceneRequested(const QStringList& paths, const QStringList& labels, const QList<double>& yaws);
     void packagesRequested(const QString& folder);
 
 protected:

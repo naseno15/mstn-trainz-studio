@@ -177,12 +177,15 @@ struct TexPixels {
     std::vector<unsigned char> rgba;
 };
 
-TexPixels decode_named(const QString& mesh_path, const QString& named) {
+// max_side > 0 shrinks bigger images (Preview Asset: hundreds of parts, one copy of the pixels each).
+TexPixels decode_file(const QString& path, int max_side = 0) {
     TexPixels out;
-    out.path = resolve_texture(mesh_path, named);
+    out.path = path;
     if (out.path.isEmpty()) return out;
     QImage picture = load_picture(out.path);
     if (picture.isNull()) return out;
+    if (max_side > 0 && std::max(picture.width(), picture.height()) > max_side)
+        picture = picture.scaled(max_side, max_side, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     picture = picture.convertToFormat(QImage::Format_RGBA8888).mirrored(false, true);
     if (picture.isNull()) return out;
     out.w = picture.width();
@@ -192,6 +195,25 @@ TexPixels decode_named(const QString& mesh_path, const QString& named) {
     return out;
 }
 
+TexPixels decode_named(const QString& mesh_path, const QString& named) { return decode_file(resolve_texture(mesh_path, named)); }
+
+// Runs fn(i) for i in [0, count) on all cores; the caller's thread keeps pumping events and reports progress.
+void run_parallel(int count, const std::function<void(int)>& fn, const std::function<void(int)>& tick) {
+    if (count <= 0) return;
+    std::atomic<int> next{0};
+    std::atomic<int> done{0};
+    QThreadPool pool;
+    pool.setMaxThreadCount(std::min(count, std::max(1, static_cast<int>(std::thread::hardware_concurrency()))));
+    for (int t = 0; t < pool.maxThreadCount(); ++t) {
+        pool.start([&] {
+            for (int i = next.fetch_add(1); i < count; i = next.fetch_add(1)) {
+                fn(i);
+                done.fetch_add(1);
+            }
+        });
+    }
+    while (!pool.waitForDone(32)) tick(done.load());
+}
 std::vector<TexPixels> load_named_parallel(const QString& mesh_path, const QStringList& names, const std::function<void(int, int, const QString&)>& tick) {
     const int total = names.size();
     std::vector<TexPixels> out(static_cast<size_t>(total));
@@ -352,6 +374,20 @@ void MeshBridge::attach(MeshView* view, QWidget* chrome) {
     view_->setSunPose(static_cast<float>(sun_az_), static_cast<float>(sun_el_), sun_int_ / 100.f);
     view_->setEmissiveScale(emis_ / 100.f);
     for (int i = 0; i < 5; ++i) view_->setArrayLight(i, array_on_[i]);
+    // Shift+click in the viewport: select that part's material, open the Mat tab.
+    connect(view_, &MeshView::partPicked, this, [this](int part) {
+        if (part < 0 || part >= static_cast<int>(rows_.size())) return;
+        const MeshRow& row = rows_[static_cast<size_t>(part)];
+        for (int i = 0; i < static_cast<int>(mats_.size()); ++i) {
+            const QString name = QString::fromStdString(mats_[static_cast<size_t>(i)].block.name);
+            if (name.compare(row.material, Qt::CaseInsensitive) != 0 && name.compare(row.name, Qt::CaseInsensitive) != 0) continue;
+            mat_i_ = i;
+            tab_ = 1;
+            sync_highlight();
+            publish();
+            return;
+        }
+    });
 }
 
 void MeshBridge::report_load(const QString& stage, int pct) {
@@ -368,6 +404,7 @@ void MeshBridge::load_file(const QString& path) {
     loading_ = true;
     load_steps_ = 0;
     load_name_ = QFileInfo(path).fileName();
+    scene_ = false;
     auto stop = [this] {
         loading_ = false;
         load_open_ = false;
@@ -520,6 +557,175 @@ void MeshBridge::load_file(const QString& path) {
     stop();
 }
 
+void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels, const QList<double>& yaws) {
+    if (loading_ || paths.isEmpty()) return;
+    loading_ = true;
+    scene_ = true;
+    load_steps_ = 0;
+    load_name_ = QStringLiteral("asset preview");
+    rows_.clear();
+    mats_.clear();
+    selected_ = 0;
+    mat_i_ = 0;
+    bounds_set_ = false;
+    anims_ = 0;
+    const int total = static_cast<int>(paths.size());
+
+    // 1. Read + parse every mesh on all cores; resolve each part's albedo image path.
+    struct Parsed {
+        std::vector<ViewPart> parts;
+        QStringList albedo_path;
+        bool ok = false;
+    };
+    std::vector<Parsed> parsed(static_cast<size_t>(total));
+    QImageReader::supportedImageFormats();
+    run_parallel(
+        total,
+        [&](int f) {
+            Parsed& out = parsed[static_cast<size_t>(f)];
+            const QString& path = paths[f];
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly)) return;
+            const QByteArray bytes = file.readAll();
+            const auto* data = reinterpret_cast<const uint8_t*>(bytes.constData());
+            QStringList albedo;
+            try {
+                if (path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
+                    for (const MeshPart& part : parse_im_parts(data, static_cast<size_t>(bytes.size()))) {
+                        ViewPart row;
+                        row.name = QString::fromStdString(part.name);
+                        row.positions = part.positions;
+                        row.normals = part.normals;
+                        row.indices = part.indices;
+                        out.parts.push_back(std::move(row));
+                        albedo << QString();
+                    }
+                } else {
+                    const TrainzMesh mesh = parse_trainzmesh(data, static_cast<size_t>(bytes.size()));
+                    for (const SubMesh& part : mesh.submeshes) {
+                        ViewPart row;
+                        row.name = QString::fromStdString(part.name);
+                        row.material = QString::fromStdString(part.material_type);
+                        row.positions = part.positions;
+                        row.normals = part.normals;
+                        row.uvs = part.uvs;
+                        row.indices = part.indices;
+                        out.parts.push_back(std::move(row));
+                        albedo << QString::fromStdString(part.albedo);
+                    }
+                }
+            } catch (const std::exception&) {
+                out.parts.clear();
+                return;
+            }
+            const double yaw = f < yaws.size() ? yaws[f] : 0.0;
+            if (yaw != 0.0) {
+                const float c = static_cast<float>(std::cos(yaw)), s = static_cast<float>(std::sin(yaw));
+                for (ViewPart& part : out.parts)
+                    for (std::vector<float>* v : {&part.positions, &part.normals})
+                        for (size_t k = 0; k + 2 < v->size(); k += 3) {
+                            const float x = (*v)[k], y = (*v)[k + 1];
+                            (*v)[k] = x * c - y * s;
+                            (*v)[k + 1] = x * s + y * c;
+                        }
+            }
+            for (const QString& a : albedo) out.albedo_path << resolve_texture(path, a);
+            out.ok = true;
+        },
+        [&](int done) { report_load(QStringLiteral("Reading meshes %1 / %2").arg(done).arg(total), 4 + (40 * done) / total); });
+
+    // 2. Decode each distinct image once, shrunk by how many parts will carry a copy.
+    QStringList unique;
+    QHash<QString, int> uses;  // parts carrying each image: every part holds its own copy
+    for (const Parsed& p : parsed)
+        for (const QString& img : p.albedo_path) {
+            if (img.isEmpty()) continue;
+            if (++uses[img] == 1) unique << img;
+        }
+    // Biggest side whose total (RAM copy + mips, same again on the GPU) fits the budget. Sizes come from headers.
+    constexpr double kBudget = 1.5e9;
+    std::vector<QSize> native;
+    for (const QString& img : unique) native.push_back(QImageReader(img).size());
+    int max_side = 512;
+    for (int side : {4096, 2048, 1024}) {
+        double bytes = 0;
+        for (size_t i = 0; i < native.size(); ++i) {
+            const double w = std::max(1, native[i].width()), h = std::max(1, native[i].height());
+            const double k = std::min(1.0, side / std::max(w, h));
+            bytes += uses.value(unique[static_cast<int>(i)]) * (w * k) * (h * k) * 4.0 * 1.33;
+        }
+        if (bytes <= kBudget) {
+            max_side = side;
+            break;
+        }
+    }
+    std::vector<TexPixels> pixels(static_cast<size_t>(unique.size()));
+    run_parallel(
+        static_cast<int>(unique.size()),
+        [&](int i) { pixels[static_cast<size_t>(i)] = decode_file(unique[i], max_side); },
+        [&](int done) { report_load(QStringLiteral("Decoding textures %1 / %2").arg(done).arg(unique.size()), 45 + (45 * done) / std::max<int>(1, static_cast<int>(unique.size()))); });
+
+    // 3. Put it together in file order.
+    std::vector<ViewPart> drawn;
+    int failed = 0;
+    for (int f = 0; f < total; ++f) {
+        Parsed& p = parsed[static_cast<size_t>(f)];
+        if (!p.ok) {
+            ++failed;
+            continue;
+        }
+        const QString label = f < labels.size() ? labels[f] : QFileInfo(paths[f]).fileName();
+        for (size_t i = 0; i < p.parts.size(); ++i) {
+            ViewPart& row = p.parts[i];
+            const int at = unique.indexOf(p.albedo_path[static_cast<int>(i)]);
+            if (at >= 0 && !pixels[static_cast<size_t>(at)].rgba.empty()) {
+                row.rgba = pixels[static_cast<size_t>(at)].rgba;
+                row.tex_w = pixels[static_cast<size_t>(at)].w;
+                row.tex_h = pixels[static_cast<size_t>(at)].h;
+            }
+            MeshRow meta;
+            meta.name = label + QStringLiteral(": ") + row.name;
+            meta.material = row.material;
+            meta.verts = static_cast<int>(row.positions.size() / 3);
+            meta.tris = static_cast<int>(row.indices.size() / 3);
+            meta.tex_file = at >= 0 ? pixels[static_cast<size_t>(at)].path : QString();
+            rows_.push_back(meta);
+            MatEdit edit;
+            edit.block.name = meta.name.toStdString();
+            mats_.push_back(std::move(edit));
+            for (size_t v = 0; v + 2 < row.positions.size(); v += 3) {
+                for (int k = 0; k < 3; ++k) {
+                    const float x = row.positions[v + static_cast<size_t>(k)];
+                    if (!bounds_set_) {
+                        bmin_[k] = bmax_[k] = x;
+                        if (k == 2) bounds_set_ = true;
+                    } else {
+                        bmin_[k] = std::min(bmin_[k], x);
+                        bmax_[k] = std::max(bmax_[k], x);
+                    }
+                }
+            }
+            row.name = meta.name;
+            drawn.push_back(std::move(row));
+        }
+    }
+    report_load(QStringLiteral("Uploading %1 parts to the GPU").arg(drawn.size()), 96);
+    if (view_) view_->setParts(std::move(drawn));
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    file_bytes_.clear();
+    dirty_ = false;
+    path_.clear();
+    welcome_ = false;
+    editor_open_ = true;
+    shortcut_ = QStringLiteral("%1 meshes").arg(total - failed);
+    tip_.clear();
+    post_status(QStringLiteral("Preview: ") + shortcut_ + (failed ? QStringLiteral(", %1 unreadable").arg(failed) : QString()));
+    publish();
+    reveal_view();
+    loading_ = false;
+    load_open_ = false;
+    emit changed();
+}
 void MeshBridge::reveal_view() {
     auto* quick = qobject_cast<QQuickWidget*>(chrome_);
     if (!quick || !quick->rootObject()) return;
@@ -654,7 +860,8 @@ void MeshBridge::publish() {
             else if (key.contains(QLatin1String("param"))) ++param_n;
         }
     }
-    const bool loaded = !path_.isEmpty();
+    const bool loaded = !path_.isEmpty() || scene_;
+    const QString file_label = scene_ ? shortcut_ : QFileInfo(path_).fileName();
     const QString kind = path_.endsWith(QLatin1String(".im"), Qt::CaseInsensitive) ? QStringLiteral("im") : QStringLiteral("trainzmesh");
     QString bounds = QStringLiteral("—");
     if (bounds_set_) {
@@ -664,7 +871,7 @@ void MeshBridge::publish() {
                      .arg(bmax_[2] - bmin_[2], 0, 'f', 2);
     }
     const QJsonArray detail{
-        QJsonObject{{QStringLiteral("k"), QStringLiteral("File")}, {QStringLiteral("v"), loaded ? QFileInfo(path_).fileName() : QStringLiteral("—")}},
+        QJsonObject{{QStringLiteral("k"), QStringLiteral("File")}, {QStringLiteral("v"), loaded ? file_label : QStringLiteral("—")}},
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Kind")}, {QStringLiteral("v"), loaded ? kind : QStringLiteral("—")}},
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Verts / Faces")}, {QStringLiteral("v"), loaded ? grouped(vert_sum) + QStringLiteral(" / ") + grouped(tri_sum) : QStringLiteral("—")}},
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Parts")}, {QStringLiteral("v"), loaded ? QString::number(rows_.size()) : QStringLiteral("—")}},
@@ -678,7 +885,7 @@ void MeshBridge::publish() {
         {QStringLiteral("tabs"), QJsonArray{QStringLiteral("Scene"), QStringLiteral("Mat"), QStringLiteral("Lamps"), QStringLiteral("Motion"), QStringLiteral("Lights")}},
         {QStringLiteral("materials"), materials},
         {QStringLiteral("mats"), mats},
-        {QStringLiteral("file"), loaded ? QJsonObject{{QStringLiteral("name"), QFileInfo(path_).fileName()}, {QStringLiteral("show"), file_show_}, {QStringLiteral("atts"), file_atts_}} : QJsonValue()},
+        {QStringLiteral("file"), loaded ? QJsonObject{{QStringLiteral("name"), file_label}, {QStringLiteral("show"), file_show_}, {QStringLiteral("atts"), file_atts_}} : QJsonValue()},
         {QStringLiteral("infoOpen"), info_open_},
         {QStringLiteral("face"), face_},
         {QStringLiteral("cap"), QStringLiteral("a.* → edit on right")},
@@ -832,6 +1039,13 @@ void MeshBridge::clickId(const QString& id) {
     else if (id == QLatin1String("info")) {
         info_open_ = !info_open_;
         publish();
+    } else if (id.startsWith(QLatin1String("texBrowse:"))) {
+        // Start in the folder the mesh was loaded from.
+        const QString dir = path_.isEmpty() ? QString() : QFileInfo(path_).absolutePath();
+        const QString file = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Pick texture"), dir,
+                                                          QStringLiteral("Texture (*.texture *.tga *.png *.dds *.jpg);;All (*)"));
+        if (!file.isEmpty()) setText(QStringLiteral("tex:") + id.mid(10), QFileInfo(file).fileName());
+        return;
     } else if (id == QLatin1String("open") || id == QLatin1String("folder")) browse();
     else if (id == QLatin1String("clearMesh") || id == QLatin1String("removeMesh")) {
         rows_.clear();
@@ -1091,6 +1305,7 @@ void MeshBridge::pickMat(int index) {
     if (index < 0 || index >= static_cast<int>(mat_owner_.size())) return;
     mat_i_ = mat_owner_[static_cast<size_t>(index)];
     sync_highlight();
+    if (view_) view_->flyToHighlight();
     publish();
 }
 void MeshBridge::sync_highlight() {
@@ -1129,8 +1344,14 @@ void MeshBridge::toggleMesh(int index, int column) {
 }
 void MeshBridge::toggleSceneMesh(int index) { toggleMesh(index, 0); }
 void MeshBridge::cancelBake() {}
-void MeshBridge::placeSide(double, double, double, double) {}
-void MeshBridge::placeEditor(double, double, double, double) {}
+void MeshBridge::placeSide(double x, double y, double w, double h) {
+    blur_side_ = QRect(qRound(x), qRound(y), qRound(w), qRound(h));
+    if (view_) view_->setBlurRects(blur_side_, blur_editor_);
+}
+void MeshBridge::placeEditor(double x, double y, double w, double h) {
+    blur_editor_ = QRect(qRound(x), qRound(y), qRound(w), qRound(h));
+    if (view_) view_->setBlurRects(blur_side_, blur_editor_);
+}
 void MeshBridge::placeSettings(double, double, double, double) {}
 
 MeshStudioPage::MeshStudioPage(QWidget* parent) : QWidget(parent) {
@@ -1239,3 +1460,5 @@ int MeshStudioPage::loadSteps() const { return bridge_->loadSteps(); }
 QString MeshStudioPage::sideJson() const { return bridge_->sideJson(); }
 QImage MeshStudioPage::grabView() { return gl_ ? gl_->grabFramebuffer() : QImage(); }
 bool MeshStudioPage::pieOpen() const { return bridge_ && bridge_->pieOpen(); }
+
+void MeshStudioPage::loadScene(const QStringList& paths, const QStringList& labels, const QList<double>& yaws) { bridge_->load_scene(paths, labels, yaws); }

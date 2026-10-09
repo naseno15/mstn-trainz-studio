@@ -64,7 +64,10 @@ private:
         frame_->show();
     }
     void hide() {
-        if (frame_) frame_->deleteLater();
+        if (frame_) {
+            frame_->hide();
+            frame_->deleteLater();
+        }
         frame_ = nullptr;
         target_ = nullptr;
     }

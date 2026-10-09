@@ -59,9 +59,16 @@ public:
     void setShown(int index, bool on);
     void setHighlight(std::vector<uint8_t> on);
     void resetCamera();
+    // Smoothly fly the orbit target/distance to frame the highlighted parts.
+    void flyToHighlight();
+    // Panel rects (widget coords, y from top) whose backdrop gets blurred.
+    void setBlurRects(const QRect& a, const QRect& b) { blur_rect_[0] = a; blur_rect_[1] = b; update(); }
     void setWalk(int key, bool down);
     void toggleFps();
     int partCount() const { return static_cast<int>(parts_.size()); }
+
+signals:
+    void partPicked(int index);  // Shift+click on a part
 
 protected:
     void initializeGL() override;
@@ -86,12 +93,25 @@ private:
     void draw_guides(const QMatrix4x4& proj, const QMatrix4x4& view);
     void rebuild_guides();
     void frame_camera();
+    int pick_part(const QPoint& pos) const;
+    bool pick_press_ = false;
+    bool fly_on_ = false;
+    float fly_from_[4] = {};
+    float fly_to_[4] = {};
+    QElapsedTimer fly_clock_;
     void coast();
     void kick_coast();
     void cam_right(float* x, float* y) const;
     void note_keys(int key, bool down, bool repeat);
     void sync_fps();
     void bind_widget_target();
+    void blur_panels();
+    QRect blur_rect_[2];
+    static constexpr int kBlurLevels = 4;
+    unsigned blur_fbo_[kBlurLevels] = {};
+    unsigned blur_tex_[kBlurLevels] = {};
+    int blur_w_ = 0;
+    int blur_h_ = 0;
     void fb_size(int* w, int* h) const;
 
     std::vector<ViewPart> parts_;
@@ -133,6 +153,7 @@ private:
     float move_v_[3] = {0, 0, 0};
     float elev_v_ = 0.f;
     float zoom_v_ = 0.f;
+    float fov_ = 40.f;  // Ctrl+wheel = optical zoom
     bool key_up_ = false;
     bool key_down_ = false;
     bool key_left_ = false;

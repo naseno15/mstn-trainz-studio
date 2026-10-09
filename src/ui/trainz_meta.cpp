@@ -752,18 +752,35 @@ QString asset_cover_path(const ContentIndex& index, const QString& kuid) {
     return dest;
 }
 
-QString asset_browse_dir(const ContentIndex& index, const QString& kuid) {
+// Keeps what the mesh viewer reads: meshes, the images textures resolve to, and *.texture.txt.
+static bool wanted_for_preview(const QString& rel) {
+    static const QStringList ext = {QStringLiteral("trainzmesh"), QStringLiteral("im"), QStringLiteral("png"), QStringLiteral("tga"), QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("bmp"), QStringLiteral("tif"), QStringLiteral("tiff")};
+    return rel.endsWith(QLatin1String(".texture.txt"), Qt::CaseInsensitive) || ext.contains(QFileInfo(rel).suffix().toLower());
+}
+
+QString asset_browse_dir(const ContentIndex& index, const QString& kuid, bool preview_only) {
     const QString folder = index.editing_folder.value(kuid);
     if (!folder.isEmpty() && QFileInfo(folder).isDir()) return folder;
     const QString archive = index.chosen().value(kuid).path;
     if (archive.isEmpty()) return {};
-    const QString cache = cache_dir(QStringLiteral("unpack/") + safe_name(kuid));
+    const QString cache = cache_dir(QString::fromLatin1(preview_only ? "unpack-preview/" : "unpack/") + safe_name(kuid));
     const QString stamp_path = cache + QStringLiteral("/.stamp");
     const QString key = archive_key(archive);
     if (read_all(stamp_path) == key.toUtf8() && QDir(cache).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).size() > 1) return cache;
-    const QByteArray bytes = read_all(archive);
+    // Map instead of reading: only the pages of the chunks we inflate are ever touched.
+    QFile file(archive);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    const uchar* mapped = file.map(0, file.size());
+    QByteArray fallback;
+    if (!mapped) {
+        fallback = file.readAll();
+        mapped = reinterpret_cast<const uchar*>(fallback.constData());
+    }
     try {
-        for (const auto& [name, body] : read_tzarc_all(reinterpret_cast<const uint8_t*>(bytes.constData()), static_cast<size_t>(bytes.size()))) {
+        const auto keep = [preview_only](const std::string& name) {
+            return !preview_only || wanted_for_preview(QString::fromStdString(name));
+        };
+        for (const auto& [name, body] : read_tzarc_select(mapped, static_cast<size_t>(file.size()), keep)) {
             const QString rel = QString::fromStdString(name).replace(QLatin1Char('\\'), QLatin1Char('/'));
             if (rel.isEmpty() || rel.startsWith(QLatin1Char('/')) || rel.contains(QLatin1String("..")) || rel.contains(QLatin1Char(':'))) continue;
             const QString dest = cache + QLatin1Char('/') + rel;
@@ -779,7 +796,6 @@ QString asset_browse_dir(const ContentIndex& index, const QString& kuid) {
     if (stamp.open(QIODevice::WriteOnly | QIODevice::Truncate)) stamp.write(key.toUtf8());
     return cache;
 }
-
 QString config_in_editing(const QString& editing, const QString& kuid) {
     const QString token = kuid.trimmed();
     if (token.isEmpty()) return {};

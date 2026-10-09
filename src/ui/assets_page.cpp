@@ -12,8 +12,12 @@
 #include "io/chump.h"
 #include "io/enginespec.h"
 #include "io/kuid.h"
+#include "io/im_geom.h"
+#include "io/trainzmesh.h"
+#include "ui/mesh_view.h"
 
 #include <QClipboard>
+#include <QDialog>
 #include <QDir>
 #include <QDirIterator>
 #include <QDragEnterEvent>
@@ -35,6 +39,7 @@
 #include <QMap>
 #include <QMimeData>
 #include <QMessageBox>
+#include "crash_report.h"
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QProcess>
@@ -121,6 +126,69 @@ QString bytes_label(qint64 size) {
     if (size < 1024) return QString::number(size) + QStringLiteral(" B");
     if (size < 1024 * 1024) return QString::number(size / 1024.0, 'f', 1) + QStringLiteral(" KB");
     return QString::number(size / (1024.0 * 1024.0), 'f', 1) + QStringLiteral(" MB");
+}
+
+void prep_table(QTableWidget* table, const QStringList& headers);
+
+// No FBX parser exists; an .fbx previews through its sibling .trainzmesh/.im (same stem, same folder).
+QString viewable_mesh_rel(const CdpAssetEntry& asset, const QString& rel) {
+    if (!rel.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) return rel;
+    const QString stem = rel.left(rel.size() - 4);
+    for (const char* ext : {".trainzmesh", ".im"})
+        for (const std::string& file : asset.files) {
+            QString other = QString::fromStdString(file);
+            other.replace(QLatin1Char('\\'), QLatin1Char('/'));
+            if (other.compare(stem + QLatin1String(ext), Qt::CaseInsensitive) == 0) return other;
+        }
+    return {};
+}
+
+struct RemoveRow {
+    QString name;
+    QString where;
+    qint64 bytes = 0;
+};
+
+// Our own frameless confirm: headline + table of exactly what will be removed.
+bool confirm_remove(const QString& title, const QString& headline, const QList<RemoveRow>& rows) {
+    QDialog dialog;
+    make_borderless(&dialog);
+    dialog.setMinimumSize(560, 140);
+    dialog.resize(560, rows.size() > 6 ? 420 : 140 + 30 * static_cast<int>(rows.size()) + 90);
+    auto* lay = new QVBoxLayout(&dialog);
+    lay->setContentsMargins(18, 16, 18, 16);
+    lay->setSpacing(10);
+    auto* head = new QLabel(QStringLiteral("<b style='font-size:15px'>%1</b>").arg(title.toHtmlEscaped()), &dialog);
+    lay->addWidget(head);
+    lay->addWidget(new QLabel(headline, &dialog));
+    auto* table = new QTableWidget(rows.size(), 3, &dialog);
+    prep_table(table, {QStringLiteral("Name"), QStringLiteral("Folder"), QStringLiteral("Size")});
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->setColumnWidth(2, 90);
+    qint64 total = 0;
+    for (int i = 0; i < rows.size(); ++i) {
+        total += std::max<qint64>(0, rows[i].bytes);
+        table->setItem(i, 0, new QTableWidgetItem(rows[i].name));
+        table->setItem(i, 1, new QTableWidgetItem(rows[i].where));
+        auto* size = new QTableWidgetItem(bytes_label(rows[i].bytes));
+        size->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        table->setItem(i, 2, size);
+    }
+    lay->addWidget(table, 1);
+    auto* foot = new QHBoxLayout;
+    foot->addWidget(new QLabel(QStringLiteral("%1 item(s) · %2 · Save CDP to write the change.").arg(rows.size()).arg(bytes_label(total)), &dialog), 1);
+    auto* cancel = new QPushButton(QStringLiteral("Cancel"), &dialog);
+    auto* ok = new QPushButton(QStringLiteral("Remove"), &dialog);
+    ok->setStyleSheet(QStringLiteral("QPushButton{background:#ff5a1f;color:#fff;}QPushButton:hover{background:#ff7a45;}"));
+    cancel->setDefault(true);
+    foot->addWidget(cancel);
+    foot->addWidget(ok);
+    lay->addLayout(foot);
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(ok, &QPushButton::clicked, &dialog, &QDialog::accept);
+    apply_themed_qss(&dialog, QStringLiteral("QDialog{background:#12161c;border:1px solid #ff5a1f;border-radius:12px;}") + QLatin1String(k_tool_style));
+    return dialog.exec() == QDialog::Accepted;
 }
 
 void finder_mark(const QString& kind, const QString& name, QString& badge, QString& color, QString& detail) {
@@ -706,6 +774,7 @@ void AssetsBridge::placePreview(double x, double y, double w, double h) {
     preview_at_[2] = static_cast<int>(w);
     preview_at_[3] = static_cast<int>(h);
     place_widget(preview_, 0, 0, 0, 0, false);
+    sync_mesh_view();
     emit placePreviewRequested(static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h));
 }
 void AssetsBridge::placeDock(double, double, double, double) {}
@@ -729,7 +798,52 @@ void AssetsBridge::apply_edited_bytes(std::vector<uint8_t> bytes) {
     refresh_queue();
     refresh_finder();
 }
+void AssetsBridge::sync_mesh_view() {
+    if (mesh_view_ == nullptr) return;
+    place_widget(mesh_view_, preview_at_[0], preview_at_[1], preview_at_[2], preview_at_[3], mesh_on_);
+}
+bool AssetsBridge::show_mesh_inline(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    const QByteArray bytes = file.readAll();
+    const auto* data = reinterpret_cast<const uint8_t*>(bytes.constData());
+    std::vector<ViewPart> parts;
+    try {
+        if (path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
+            for (const MeshPart& part : parse_im_parts(data, static_cast<size_t>(bytes.size()))) {
+                ViewPart row;
+                row.name = QString::fromStdString(part.name);
+                row.positions = part.positions;
+                row.normals = part.normals;
+                row.indices = part.indices;
+                parts.push_back(std::move(row));
+            }
+        } else {
+            for (const SubMesh& part : parse_trainzmesh(data, static_cast<size_t>(bytes.size())).submeshes) {
+                ViewPart row;
+                row.name = QString::fromStdString(part.name);
+                row.material = QString::fromStdString(part.material_type);
+                row.positions = part.positions;
+                row.normals = part.normals;
+                row.uvs = part.uvs;
+                row.indices = part.indices;
+                parts.push_back(std::move(row));
+            }
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+    if (parts.empty()) return false;
+    if (mesh_view_ == nullptr) mesh_view_ = new MeshView(qobject_cast<QWidget*>(parent()));
+    mesh_view_->setParts(std::move(parts)); // ponytail: untextured on purpose (fast); Mesh Studio does PBR
+    mesh_view_->resetCamera();
+    mesh_on_ = true;
+    sync_mesh_view();
+    return true;
+}
 void AssetsBridge::clear_preview() {
+    mesh_on_ = false;
+    sync_mesh_view();
     finder_sel_ = -1;
     preview_body_.clear();
     preview_image_url_.clear();
@@ -751,8 +865,10 @@ QString AssetsBridge::stage_selected_asset() {
     const AssetQueueItem& item = queue_[static_cast<size_t>(queue_row_)];
     if (finder_asset_ >= static_cast<int>(item.assets.size())) return {};
     const CdpAssetEntry& asset = item.assets[static_cast<size_t>(finder_asset_)];
+    const QString rel = viewable_mesh_rel(asset, entry.rel);
+    if (rel.isEmpty()) return {};
     if (item.kind == QLatin1String("Folder"))
-        return QDir(QString::fromStdString(asset.username)).filePath(entry.rel);
+        return QDir(QString::fromStdString(asset.username)).filePath(rel);
     if (bytes_.empty()) return {};
 
     const QString root = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
@@ -772,7 +888,7 @@ QString AssetsBridge::stage_selected_asset() {
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) continue;
         file.write(reinterpret_cast<const char*>(data.data()), static_cast<qint64>(data.size()));
     }
-    return QDir(root).filePath(entry.rel);
+    return QDir(root).filePath(rel);
 }
 void AssetsBridge::refreshCenter() { emit changed(); }
 void AssetsBridge::setViewerPane(int pane) {
@@ -870,7 +986,7 @@ void AssetsBridge::viewerSave() {
             center_tip_ = QStringLiteral("Updated ") + entry.rel + QStringLiteral(" — use Save CDP to write it.");
         }
     } catch (const std::exception& error) {
-        QMessageBox::warning(nullptr, QStringLiteral("Save"), QString::fromUtf8(error.what()));
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Save"), QString::fromUtf8(error.what()));
         return;
     }
     last_edit_committed_ = true;
@@ -878,7 +994,7 @@ void AssetsBridge::viewerSave() {
 }
 void AssetsBridge::viewerEngine() {
     if (!viewEngine()) {
-        QMessageBox::information(nullptr, QStringLiteral("Engine Tuner"), QStringLiteral("Select an enginespec config.txt first."));
+        ui_box(QMessageBox::Information, nullptr, QStringLiteral("Engine Tuner"), QStringLiteral("Select an enginespec config.txt first."));
         return;
     }
     emit engineRequested(
@@ -895,27 +1011,29 @@ void AssetsBridge::applyEngineText(const QString& text) {
 void AssetsBridge::viewerFast() {
     const QString path = stage_selected_asset();
     if (path.isEmpty() || !QFileInfo::exists(path)) {
-        QMessageBox::warning(nullptr, QStringLiteral("Fast Preview"), QStringLiteral("The selected mesh could not be staged."));
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Fast Preview"),
+               QStringLiteral("Nothing to preview: .fbx needs a same-name .trainzmesh or .im in the asset."));
         return;
     }
-    emit meshRequested(path);
+    if (!show_mesh_inline(path))
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Fast Preview"), QStringLiteral("The mesh could not be parsed."));
 }
 void AssetsBridge::viewerMesh() {
     const QString path = stage_selected_asset();
     if (path.isEmpty() || !QFileInfo::exists(path)) {
-        QMessageBox::warning(nullptr, QStringLiteral("Mesh Studio"), QStringLiteral("The selected mesh could not be staged."));
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Mesh Studio"), QStringLiteral("The selected mesh could not be staged."));
         return;
     }
     emit meshRequested(path);
 }
 void AssetsBridge::viewerReplace() {
     if (finder_sel_ < 0 || finder_sel_ >= static_cast<int>(shown_.size()) || finder_asset_ < 0) {
-        QMessageBox::information(nullptr, QStringLiteral("Replace"), QStringLiteral("Select a file in Finder."));
+        ui_box(QMessageBox::Information, nullptr, QStringLiteral("Replace"), QStringLiteral("Select a file in Finder."));
         return;
     }
     const FinderShown entry = shown_[static_cast<size_t>(finder_sel_)];
     if (entry.kind != QLatin1String("file") || entry.rel == QLatin1String("__config__")) {
-        QMessageBox::information(nullptr, QStringLiteral("Replace"), QStringLiteral("Select a non-config file."));
+        ui_box(QMessageBox::Information, nullptr, QStringLiteral("Replace"), QStringLiteral("Select a non-config file."));
         return;
     }
     const QString source = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Replace with file"), {}, QStringLiteral("All files (*.*)"));
@@ -938,7 +1056,7 @@ void AssetsBridge::viewerReplace() {
                 reinterpret_cast<const uint8_t*>(replacement.constData()), static_cast<size_t>(replacement.size())));
         }
     } catch (const std::exception& error) {
-        QMessageBox::warning(nullptr, QStringLiteral("Replace"), QString::fromUtf8(error.what()));
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Replace"), QString::fromUtf8(error.what()));
         return;
     }
     clear_preview();
@@ -951,13 +1069,22 @@ void AssetsBridge::viewerDelete() {
     const FinderShown entry = shown_[static_cast<size_t>(finder_sel_)];
     AssetQueueItem& item = queue_[static_cast<size_t>(queue_row_)];
     if (item.kind == QLatin1String("Folder")) {
-        QMessageBox::information(nullptr, QStringLiteral("Delete"), QStringLiteral("Disk mode does not delete source files."));
+        ui_box(QMessageBox::Information, nullptr, QStringLiteral("Delete"), QStringLiteral("Disk mode does not delete source files."));
         return;
     }
-    if (QMessageBox::question(
-            nullptr, QStringLiteral("Delete"),
-            QStringLiteral("Remove %1 from this CDP?\nUse Save CDP to write the change.").arg(entry.name),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+    QList<RemoveRow> doomed;
+    if (entry.kind == QLatin1String("asset")) {
+        const CdpAssetEntry& asset = item.assets[static_cast<size_t>(entry.index)];
+        for (size_t i = 0; i < asset.files.size(); ++i) {
+            const QString rel = QString::fromStdString(asset.files[i]);
+            doomed.push_back({QFileInfo(rel).fileName(), QFileInfo(rel).path() == QLatin1String(".") ? QString() : QFileInfo(rel).path(),
+                              i < asset.sizes.size() ? static_cast<qint64>(asset.sizes[i]) : 0});
+        }
+    } else {
+        doomed.push_back({entry.name, QFileInfo(entry.rel).path() == QLatin1String(".") ? QString() : QFileInfo(entry.rel).path(), entry.bytes});
+    }
+    if (!confirm_remove(QStringLiteral("Delete"),
+            QStringLiteral("Remove <b>%1</b> from this CDP?").arg(entry.name.toHtmlEscaped()), doomed))
         return;
     try {
         if (entry.kind == QLatin1String("asset")) {
@@ -971,7 +1098,7 @@ void AssetsBridge::viewerDelete() {
             apply_edited_bytes(remove_cdp_file(bytes_.data(), bytes_.size(), asset.kuid, entry.rel.toStdString()));
         }
     } catch (const std::exception& error) {
-        QMessageBox::warning(nullptr, QStringLiteral("Delete"), QString::fromUtf8(error.what()));
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Delete"), QString::fromUtf8(error.what()));
         return;
     }
     clear_preview();
@@ -984,7 +1111,7 @@ void AssetsBridge::viewerSaveCdp() {
         if (!last_edit_committed_) return;
     }
     if (queue_row_ < 0 || queue_row_ >= static_cast<int>(queue_.size()) || bytes_.empty()) {
-        QMessageBox::information(nullptr, QStringLiteral("Save CDP"), QStringLiteral("Open a CDP first."));
+        ui_box(QMessageBox::Information, nullptr, QStringLiteral("Save CDP"), QStringLiteral("Open a CDP first."));
         return;
     }
     QString start = path_.isEmpty() ? QStringLiteral("edited.cdp") : path_;
@@ -993,17 +1120,17 @@ void AssetsBridge::viewerSaveCdp() {
     if (!dest.endsWith(QLatin1String(".cdp"), Qt::CaseInsensitive)) dest += QStringLiteral(".cdp");
     QSaveFile file(dest);
     if (!file.open(QIODevice::WriteOnly)) {
-        QMessageBox::warning(nullptr, QStringLiteral("Save CDP"), QStringLiteral("Cannot write the selected path."));
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Save CDP"), QStringLiteral("Cannot write the selected path."));
         return;
     }
     const QByteArray output(reinterpret_cast<const char*>(bytes_.data()), static_cast<int>(bytes_.size()));
     if (file.write(output) != output.size() || !file.commit()) {
-        QMessageBox::warning(nullptr, QStringLiteral("Save CDP"), QStringLiteral("Writing the CDP failed."));
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Save CDP"), QStringLiteral("Writing the CDP failed."));
         return;
     }
     QFile verify(dest);
     if (!verify.open(QIODevice::ReadOnly) || verify.readAll() != output) {
-        QMessageBox::critical(nullptr, QStringLiteral("Save CDP"), QStringLiteral("The saved CDP did not verify byte-for-byte."));
+        ui_box(QMessageBox::Critical, nullptr, QStringLiteral("Save CDP"), QStringLiteral("The saved CDP did not verify byte-for-byte."));
         return;
     }
     path_ = dest;
@@ -1017,18 +1144,22 @@ void AssetsBridge::viewerSaveCdp() {
 void AssetsBridge::viewerDeleteFbx() {
     if (queue_row_ < 0 || queue_row_ >= static_cast<int>(queue_.size()) || bytes_.empty()) return;
     const AssetQueueItem& item = queue_[static_cast<size_t>(queue_row_)];
-    int count = 0;
+    QList<RemoveRow> doomed;
     for (const CdpAssetEntry& asset : item.assets)
-        for (const std::string& rel : asset.files)
-            if (QString::fromStdString(rel).endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) ++count;
+        for (size_t i = 0; i < asset.files.size(); ++i) {
+            const QString rel = QString::fromStdString(asset.files[i]);
+            if (!rel.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) continue;
+            const QString dir = QFileInfo(rel).path();
+            doomed.push_back({QFileInfo(rel).fileName(), dir == QLatin1String(".") ? QString::fromStdString(asset.username) : QString::fromStdString(asset.username) + QLatin1Char('/') + dir,
+                              i < asset.sizes.size() ? static_cast<qint64>(asset.sizes[i]) : 0});
+        }
+    const int count = static_cast<int>(doomed.size());
     if (count == 0) {
-        QMessageBox::information(nullptr, QStringLiteral(".fbx"), QStringLiteral("No .fbx files were found."));
+        ui_box(QMessageBox::Information, nullptr, QStringLiteral(".fbx"), QStringLiteral("No .fbx files were found."));
         return;
     }
-    if (QMessageBox::question(
-            nullptr, QStringLiteral("Delete all .fbx"),
-            QStringLiteral("Remove %1 .fbx file(s) from this CDP?\nUse Save CDP to write the change.").arg(count),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+    if (!confirm_remove(QStringLiteral("Delete all .fbx"),
+            QStringLiteral("Remove <b>%1</b> .fbx file(s) from this CDP?").arg(count), doomed))
         return;
     try {
         std::vector<uint8_t> edited = bytes_;
@@ -1040,7 +1171,7 @@ void AssetsBridge::viewerDeleteFbx() {
         }
         apply_edited_bytes(std::move(edited));
     } catch (const std::exception& error) {
-        QMessageBox::warning(nullptr, QStringLiteral(".fbx"), QString::fromUtf8(error.what()));
+        ui_box(QMessageBox::Warning, nullptr, QStringLiteral(".fbx"), QString::fromUtf8(error.what()));
         return;
     }
     finder_fbx_ = true;
@@ -1689,6 +1820,7 @@ void AssetsBridge::enter_finder(int row) {
     }
     if (entry.kind != QLatin1String("asset")) {
         preview_file(row);
+        if (viewFast()) viewerFast(); // double-click a mesh = open the 3D preview
         return;
     }
     finder_asset_ = entry.index;
@@ -1713,6 +1845,8 @@ void AssetsBridge::enter_finder(int row) {
 
 void AssetsBridge::preview_file(int row) {
     if (row < 0 || row >= static_cast<int>(shown_.size())) return;
+    mesh_on_ = false;
+    sync_mesh_view();
     finder_sel_ = row;
     const FinderShown entry = shown_[static_cast<size_t>(row)];
     refresh_finder();
@@ -1806,6 +1940,19 @@ void AssetsBridge::preview_file(int row) {
         if (preview_text_ != nullptr) preview_text_->setPlainText(preview_body_);
         if (preview_image_ != nullptr) preview_image_->setPixmap(picture);
         if (preview_ != nullptr) preview_->setCurrentWidget(preview_image_);
+        emit changed();
+        return;
+    }
+    if (data.left(4096).contains('\0')) {
+        // Binary (fbx / trainzmesh / ...): garbled text is useless, point at the 3D preview instead.
+        preview_plain_.clear();
+        preview_body_ = shown + QStringLiteral("\nBinary · ") + bytes_label(data.size()) +
+                        (viewFast() ? QStringLiteral("\n\nDouble-click to open in 3D preview.") : QString());
+        preview_on_ = true;
+        preview_rich_ = false;
+        view_editor_ = false;
+        view_pane_ = 0;
+        view_title_ = QStringLiteral("Viewer — ") + shown;
         emit changed();
         return;
     }

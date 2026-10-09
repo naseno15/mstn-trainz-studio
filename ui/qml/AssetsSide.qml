@@ -109,7 +109,7 @@ GlassPlate {
 
             DropZone {
                 anchors.fill: parent
-                onDropped: function (drop) {
+                onFilesDropped: function (drop) {
                     if (bridge.suite === "texmesh") bridge.dropCenter(drop.urls)
                     else bridge.dropPaths(drop.urls)
                 }

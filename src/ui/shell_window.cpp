@@ -15,6 +15,7 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QCursor>
+#include <QCloseEvent>
 #include <QEasingCurve>
 #include <QGraphicsOpacityEffect>
 #include <QPixmap>
@@ -247,17 +248,23 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     resize(1100, 720);
 
     bridge_ = new ShellBridge(this);
+    boot_stage(QStringLiteral("Loading language catalog"), 16);
     UiLang::instance();
+    boot_stage(QStringLiteral("Loading Material Icons font"), 20);
     load_material_icons();
+    boot_stage(QStringLiteral("Building title bar (TitleBar.qml)"), 24);
     title_ = load_quick(QStringLiteral("TitleBar.qml"), true);
+    boot_stage(QStringLiteral("Building home page (HomePage.qml)"), 28);
     home_ = load_quick(QStringLiteral("HomePage.qml"), false);
     home_->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
+    boot_stage(QStringLiteral("Building menu dropdown (MenuDrop.qml)"), 32);
     menu_ = load_quick(QStringLiteral("MenuDrop.qml"), true);
     // Tool, not Popup: Popup on this frameless host never took the mouse grab, so the menu stayed up.
     menu_->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint | Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
     menu_->setAttribute(Qt::WA_TranslucentBackground, true);
     menu_->setAttribute(Qt::WA_ShowWithoutActivating, true);
     menu_->hide();
+    boot_stage(QStringLiteral("Building status toast (Toast.qml)"), 35);
     toast_ = load_quick(QStringLiteral("Toast.qml"), true);
     // Own tool window like the menu: a translucent child over the GL mesh view paints black.
     toast_->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint | Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput);
@@ -265,10 +272,11 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     toast_->setAttribute(Qt::WA_ShowWithoutActivating, true);
     toast_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     toast_->hide();
+    boot_stage(QStringLiteral("Building status bar (StatusBar.qml)"), 38);
     footer_ = load_quick(QStringLiteral("StatusBar.qml"), false);
     footer_->setFixedHeight(30);
     qApp->installEventFilter(this);
-    boot_stage(QStringLiteral("Chrome"), 40);
+    boot_stage(QStringLiteral("Opening TrainzUtil studio (library, installer, backups)"), 44);
 
     blank_ = new QLabel(QStringLiteral("Home"));
     blank_->setAlignment(Qt::AlignCenter);
@@ -276,8 +284,11 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
 
     trainz_ = new TrainzUtilPage(this);
     connect(trainz_, &TrainzUtilPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
+    boot_stage(QStringLiteral("Opening Engine Tuner studio (curves, simulation)"), 54);
     engine_ = new EngineTunerPage(this);
+    boot_stage(QStringLiteral("Opening Assets Tools and Texture & Mesh studios"), 62);
     assets_ = new AssetsPage(this);
+    boot_stage(QStringLiteral("Wiring studio links"), 70);
     connect(engine_, &EngineTunerPage::homeRequested, this, [this] {
         if (!engine_kuid_.isEmpty()) {
             engine_kuid_.clear();
@@ -301,6 +312,12 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
         engine_->loadCdpText(text);
         bridge_->set_page(QStringLiteral("engine"));
     });
+    connect(trainz_, &TrainzUtilPage::sceneRequested, this, [this](const QStringList& paths, const QStringList& labels, const QList<double>& yaws) {
+        // Switch first so Mesh Studio's load sheet (Mesh i / n) is visible while the scene builds.
+        bridge_->set_page(QStringLiteral("mesh"));
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        mesh_->loadScene(paths, labels, yaws);
+    });
     connect(trainz_, &TrainzUtilPage::packagesRequested, this, [this](const QString& folder) {
         bridge_->set_page(QStringLiteral("assets"));
         assets_->setPage(QStringLiteral("packages"));
@@ -315,7 +332,9 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
         engine_->loadCdpText(text);
         bridge_->set_page(QStringLiteral("engine"));
     });
+    boot_stage(QStringLiteral("Opening Sounds Studio (waveform, loop QC)"), 74);
     sounds_ = new SoundsPage(this);
+    boot_stage(QStringLiteral("Opening Mesh Studio (3D viewport, PBR, lamps)"), 78);
     connect(sounds_, &SoundsPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
     mesh_ = new MeshStudioPage(this);
     connect(mesh_, &MeshStudioPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
@@ -327,7 +346,7 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     stack_->addWidget(assets_);
     stack_->addWidget(sounds_);
     stack_->addWidget(mesh_);
-    boot_stage(QStringLiteral("Studios"), 80);
+    boot_stage(QStringLiteral("Assembling window layout, menus and shortcuts"), 86);
 
     title_->setFixedHeight(60);
     auto* layout = new QVBoxLayout(this);
@@ -434,7 +453,7 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     connect(settings, &QShortcut::activated, this, [this] {
         if (bridge_->page() == QLatin1String("mesh")) run_action(QStringLiteral("setpage:settings"));
     });
-    boot_stage(QStringLiteral("Ready"), 100);
+    boot_stage(QStringLiteral("Ready — opening window"), 100);
 }
 
 QQuickWidget* ShellWindow::load_quick(const QString& file, bool translucent) {
@@ -541,7 +560,7 @@ void ShellWindow::run_ve(const QString& mode) {
         if (paths.isEmpty()) return;
     }
     if (mode == QLatin1String("fix")) {
-        const auto answer = QMessageBox::question(this, ui_tr(QStringLiteral("VE Rules")),
+        const auto answer = ui_box(QMessageBox::Question, this, ui_tr(QStringLiteral("VE Rules")),
                                                   ui_tr(QStringLiteral("Apply safe VE fixes to %1 path(s)? Each changed file keeps a .bak copy.")).arg(paths.size()));
         if (answer != QMessageBox::Yes) return;
         const QList<VeFix> fixes = ve_fix_reports(ve_scan_paths(paths));
@@ -760,6 +779,20 @@ void ShellWindow::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
 }
 
+void ShellWindow::closeEvent(QCloseEvent* event) {
+    if (closing_) return QWidget::closeEvent(event);
+    event->ignore();  // fade out first, then close for real
+    closing_ = true;
+    hide_menu();
+    auto* anim = new QPropertyAnimation(this, "windowOpacity", this);
+    anim->setDuration(180);
+    anim->setStartValue(windowOpacity());
+    anim->setEndValue(0.0);
+    anim->setEasingCurve(QEasingCurve::OutCubic);
+    connect(anim, &QPropertyAnimation::finished, this, &QWidget::close);
+    anim->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
 bool ShellWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
 #ifdef Q_OS_WIN
     if ((eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") && message) {
@@ -770,7 +803,13 @@ bool ShellWindow::nativeEvent(const QByteArray& eventType, void* message, qintpt
             const QPoint cursor = QCursor::pos();
             QScreen* screen = QGuiApplication::screenAt(cursor);
             if (!screen && windowHandle()) screen = windowHandle()->screen();
-            if (screen && cursor.y() <= screen->geometry().top() + 1) showMaximized();
+            if (!screen) return QWidget::nativeEvent(eventType, message, result);
+            const QRect sg = screen->geometry(), ag = screen->availableGeometry();
+            if (cursor.y() <= sg.top() + 1) showMaximized();
+            else if (cursor.x() <= sg.left() + 1)  // Windows-style half snap
+                setGeometry(ag.x(), ag.y(), ag.width() / 2, ag.height());
+            else if (cursor.x() >= sg.right() - 1)
+                setGeometry(ag.x() + ag.width() / 2, ag.y(), ag.width() - ag.width() / 2, ag.height());
         }
     }
 #else

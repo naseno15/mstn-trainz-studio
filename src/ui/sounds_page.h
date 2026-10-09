@@ -2,6 +2,7 @@
 
 #include "ui/status_hub.h"
 
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -11,6 +12,9 @@
 #include <vector>
 
 #include "io/wav.h"
+#include "ui/wave_player.h"
+
+#include <QTimer>
 
 class QPaintEvent;
 class QQuickWidget;
@@ -19,12 +23,16 @@ class WaveView : public QWidget {
 public:
     explicit WaveView(QWidget* parent = nullptr);
     void set_samples(const std::vector<int16_t>& samples);
+    void set_playhead(double frac);
+    void set_marks(const std::vector<double>& fractions);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
     std::vector<int16_t> samples_;
+    double playhead_ = -1;
+    std::vector<double> marks_;
 };
 
 class SoundsBridge : public QObject {
@@ -56,7 +64,13 @@ class SoundsBridge : public QObject {
     Q_PROPERTY(QString iconFont READ iconFont NOTIFY changed)
     Q_PROPERTY(QString openGlyph READ openGlyph NOTIFY changed)
     Q_PROPERTY(QString saveGlyph READ saveGlyph NOTIFY changed)
+    Q_PROPERTY(double gainDb READ gainDb WRITE setGainDb NOTIFY changed)
     Q_PROPERTY(int current READ current NOTIFY changed)
+    Q_PROPERTY(QStringList devices READ devices NOTIFY changed)
+    Q_PROPERTY(int deviceIndex READ deviceIndex WRITE setDeviceIndex NOTIFY changed)
+    Q_PROPERTY(bool engineOn READ engineOn NOTIFY changed)
+    Q_PROPERTY(QString engineName READ engineName NOTIFY changed)
+    Q_PROPERTY(QString engineText READ engineText NOTIFY changed)
     Q_PROPERTY(QStringList clips READ clips NOTIFY changed)
 
 public:
@@ -87,6 +101,16 @@ public:
     QString openGlyph() const { return material_glyph("file_open"); }
     QString saveGlyph() const { return material_glyph("save_as"); }
     int current() const { return current_; }
+    double gainDb() const { return gain_db_; }
+    QStringList devices() const;
+    int deviceIndex() const { return device_index_; }
+    void setDeviceIndex(int index);
+    bool engineOn() const { return eng_.start >= 0 || !eng_.idle.isEmpty(); }
+    QString engineName() const { return eng_.name; }
+    QString engineText() const { return eng_text_; }
+    const std::vector<double>& marks() const { return marks_; }
+    bool load_engine(const QString& dir);
+    void setGainDb(double db);
     QStringList clips() const { return clips_; }
     const PcmClip& clip() const { return clip_; }
 
@@ -107,15 +131,46 @@ public:
     Q_INVOKABLE void fix();
     Q_INVOKABLE void saveAs();
     Q_INVOKABLE void goHome();
+    Q_INVOKABLE void engStart();
+    Q_INVOKABLE void engUp();
+    Q_INVOKABLE void engDown();
+    Q_INVOKABLE void engStop();
     Q_INVOKABLE QStringList veContextPaths() const { return source_.isEmpty() ? QStringList() : QStringList{source_}; }
 
 signals:
     void changed();
     void homeRequested();
     void waveRectRequested(int x, int y, int w, int h);
+    void playheadChanged(double frac);
 
 private:
     void refresh();
+    void tick();
+    void update_slots();
+    void add_clip(const QString& name, const QString& path, PcmClip clip, bool select = true);
+    void start_play(bool ab);
+    void eng_step();
+    void eng_play(int head, int tail, bool loop);
+    struct EngineSet {
+        QString name;
+        int start = -1, stop = -1;
+        QMap<int, int> idle, up, down;  // up[n]: n->n+1, down[n]: n+1->n
+        int top() const { int n = 0; while (idle.contains(n + 1)) ++n; return n; }
+    } eng_;
+    bool engine_mode_ = false, eng_in_transition_ = false;
+    int eng_notch_ = 0, eng_target_ = 0, eng_next_ = 0;
+    QString eng_text_;
+    int device_index_ = 0;
+    std::vector<double> marks_;
+    struct Entry {
+        QString name, path;
+        PcmClip pcm;
+    };
+    std::vector<Entry> data_;
+    WavePlayer player_;
+    QTimer timer_;
+    bool ab_ = false;
+    double gain_db_ = 0;
     PcmClip clip_;
     QString source_;
     QString ffmpeg_;
@@ -144,6 +199,7 @@ public:
     QStringList qmlErrors() const;
     void loadBytes(const QByteArray& bytes, const QString& path);
     bool saveAsTo(const QString& dest);
+    bool loadEngine(const QString& dir);
     QString qcText() const;
     QString metaText() const;
 

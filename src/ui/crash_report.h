@@ -14,6 +14,13 @@ void end_crash_session();
 QString crash_log_path();
 QString previous_crash_tail();
 
+#include <QMessageBox>
+
+// Every app dialog is frameless; ui_box replaces QMessageBox::warning/information/question/critical.
+void make_borderless(QDialog* dialog);
+QMessageBox::StandardButton ui_box(QMessageBox::Icon icon, QWidget* parent, const QString& title, const QString& text,
+                                   QMessageBox::StandardButtons buttons = QMessageBox::Ok, QMessageBox::StandardButton def = QMessageBox::NoButton);
+
 QDialog* make_crash_dialog(const QString& title, const QString& summary, const QString& detail, const QString& kind, bool quit_on_ok);
 void show_crash_dialog(const QString& title, const QString& summary, const QString& detail, const QString& kind = QStringLiteral("error"), bool quit_on_ok = false);
 

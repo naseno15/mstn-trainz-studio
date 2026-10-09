@@ -4,18 +4,27 @@ import QtQuick
 DropArea {
     id: zone
     z: 10
+    // Cleared on drop so the frame is gone before the (blocking) load starts.
+    property bool lit: false
+    onEntered: lit = true
+    onExited: lit = false
+    signal filesDropped(var drop)
+    onDropped: function (drop) {
+        lit = false
+        filesDropped(drop)
+    }
 
     Rectangle {
         anchors.fill: parent
         radius: 8
         color: Qt.rgba(1, 0.353, 0.122, 0.10)
-        visible: zone.containsDrag && zone.enabled
+        visible: zone.lit && zone.enabled
     }
 
     Canvas {
         id: dash
         anchors.fill: parent
-        visible: zone.containsDrag && zone.enabled
+        visible: zone.lit && zone.enabled
         onVisibleChanged: if (visible) requestPaint()
         onWidthChanged: requestPaint()
         onHeightChanged: requestPaint()

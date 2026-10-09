@@ -143,6 +143,8 @@ public:
     void attach(MeshView* view, QWidget* chrome);
     void reveal_view();
     void load_file(const QString& path);
+    // Preview Asset: every mesh of an asset tree in one scene, all at the origin.
+    void load_scene(const QStringList& paths, const QStringList& labels, const QList<double>& yaws);
 
     Q_INVOKABLE void setPage(const QString& page);
     Q_INVOKABLE void goHome();
@@ -209,6 +211,8 @@ private:
     bool two_sided_ = false;
     bool face_ = false;
     MeshView* view_ = nullptr;
+    QRect blur_side_;
+    QRect blur_editor_;
     QWidget* chrome_ = nullptr;
     int env_i_ = 0;
     bool sun_ = true;
@@ -221,6 +225,7 @@ private:
     bool array_on_[5] = {true, true, true, true, true};
     bool ground_ = false;
     bool loading_ = false;
+    bool scene_ = false;  // Preview Asset scene: many files, no single path
     bool load_open_ = false;
     int load_pct_ = 0;
     int load_steps_ = 0;
@@ -248,6 +253,7 @@ public:
     bool qmlReady() const;
     QStringList qmlErrors() const;
     void loadFile(const QString& path);
+    void loadScene(const QStringList& paths, const QStringList& labels, const QList<double>& yaws);
     bool loadOpen() const;
     int loadSteps() const;
     QString sideJson() const;

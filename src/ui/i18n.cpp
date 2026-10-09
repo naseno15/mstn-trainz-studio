@@ -49,11 +49,13 @@ void swap_text(W* widget, const char* slot, Get get, Set set) {
 }  // namespace
 
 UiLang* UiLang::instance() {
-    static UiLang* lang = [] {
-        auto* made = new UiLang(qApp);
-        made->set_lang(QSettings(QStringLiteral("MSTN"), QStringLiteral("TrainzStudio")).value(QStringLiteral("ui/lang"), QStringLiteral("en")).toString());
-        return made;
-    }();
+    static UiLang* lang = new UiLang(qApp);
+    // set_lang re-enters instance() through ui_tr, so it must run after the static is initialised.
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        lang->set_lang(QSettings(QStringLiteral("MSTN"), QStringLiteral("TrainzStudio")).value(QStringLiteral("ui/lang"), QStringLiteral("en")).toString());
+    }
     return lang;
 }
 

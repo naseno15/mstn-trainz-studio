@@ -756,7 +756,7 @@ Item {
 
             DropZone {
                 anchors.fill: parent
-                onDropped: function (drop) {
+                onFilesDropped: function (drop) {
                     var urls = []
                     for (var i = 0; i < drop.urls.length; ++i)
                         urls.push(String(drop.urls[i]))
@@ -1162,6 +1162,12 @@ Item {
                                                         cap: "Author"
                                                         val: assetCard.modelData.author || ""
                                                     }
+                                                    StatTile {
+                                                        width: (parent.width - 8) / 2
+                                                        visible: assetCard.focused
+                                                        cap: "Size all"
+                                                        val: bridge.detailTotal.length > 0 ? bridge.detailTotal : "…"
+                                                    }
                                                 }
                                                 Rectangle {
                                                     readonly property string note: assetCard.modelData.note || ""
@@ -1421,7 +1427,7 @@ Item {
                         anchors.fill: parent
                         enabled: bridge.page === "install"
                         z: 4
-                        onDropped: function (drop) {
+                        onFilesDropped: function (drop) {
                             var urls = []
                             for (var i = 0; i < drop.urls.length; ++i)
                                 urls.push(String(drop.urls[i]))
@@ -1608,6 +1614,7 @@ Item {
                         RaiseButton { width: 88; height: 30; label: "Depends"; onClicked: bridge.inspectDepends() }
                         RaiseButton { width: 64; height: 30; label: "Size"; onClicked: bridge.measurePacked() }
                         RaiseButton { width: 72; height: 30; label: "Tuner"; accent: true; onClicked: bridge.openEngine("") }
+                        RaiseButton { width: 78; height: 30; label: "Preview"; accent: true; onClicked: bridge.previewAsset("") }
                         RaiseButton { width: 78; height: 30; label: "Export"; onClicked: bridge.exportTogether() }
                         RaiseButton { width: 88; height: 30; label: "Each CDP"; onClicked: bridge.exportEach() }
                         RaiseButton { width: 64; height: 30; label: "All"; onClicked: bridge.pickVisible(true) }
@@ -1860,9 +1867,17 @@ Item {
                         anchors.bottom: parent.bottom
                         anchors.bottomMargin: bridge.reportOn ? 168 : 0
                         width: Math.max(28, hFlick.visibleArea.widthRatio * hFlick.width)
-                        Binding on x {
-                            when: !hDrag.drag.active
-                            value: hFlick.x + hFlick.visibleArea.xPosition * Math.max(0, hFlick.width - width)
+                        function sync() {
+                            if (hDrag.drag.active) return
+                            x = hFlick.x + hFlick.visibleArea.xPosition * Math.max(0, hFlick.width - width)
+                        }
+                        Component.onCompleted: sync()
+                        onWidthChanged: sync()
+                        Connections {
+                            target: hFlick
+                            function onContentXChanged() { hBar.sync() }
+                            function onContentWidthChanged() { hBar.sync() }
+                            function onWidthChanged() { hBar.sync() }
                         }
                         MouseArea {
                             id: hDrag
@@ -1894,10 +1909,29 @@ Item {
                         color: Qt.rgba(0, 0, 0, bridge.dark ? 0.45 : 0.08)
                         border.width: 1
                         border.color: Qt.rgba(1, 1, 1, 0.12)
+                        Rectangle {
+                            id: previewBar
+                            visible: bridge.previewPct >= 0
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: 8
+                            height: 6
+                            radius: 3
+                            color: Qt.rgba(1, 1, 1, 0.12)
+                            Rectangle {
+                                width: parent.width * Math.max(0.02, bridge.previewPct / 100)
+                                height: parent.height
+                                radius: 3
+                                color: "#ff5a1f"
+                                Behavior on width { NumberAnimation { duration: 160 } }
+                            }
+                        }
                         Flickable {
                             anchors.fill: parent
                             anchors.margins: 8
                             anchors.rightMargin: 36
+                            anchors.bottomMargin: previewBar.visible ? 22 : 8
                             contentWidth: width
                             contentHeight: reportBody.height
                             clip: true
@@ -1930,9 +1964,18 @@ Item {
                         color: "#ff5a1f"
                         anchors.right: parent.right
                         height: Math.max(28, libraryList.visibleArea.heightRatio * libraryList.height)
-                        Binding on y {
-                            when: !libDrag.drag.active
-                            value: hFlick.y + colHead.height + libraryList.visibleArea.yPosition * Math.max(0, libraryList.height - height)
+                        // imperative sync: a Binding gets dropped once drag.target assigns y
+                        function sync() {
+                            if (libDrag.drag.active) return
+                            y = hFlick.y + colHead.height + libraryList.visibleArea.yPosition * Math.max(0, libraryList.height - height)
+                        }
+                        Component.onCompleted: sync()
+                        onHeightChanged: sync()
+                        Connections {
+                            target: libraryList
+                            function onContentYChanged() { libBar.sync() }
+                            function onContentHeightChanged() { libBar.sync() }
+                            function onHeightChanged() { libBar.sync() }
                         }
                         MouseArea {
                             id: libDrag
@@ -2365,7 +2408,7 @@ Item {
                         DropZone {
                             anchors.fill: parent
                             z: 2
-                            onDropped: function (drop) {
+                            onFilesDropped: function (drop) {
                                 var urls = []
                                 for (var i = 0; i < drop.urls.length; ++i)
                                     urls.push(String(drop.urls[i]))
@@ -2985,7 +3028,11 @@ Item {
     Item {
         id: loadDialog
         visible: bridge.loadOn && bridge.libraryOn
-        anchors.fill: parent
+        // dim + block only the table panel
+        x: 10 + root.sideLayout + 10
+        y: 8
+        width: root.width - x - 10 - root.taskLayout - 10
+        height: root.height - 8 - chrome.stageMargin - chrome.contentInset(nav.height)
         z: 36
         MouseArea {
             anchors.fill: parent
@@ -2994,9 +3041,14 @@ Item {
             onPressed: function (mouse) { mouse.accepted = true }
             onWheel: function (wheel) { wheel.accepted = true }
         }
+        Rectangle {
+            anchors.fill: parent
+            radius: 16
+            color: Qt.rgba(0, 0, 0, bridge.dark ? 0.28 : 0.14)
+        }
         GlassPlate {
-            width: Math.min(520, parent.width - 80)
-            height: loadCol.implicitHeight + 36
+            width: Math.min(460, parent.width - 48)
+            height: loadCol.implicitHeight + 40
             anchors.centerIn: parent
             dark: bridge.dark
             matte: true
@@ -3007,10 +3059,10 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
-                anchors.margins: 18
-                spacing: 10
+                anchors.margins: 20
+                spacing: 12
                 Row {
-                    spacing: 10
+                    spacing: 12
                     width: parent.width
                     Item {
                         width: 28
@@ -3027,19 +3079,25 @@ Item {
                             radius: 14
                             color: "transparent"
                             border.width: 3
-                            border.color: Qt.rgba(1, 0.35, 0.12, 0.25)
+                            border.color: Qt.rgba(1, 0.35, 0.12, 0.2)
                         }
-                        Rectangle {
-                            width: 8
-                            height: 8
-                            radius: 4
-                            color: "#ff5a1f"
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            anchors.top: parent.top
+                        Canvas {
+                            anchors.fill: parent
+                            onPaint: {
+                                var c = getContext("2d")
+                                c.clearRect(0, 0, width, height)
+                                c.strokeStyle = "#ff5a1f"
+                                c.lineWidth = 3
+                                c.lineCap = "round"
+                                c.beginPath()
+                                c.arc(width / 2, height / 2, 12.5, -Math.PI / 2, Math.PI * 0.2)
+                                c.stroke()
+                            }
                         }
                     }
                     Text {
-                        width: parent.width - 38
+                        elide: Text.ElideRight
+                        width: parent.width - 40
                         text: qsTr("Loading content")
                         color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
                         font.pixelSize: 18

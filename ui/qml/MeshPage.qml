@@ -77,7 +77,7 @@ Item {
     DropZone {
         anchors.fill: parent
         z: 1
-        onDropped: function (drop) {
+        onFilesDropped: function (drop) {
             var urls = []
             if (drop.hasUrls) {
                 for (var i = 0; i < drop.urls.length; ++i)
@@ -94,19 +94,21 @@ Item {
         y: root.margin
         width: root.sideW
         height: Math.max(1, parent.height - root.margin * 2)
-        x: bridge.sideOpen ? root.margin : -width - 8
-        visible: bridge.mesh && !bridge.settingsOpen
+        readonly property bool shown: bridge.sideOpen && !bridge.settingsOpen
+        x: shown ? root.margin : -width - 8
+        Behavior on x { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
+        visible: bridge.mesh && (shown || x > -width - 7)
         GlassPlate {
             anchors.fill: parent
             dark: bridge.dark
             plateRadius: 16
             foot: 10
-            veil: 0.72
+            veil: 1.7
             MeshSide { anchors.fill: parent }
         }
         function sync() {
             var p = mapToItem(root, 0, 0)
-            bridge.placeSide(p.x, p.y, width, height)
+            bridge.placeSide(p.x, p.y, visible ? width : 0, visible ? height - 10 : 0)
             root.publish()
         }
         onXChanged: sync()
@@ -121,19 +123,21 @@ Item {
         y: root.margin
         width: root.editorW
         height: Math.max(1, parent.height - root.margin * 2)
-        x: (bridge.editorOpen && !bridge.settingsOpen && (bridge.page === "meshes" || bridge.page === "attachs")) ? (parent.width - width - root.margin) : (parent.width + 8)
-        visible: bridge.mesh && !bridge.settingsOpen && (bridge.page === "meshes" || bridge.page === "attachs")
+        readonly property bool shown: bridge.editorOpen && !bridge.settingsOpen && (bridge.page === "meshes" || bridge.page === "attachs")
+        x: shown ? (parent.width - width - root.margin) : (parent.width + 8)
+        Behavior on x { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
+        visible: bridge.mesh && (shown || x < parent.width + 7)
         GlassPlate {
             anchors.fill: parent
             dark: bridge.dark
             plateRadius: 16
             foot: 10
-            veil: 0.72
+            veil: 1.7
             MeshDock { anchors.fill: parent }
         }
         function sync() {
             var p = mapToItem(root, 0, 0)
-            bridge.placeEditor(p.x, p.y, width, height)
+            bridge.placeEditor(p.x, p.y, visible ? width : 0, visible ? height - 10 : 0)
             root.publish()
         }
         onXChanged: sync()
@@ -157,6 +161,7 @@ Item {
             dark: bridge.dark
             plateRadius: 16
             foot: 10
+            MeshSettings { anchors.fill: parent }
         }
         function sync() {
             if (!visible) {
@@ -269,23 +274,41 @@ Item {
             plateRadius: 22
             foot: 8
         }
+        Rectangle {
+            id: hudPill
+            readonly property Item cur: hudRep.itemAt(bridge.pbr)
+            visible: cur !== null
+            x: cur ? row.x + cur.x + 1 : 0
+            y: row.y + 1
+            width: cur ? cur.width - 2 : 0
+            height: row.height - 2
+            radius: 10
+            color: "#ff5a1f"
+            Behavior on x { NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
+            Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+        }
         Row {
             id: row
             anchors.centerIn: parent
             spacing: 2
             Repeater {
+                id: hudRep
                 model: bridge.pbrLabels
                 delegate: Item {
                     required property string modelData
                     required property int index
                     width: Math.max(58, lab.implicitWidth + 16)
                     height: 34
+                    scale: hudTap.pressed ? 0.92 : (hudHover.hovered ? 1.08 : 1.0)
+                    Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutBack; easing.overshoot: 2.5 } }
                     Rectangle {
                         anchors.fill: parent
                         anchors.margins: 1
                         radius: 10
-                        color: index === bridge.pbr ? "#ff5a1f" : "transparent"
+                        color: hudHover.hovered && index !== bridge.pbr ? Qt.rgba(1, 0.35, 0.12, 0.2) : "transparent"
+                        Behavior on color { ColorAnimation { duration: 180 } }
                     }
+                    HoverHandler { id: hudHover; cursorShape: Qt.PointingHandCursor }
                     Text {
                         id: lab
                         anchors.centerIn: parent
@@ -294,7 +317,7 @@ Item {
                         font.pixelSize: 12
                         font.bold: index === bridge.pbr
                     }
-                    TapHandler { onTapped: bridge.setPbr(index) }
+                    TapHandler { id: hudTap; onTapped: bridge.setPbr(index) }
                 }
             }
         }
@@ -498,8 +521,8 @@ Item {
         width: chipRow.width
         height: 48
         Behavior on sink { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
-        Behavior on pillX { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
-        Behavior on pillW { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+        Behavior on pillX { NumberAnimation { duration: 420; easing.type: Easing.OutBack; easing.overshoot: 1.3 } }
+        Behavior on pillW { NumberAnimation { duration: 420; easing.type: Easing.OutBack; easing.overshoot: 1.3 } }
 
         Rectangle {
             anchors.fill: parent
@@ -584,6 +607,9 @@ Item {
             color: hot ? "#ffffff" : root.ink
             font.pixelSize: 13
             font.bold: hot
+            scale: chipTap.pressed ? 0.92 : (chipH.hovered ? 1.1 : 1.0)
+            Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutBack; easing.overshoot: 2.5 } }
+            Behavior on color { ColorAnimation { duration: 260 } }
         }
         HoverHandler { id: chipH }
         Rectangle {

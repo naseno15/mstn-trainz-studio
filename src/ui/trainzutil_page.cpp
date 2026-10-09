@@ -1,5 +1,6 @@
 #include "trainzutil_page.h"
 
+#include "asset_preview.h"
 #include "i18n.h"
 #include "icons.h"
 #include "shell_window.h"
@@ -1693,7 +1694,8 @@ void TrainzUtilBridge::fetch_deps(const QString& kuid) {
     spawn([self, exe, kuid] {
         const QString raw = run_tu(exe, {QStringLiteral("list-dependencies"), QStringLiteral("direct"), kuid}, 90000);
         const QString config = run_tu(exe, {QStringLiteral("printconfig"), kuid}, 40000);
-        post([self, kuid, raw, config] {
+        const QString all = run_tu(exe, {QStringLiteral("list-dependencies"), QStringLiteral("all"), kuid}, 90000);
+        post([self, kuid, raw, config, all] {
             if (!self) return;
             QString text;
             QVariantList deps;
@@ -1706,7 +1708,17 @@ void TrainzUtilBridge::fetch_deps(const QString& kuid) {
                     deps << QVariantMap{{QStringLiteral("name"), self->library_->name_for(dep)}, {QStringLiteral("kuid"), dep}};
                 if (deps.isEmpty()) text = QStringLiteral("No direct dependencies");
             }
-            self->dep_cache_.insert(kuid, {text, deps});
+            QString total;
+            if (!blocked(all)) {
+                // ponytail: "all" output assumed to be parseable like "direct"; falls back to direct deps if empty. Sizes are archive sizes from the library index.
+                QStringList closure = dependency_kuids(tidy_trainzutil(all), kuid);
+                if (closure.isEmpty()) for (const QVariant& dep : deps) closure << dep.toMap().value(QStringLiteral("kuid")).toString();
+                closure.removeDuplicates();
+                qint64 sum = self->library_->size_of(kuid);
+                for (const QString& dep : closure) sum += self->library_->size_of(dep);
+                if (sum > 0) total = format_bytes(sum) + QStringLiteral(" (") + QString::number(closure.size() + 1) + QStringLiteral(")");
+            }
+            self->dep_cache_.insert(kuid, {text, deps, total});
             if (kuid != self->focus_kuid_) return;
             QStringList kuids = {kuid};
             if (self->detail_from_picks_) {
@@ -2228,6 +2240,46 @@ void TrainzUtilBridge::openEngine(const QString& kuid) {
     });
 }
 
+void TrainzUtilBridge::previewAsset(const QString& kuid) {
+    QString chosen = kuid.trimmed();
+    if (chosen.isEmpty()) chosen = detail_kuid_;
+    if (chosen.isEmpty()) chosen = library_->selected_kuids().value(0);
+    if (chosen.isEmpty()) {
+        note(QStringLiteral("Select an asset to preview"));
+        return;
+    }
+    const std::shared_ptr<const ContentIndex> index = index_;
+    if (!index) {
+        note(QStringLiteral("Scan the library first"));
+        return;
+    }
+    if (preview_pct_ >= 0) return;  // one preview at a time
+    preview_pct_ = 0;
+    report_text_ = QStringLiteral("Reading ") + chosen;
+    emit changed();
+    QPointer<TrainzUtilBridge> self(this);
+    spawn([self, chosen, index] {
+        const IndexSource source = index_source(*index);
+        const QList<PreviewNode> nodes = resolve_preview(chosen, source.read_config, source.locate, 8, 400, [self](const QString& stage, int pct) {
+            post([self, stage, pct] {
+                if (!self || self->preview_pct_ < 0) return;
+                self->preview_pct_ = qMax(self->preview_pct_, qMin(pct, 95));  // never steps back as the tree grows
+                self->report_text_ = stage;
+                emit self->changed();
+            });
+        });
+        const QString text = preview_text(nodes) + QStringLiteral("\n\nSending %1 meshes to Mesh Studio").arg(preview_scene(nodes).paths.size());
+        const PreviewScene scene = preview_scene(nodes);
+        post([self, text, scene] {
+            if (!self) return;
+            self->preview_pct_ = -1;
+            self->report_text_ = text;
+            emit self->changed();
+            if (!scene.paths.isEmpty()) emit self->sceneRequested(scene.paths, scene.labels, scene.yaws);
+        });
+    });
+}
+
 void TrainzUtilBridge::commit_enginespec(const QString& kuid, const QString& text) {
     if (!ready()) return;
     const QString exe = util_path_;
@@ -2463,6 +2515,7 @@ TrainzUtilPage::TrainzUtilPage(QWidget* parent, bool start_probe) : QWidget(pare
     bridge_ = new TrainzUtilBridge(library_, queue_, this);
     connect(bridge_, &TrainzUtilBridge::homeRequested, this, &TrainzUtilPage::homeRequested);
     connect(bridge_, &TrainzUtilBridge::engineRequested, this, &TrainzUtilPage::engineRequested);
+    connect(bridge_, &TrainzUtilBridge::sceneRequested, this, &TrainzUtilPage::sceneRequested);
     connect(bridge_, &TrainzUtilBridge::packagesRequested, this, &TrainzUtilPage::packagesRequested);
     view_ = new QQuickWidget(this);
     view_->setResizeMode(QQuickWidget::SizeRootObjectToView);

@@ -567,27 +567,54 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
         painter.fillRect(rect(), QColor(ui_dark() ? QStringLiteral("#12161c") : QStringLiteral("#e9edf2")));
-        painter.setPen(QColor(param_gray_cached() ? QStringLiteral("#ff5a1f") : QStringLiteral("#8b93a1")));
-        painter.drawText(QRect(12, 8, 70, 22), Qt::AlignCenter, QStringLiteral("Color"));
-        painter.setPen(QColor(!param_gray_cached() ? QStringLiteral("#ff5a1f") : QStringLiteral("#8b93a1")));
-        painter.drawText(QRect(84, 8, 70, 22), Qt::AlignCenter, QStringLiteral("Grey"));
+        const bool dark = ui_dark();
+        // Orange-pill segmented bar, same look as the right dock tabs.
+        auto strip = [&](const QRect& r, const QStringList& labels, int sel) {
+            painter.setPen(QColor(255, 255, 255, dark ? 20 : 100));
+            painter.setBrush(QColor(0, 0, 0, dark ? 82 : 15));
+            painter.drawRoundedRect(r, r.height() / 3.0, r.height() / 3.0);
+            const int sw = (r.width() - 6) / labels.size();
+            const QRect pill(r.left() + 3 + sel * sw, r.top() + 3, sw, r.height() - 6);
+            QLinearGradient grad(pill.topLeft(), pill.bottomLeft());
+            grad.setColorAt(0, QColor("#ff7a45"));
+            grad.setColorAt(0.42, QColor("#ff5a1f"));
+            grad.setColorAt(1, QColor("#c43a10"));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(grad);
+            painter.drawRoundedRect(pill, pill.height() / 3.0, pill.height() / 3.0);
+            for (int i = 0; i < labels.size(); ++i) {
+                painter.setPen(i == sel ? QColor(Qt::white) : QColor(dark ? "#f2f4f8" : "#1d1d1f"));
+                painter.drawText(QRect(r.left() + 3 + i * sw, r.top(), sw, r.height()), Qt::AlignCenter, labels[i]);
+            }
+        };
+        strip(tab_rect(), {QStringLiteral("Color"), QStringLiteral("Grey")}, param_gray_cached() ? 1 : 0);
         const QImage view = owner_->param_view();
-        const QRect top(12, 36, width() - 24, std::max(40, (height() - 56) / 2));
+        const QRect top = top_rect();
         if (!view.isNull()) painter.drawImage(top, view);
-        else painter.drawText(top, Qt::AlignCenter, QStringLiteral("Open a parameter map, or drop one on the queue."));
+        else {
+            painter.setPen(QColor(QStringLiteral("#8b93a1")));
+            painter.drawText(top, Qt::AlignCenter, QStringLiteral("Open a parameter map, or drop one on the queue."));
+        }
         const char* keys[] = {"R", "G", "B", "A"};
         const char* names[] = {"Emissive", "Roughness", "AO", "Metallic"};
-        const int cell_w = std::max(40, (width() - 24) / 4);
         for (int i = 0; i < 4; ++i) {
-            const QRect cell(12 + i * cell_w, top.bottom() + 8, cell_w - 6, height() - top.bottom() - 16);
+            const QRect cell = cell_rect(i);
             painter.setPen(QColor(QStringLiteral("#8b93a1")));
-            painter.drawText(cell.adjusted(4, 4, -4, 0), Qt::AlignLeft | Qt::AlignTop, QString::fromLatin1(keys[i]) + QStringLiteral(" ") + QString::fromLatin1(names[i]));
+            painter.drawText(cell.adjusted(4, 0, -4, 0).intersected(QRect(cell.left(), cell.top(), cell.width() - 70, 22)), Qt::AlignLeft | Qt::AlignVCenter, QString::fromLatin1(keys[i]) + QStringLiteral(" ") + QString::fromLatin1(names[i]));
+            painter.setPen(QColor(255, 255, 255, dark ? 30 : 120));
+            painter.setBrush(QColor(0, 0, 0, dark ? 82 : 15));
+            painter.drawRoundedRect(denoise_rect(i), 7, 7);
+            painter.setPen(QColor(dark ? "#f2f4f8" : "#1d1d1f"));
+            painter.drawText(denoise_rect(i), Qt::AlignCenter, QStringLiteral("Denoise"));
+            strip(orig_rect(i), {QStringLiteral("Original"), QStringLiteral("Edited")}, owner_->ch_orig_[i] ? 0 : 1);
             if (!owner_->param_image_.isNull()) {
                 QImage plane(owner_->param_image_.size(), QImage::Format_RGBA8888);
                 plane.fill(Qt::black);
                 const int ch = channel_index(QString::fromLatin1(keys[i]));
-                const QImage src = owner_->param_image_.convertToFormat(QImage::Format_RGBA8888);
+                const bool use_orig = owner_->ch_orig_[i] && owner_->param_original_.size() == owner_->param_image_.size();
+                const QImage src = (use_orig ? owner_->param_original_ : owner_->param_image_).convertToFormat(QImage::Format_RGBA8888);
                 for (int y = 0; y < src.height(); ++y) {
                     const uchar* in = src.constScanLine(y);
                     uchar* out = plane.scanLine(y);
@@ -600,18 +627,33 @@ protected:
                         out[x * 4 + 3] = 255;
                     }
                 }
-                painter.drawImage(cell.adjusted(4, 22, -4, -4), plane);
+                painter.drawImage(cell.adjusted(4, 52, -4, -4), plane);
             }
         }
     }
     void mousePressEvent(QMouseEvent* event) override {
-        if (event->position().y() < 32) {
-            owner_->param_gray_ = event->position().x() > 80;
+        const QPoint pos = event->position().toPoint();
+        const QRect tabs = tab_rect();
+        if (tabs.contains(pos)) {
+            owner_->param_gray_ = pos.x() > tabs.center().x();
             owner_->show_parameter();
             update();
             return;
         }
-        paint_at(event->position().toPoint(), true);
+        for (int i = 0; i < 4; ++i) {
+            if (denoise_rect(i).contains(pos)) {
+                owner_->denoise_channel(i);
+                update();
+                return;
+            }
+            const QRect bar = orig_rect(i);
+            if (bar.contains(pos)) {
+                owner_->ch_orig_[i] = pos.x() < bar.center().x();
+                update();
+                return;
+            }
+        }
+        paint_at(pos, true);
     }
     void mouseMoveEvent(QMouseEvent* event) override {
         if (event->buttons() & Qt::LeftButton) paint_at(event->position().toPoint(), false);
@@ -622,15 +664,15 @@ protected:
     void dropEvent(QDropEvent* event) override {
         const QStringList paths = dropped_paths(event->mimeData());
         if (paths.isEmpty()) return;
-        const QRect top(12, 36, width() - 24, std::max(40, (height() - 56) / 2));
+        const QRect top = top_rect();
         if (owner_->param_image_.isNull() || event->position().toPoint().y() <= top.bottom()) {
             owner_->drop_paths(paths);
             return;
         }
         const QImage dropped = load_image(paths.first());
         if (dropped.isNull()) return;
-        const int cell_w = std::max(40, (width() - 24) / 4);
-        const int index = std::clamp((event->position().toPoint().x() - 12) / cell_w, 0, 3);
+        const int index = std::clamp((event->position().toPoint().x() - 12) / cell_w(), 0, 3);
+        owner_->ch_orig_[index] = false;
         const char* keys[] = {"R", "G", "B", "A"};
         owner_->push_undo();
         QImage src = dropped.convertToFormat(QImage::Format_RGBA8888).scaled(owner_->param_image_.isNull() ? dropped.size() : owner_->param_image_.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
@@ -651,9 +693,15 @@ protected:
 
 private:
     bool param_gray_cached() const { return owner_->param_gray_; }
+    int cell_w() const { return std::max(40, (width() - 24) / 4); }
+    QRect tab_rect() const { return QRect((width() - 200) / 2, 6, 200, 30); }
+    QRect top_rect() const { return QRect(12, 44, width() - 24, std::max(40, (height() - 64) / 2)); }
+    QRect cell_rect(int i) const { return QRect(12 + i * cell_w(), top_rect().bottom() + 8, cell_w() - 6, height() - top_rect().bottom() - 16); }
+    QRect denoise_rect(int i) const { const QRect c = cell_rect(i); return QRect(c.right() - 64, c.top(), 64, 22); }
+    QRect orig_rect(int i) const { const QRect c = cell_rect(i); return QRect(c.left() + 4, c.top() + 24, c.width() - 8, 24); }
     void paint_at(const QPoint& pos, bool begin) {
         if (owner_->param_image_.isNull()) return;
-        const QRect top(12, 36, width() - 24, std::max(40, (height() - 56) / 2));
+        const QRect top = top_rect();
         if (!top.contains(pos)) return;
         QImage& image = owner_->param_image_;
         image = image.convertToFormat(QImage::Format_RGBA8888);
@@ -1724,6 +1772,7 @@ void Texmesh::open_parameter_path(const QString& path) {
     param_path_ = path;
     param_original_ = image.convertToFormat(QImage::Format_RGBA8888);
     param_image_ = param_original_;
+    std::fill(std::begin(ch_orig_), std::end(ch_orig_), false);
     undo_.clear();
     redo_.clear();
     magic_.clear();
@@ -1932,6 +1981,37 @@ void Texmesh::run_denoise() {
     denoise_work_ = work;
     show_denoise(false);
     status_ = denoise_prog_;
+    emit changed();
+}
+
+// Send one channel to the Denoiser pipeline as a grey image, then write the result back into that channel.
+void Texmesh::denoise_channel(int ch) {
+    if (param_image_.isNull() || ch < 0 || ch > 3) return;
+    const QImage src = param_image_.convertToFormat(QImage::Format_RGBA8888);
+    QImage plane(src.size(), QImage::Format_RGBA8888);
+    for (int y = 0; y < src.height(); ++y) {
+        const uchar* in = src.constScanLine(y);
+        uchar* out = plane.scanLine(y);
+        for (int x = 0; x < src.width(); ++x) {
+            out[x * 4] = out[x * 4 + 1] = out[x * 4 + 2] = in[x * 4 + ch];
+            out[x * 4 + 3] = 255;
+        }
+    }
+    denoise_orig_ = plane;
+    denoise_work_ = {};
+    run_denoise();
+    if (denoise_work_.isNull() || denoise_work_.size() != src.size()) return;
+    push_undo();
+    param_image_ = param_image_.convertToFormat(QImage::Format_RGBA8888);
+    for (int y = 0; y < param_image_.height(); ++y) {
+        const uchar* in = denoise_work_.constScanLine(y);
+        uchar* out = param_image_.scanLine(y);
+        for (int x = 0; x < param_image_.width(); ++x)
+            out[x * 4 + ch] = uchar((in[x * 4] + in[x * 4 + 1] + in[x * 4 + 2]) / 3);
+    }
+    ch_orig_[ch] = false;
+    show_parameter();
+    status_ = QStringLiteral("Denoised channel ") + QStringLiteral("RGBA").mid(ch, 1);
     emit changed();
 }
 

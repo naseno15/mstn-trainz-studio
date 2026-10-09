@@ -105,7 +105,7 @@ float sunShadow(vec3 world, vec3 N) {
     float ndl = clamp(dot(normalize(N), normalize(u_lights[0])), 0.0, 1.0);
     float bias = u_sun_bias * mix(2.6, 1.0, ndl);
     float fade = u_sun_bias * 4.0;
-    vec2 texel = vec2(1.0 / 2048.0) * 1.7;
+    vec2 texel = vec2(1.0 / 4096.0) * 1.0;
     float lit = 0.0;
     float wsum = 0.0;
     for (int y = -2; y <= 2; ++y) {
@@ -618,7 +618,73 @@ void MeshView::setShown(int index, bool on) {
     shown_[static_cast<size_t>(index)] = on ? 1 : 0;
     update();
 }
-void MeshView::resetCamera() { frame_camera(); update(); }
+void MeshView::resetCamera() { fly_on_ = false; fov_ = 40.f; frame_camera(); update(); }
+
+void MeshView::flyToHighlight() {
+    QVector3D lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+    bool any = false;
+    for (size_t p = 0; p < parts_.size() && p < highlight_.size(); ++p) {
+        if (!highlight_[p] || (p < shown_.size() && !shown_[p])) continue;
+        const std::vector<float>& v = parts_[p].positions;
+        for (size_t i = 0; i + 2 < v.size(); i += 3) {
+            const QVector3D q(v[i], v[i + 1], v[i + 2]);
+            lo = QVector3D(std::min(lo.x(), q.x()), std::min(lo.y(), q.y()), std::min(lo.z(), q.z()));
+            hi = QVector3D(std::max(hi.x(), q.x()), std::max(hi.y(), q.y()), std::max(hi.z(), q.z()));
+            any = true;
+        }
+    }
+    if (!any) return;
+    const QVector3D c = (lo + hi) * 0.5f;
+    const float r = (hi - lo).length() * 0.5f;
+    fly_from_[0] = target_[0]; fly_from_[1] = target_[1]; fly_from_[2] = target_[2]; fly_from_[3] = dist_;
+    fly_to_[0] = c.x(); fly_to_[1] = c.y(); fly_to_[2] = c.z();
+    fly_to_[3] = std::clamp(r * 3.0f, std::max(0.05f, radius_ * 0.2f), std::max(radius_ * 8.f, 1.f));
+    spin_yaw_ = spin_pitch_ = zoom_v_ = elev_v_ = 0.f;
+    move_v_[0] = move_v_[1] = move_v_[2] = 0.f;
+    fly_on_ = true;
+    fly_clock_.start();
+    kick_coast();
+}
+
+int MeshView::pick_part(const QPoint& pos) const {
+    if (width() < 2 || height() < 2) return -1;
+    const float yr = qDegreesToRadians(yaw_), pr = qDegreesToRadians(pitch_);
+    const QVector3D eye(target_[0] + dist_ * std::cos(pr) * std::cos(yr), target_[1] + dist_ * std::cos(pr) * std::sin(yr), target_[2] + dist_ * std::sin(pr));
+    const float near_p = std::max(0.001f, radius_ * 0.008f);
+    const float far_p = std::max(near_p * 100.f, std::max(dist_ * 40.f, 120.f));
+    QMatrix4x4 proj, view;
+    proj.perspective(fov_, std::max(0.1f, float(width()) / float(height())), near_p, far_p);
+    view.lookAt(eye, QVector3D(target_[0], target_[1], target_[2]), QVector3D(0, 0, 1));
+    const QMatrix4x4 inv = (proj * view).inverted();
+    const float nx = 2.f * pos.x() / width() - 1.f, ny = 1.f - 2.f * pos.y() / height();
+    const QVector3D a = inv.map(QVector3D(nx, ny, -1.f)), b = inv.map(QVector3D(nx, ny, 1.f));
+    const QVector3D o = a, d = (b - a).normalized();
+    int best = -1;
+    float best_t = 1e30f;
+    for (size_t p = 0; p < parts_.size(); ++p) {
+        if (p < shown_.size() && !shown_[p]) continue;
+        const std::vector<float>& v = parts_[p].positions;
+        const std::vector<uint32_t>& ix = parts_[p].indices;
+        for (size_t k = 0; k + 2 < ix.size(); k += 3) {
+            if (size_t(ix[k]) * 3 + 2 >= v.size() || size_t(ix[k + 1]) * 3 + 2 >= v.size() || size_t(ix[k + 2]) * 3 + 2 >= v.size()) continue;
+            const QVector3D p0(v[ix[k] * 3], v[ix[k] * 3 + 1], v[ix[k] * 3 + 2]);
+            const QVector3D e1 = QVector3D(v[ix[k + 1] * 3], v[ix[k + 1] * 3 + 1], v[ix[k + 1] * 3 + 2]) - p0;
+            const QVector3D e2 = QVector3D(v[ix[k + 2] * 3], v[ix[k + 2] * 3 + 1], v[ix[k + 2] * 3 + 2]) - p0;
+            const QVector3D h = QVector3D::crossProduct(d, e2);
+            const float det = QVector3D::dotProduct(e1, h);
+            if (std::abs(det) < 1e-12f) continue;  // two-sided hit test
+            const QVector3D s = o - p0;
+            const float u = QVector3D::dotProduct(s, h) / det;
+            if (u < 0.f || u > 1.f) continue;
+            const QVector3D q = QVector3D::crossProduct(s, e1);
+            const float w = QVector3D::dotProduct(d, q) / det;
+            if (w < 0.f || u + w > 1.f) continue;
+            const float t = QVector3D::dotProduct(e2, q) / det;
+            if (t > 0.f && t < best_t) { best_t = t; best = int(p); }
+        }
+    }
+    return best;
+}
 
 void MeshView::initializeGL() {
     if (!initializeOpenGLFunctions()) {
@@ -683,7 +749,7 @@ void MeshView::initializeGL() {
     }
     glGenTextures(1, &sun_tex_);
     glBindTexture(GL_TEXTURE_2D, sun_tex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 2048, 2048, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 4096, 4096, 0, GL_RED, GL_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -693,7 +759,7 @@ void MeshView::initializeGL() {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sun_tex_, 0);
     glGenRenderbuffers(1, &sun_depth_);
     glBindRenderbuffer(GL_RENDERBUFFER, sun_depth_);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 2048, 2048);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 4096, 4096);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, sun_depth_);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         std::fprintf(stderr, "mesh sun shadow FBO incomplete\n");
@@ -937,7 +1003,7 @@ void MeshView::draw_shadows() {
     key_shadow_ = false;
     if (cast && sun_fbo_ != 0) {
         glBindFramebuffer(GL_FRAMEBUFFER, sun_fbo_);
-        glViewport(0, 0, 2048, 2048);
+        glViewport(0, 0, 4096, 4096);
         glClearColor(1, 1, 1, 1);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glDisable(GL_CULL_FACE);
@@ -1140,7 +1206,7 @@ void MeshView::paintGL() {
     const float near_p = std::max(0.001f, radius_ * 0.008f);
     const float far_p = std::max(near_p * 100.f, std::max(dist_ * 40.f, 120.f));
     QMatrix4x4 proj;
-    proj.perspective(40.f, std::max(0.1f, float(fbw) / float(fbh)), near_p, far_p);
+    proj.perspective(fov_, std::max(0.1f, float(fbw) / float(fbh)), near_p, far_p);
     QMatrix4x4 view;
     view.lookAt(eye, QVector3D(target_[0], target_[1], target_[2]), QVector3D(0, 0, 1));
     glEnable(GL_DEPTH_TEST);
@@ -1325,7 +1391,81 @@ void MeshView::paintGL() {
         glBindVertexArray(ground_vao_);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
+    blur_panels();
     sync_fps();
+}
+
+// Frosted backdrop: downsample the finished frame through a mip-like chain,
+// then upsample it back over each panel rect only (scissored blit).
+void MeshView::blur_panels() {
+    if (blur_rect_[0].isEmpty() && blur_rect_[1].isEmpty()) return;
+    int w = 1;
+    int h = 1;
+    fb_size(&w, &h);
+    if (blur_w_ != w || blur_h_ != h) {
+        glDeleteFramebuffers(kBlurLevels, blur_fbo_);
+        glDeleteTextures(kBlurLevels, blur_tex_);
+        glGenFramebuffers(kBlurLevels, blur_fbo_);
+        glGenTextures(kBlurLevels, blur_tex_);
+        for (int i = 0; i < kBlurLevels; ++i) {
+            const int lw = std::max(1, w >> (i + 1));
+            const int lh = std::max(1, h >> (i + 1));
+            glBindTexture(GL_TEXTURE_2D, blur_tex_[i]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, lw, lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glBindFramebuffer(GL_FRAMEBUFFER, blur_fbo_[i]);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, blur_tex_[i], 0);
+        }
+        blur_w_ = w;
+        blur_h_ = h;
+    }
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    auto lvl = [&](int i, int* lw, int* lh) {
+        *lw = std::max(1, w >> (i + 1));
+        *lh = std::max(1, h >> (i + 1));
+    };
+    const unsigned screen = defaultFramebufferObject();
+    int sw = w;
+    int sh = h;
+    unsigned src = screen;
+    for (int i = 0; i < kBlurLevels; ++i) {
+        int lw, lh;
+        lvl(i, &lw, &lh);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, src);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blur_fbo_[i]);
+        glBlitFramebuffer(0, 0, sw, sh, 0, 0, lw, lh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        src = blur_fbo_[i];
+        sw = lw;
+        sh = lh;
+    }
+    for (int i = kBlurLevels - 2; i >= 0; --i) {
+        int lw, lh;
+        lvl(i, &lw, &lh);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, blur_fbo_[i + 1]);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blur_fbo_[i]);
+        int pw, ph;
+        lvl(i + 1, &pw, &ph);
+        glBlitFramebuffer(0, 0, pw, ph, 0, 0, lw, lh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    }
+    const qreal dpr = std::max(qreal(1), devicePixelRatioF());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, blur_fbo_[0]);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, screen);
+    glEnable(GL_SCISSOR_TEST);
+    int hw, hh;
+    lvl(0, &hw, &hh);
+    for (const QRect& r : blur_rect_) {
+        if (r.isEmpty()) continue;
+        const int x = static_cast<int>(r.x() * dpr);
+        const int wpx = static_cast<int>(r.width() * dpr);
+        const int hpx = static_cast<int>(r.height() * dpr);
+        const int y = h - static_cast<int>(r.y() * dpr) - hpx;
+        glScissor(x, y, wpx, hpx);
+        glBlitFramebuffer(0, 0, hw, hh, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    }
+    glDisable(GL_SCISSOR_TEST);
+    bind_widget_target();
 }
 
 void MeshView::kick_coast() {
@@ -1339,6 +1479,13 @@ void MeshView::cam_right(float* x, float* y) const {
 }
 
 void MeshView::coast() {
+    if (fly_on_) {
+        const float t = std::min(1.f, fly_clock_.elapsed() / 650.f);
+        const float s = t * t * t * (t * (t * 6.f - 15.f) + 10.f);  // smootherstep
+        for (int i = 0; i < 3; ++i) target_[i] = fly_from_[i] + (fly_to_[i] - fly_from_[i]) * s;
+        dist_ = fly_from_[3] + (fly_to_[3] - fly_from_[3]) * s;
+        if (t >= 1.f) fly_on_ = false;
+    }
     const bool walking = key_up_ || key_down_ || key_left_ || key_right_ || key_pgup_ || key_pgdn_;
     if (std::abs(spin_yaw_) > 1e-4f || std::abs(spin_pitch_) > 1e-4f) {
         yaw_ += spin_yaw_;
@@ -1404,7 +1551,7 @@ void MeshView::coast() {
         elev_v_ *= 0.78f;
         if (std::abs(elev_v_) < 1e-5f) elev_v_ = 0.f;
     }
-    const bool alive = walking || show_fps_ || std::abs(spin_yaw_) > 0.f || std::abs(spin_pitch_) > 0.f || std::abs(zoom_v_) > 0.f || std::abs(elev_v_) > 0.f || move > 1e-6f;
+    const bool alive = fly_on_ || walking || show_fps_ || std::abs(spin_yaw_) > 0.f || std::abs(spin_pitch_) > 0.f || std::abs(zoom_v_) > 0.f || std::abs(elev_v_) > 0.f || move > 1e-6f;
     if (!alive) {
         if (coast_) coast_->stop();
         return;
@@ -1415,11 +1562,18 @@ void MeshView::coast() {
 void MeshView::mousePressEvent(QMouseEvent* event) {
     last_ = event->pos();
     setFocus(Qt::MouseFocusReason);
+    fly_on_ = false;
+    pick_press_ = event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier);
+    if (pick_press_) {
+        const int hit = pick_part(event->pos());
+        if (hit >= 0) emit partPicked(hit);
+    }
 }
 
 void MeshView::mouseMoveEvent(QMouseEvent* event) {
     const QPoint d = event->pos() - last_;
     last_ = event->pos();
+    if (pick_press_) return;
     if (event->buttons() & Qt::LeftButton) {
         spin_yaw_ = std::clamp(spin_yaw_ - d.x() * 0.045f, -8.f, 8.f);
         spin_pitch_ = std::clamp(spin_pitch_ + d.y() * 0.045f, -8.f, 8.f);
@@ -1438,11 +1592,19 @@ void MeshView::mouseMoveEvent(QMouseEvent* event) {
 
 void MeshView::mouseReleaseEvent(QMouseEvent* event) {
     Q_UNUSED(event);
+    pick_press_ = false;
     kick_coast();
 }
 
 void MeshView::wheelEvent(QWheelEvent* event) {
+    fly_on_ = false;
     const float steps = event->angleDelta().y() / 120.f;
+    if (event->modifiers() & Qt::ControlModifier) {
+        fov_ = std::clamp(fov_ * std::pow(0.9f, steps), 5.f, 110.f);
+        update();
+        event->accept();
+        return;
+    }
     zoom_v_ = std::clamp(zoom_v_ - steps * 0.085f, -0.28f, 0.28f);
     kick_coast();
     event->accept();
