@@ -10,6 +10,7 @@ Item {
     property string tip: ""
     property bool accent: false
     property bool lit: false
+    property string ink: ""
     signal clicked()
 
     function topItem() {
@@ -35,11 +36,26 @@ Item {
         var above = btn.mapToItem(root, width / 2, 0)
         var below = btn.mapToItem(root, width / 2, height)
         var showBelow = above.y < tipItem.height + 10
+        tipHide.stop()
         tipItem.caretDown = !showBelow
         tipItem.x = Math.max(8, Math.min(above.x - tipItem.width / 2, root.width - tipItem.width - 8))
-        tipItem.y = showBelow ? below.y + 6 : above.y - tipItem.height - 4
+        tipItem.restY = showBelow ? below.y + 6 : above.y - tipItem.height - 4
         tipItem.caretX = above.x - tipItem.x
+        tipItem.opacity = 0
+        tipItem.y = tipItem.restY + (showBelow ? 8 : -8)
         tipItem.visible = true
+        Qt.callLater(function() {
+            tipItem.opacity = 1
+            tipItem.y = tipItem.restY
+        })
+    }
+
+    function dismissTip() {
+        if (!tipItem.visible)
+            return
+        tipItem.opacity = 0
+        tipItem.y = tipItem.restY + (tipItem.caretDown ? -6 : 6)
+        tipHide.restart()
     }
 
     implicitWidth: 88
@@ -95,13 +111,23 @@ Item {
                 GradientStop { position: 1.0; color: Qt.rgba(1, 1, 1, 0) }
             }
         }
-        Text {
+        Row {
             anchors.centerIn: parent
-            text: btn.glyph.length > 0 ? btn.glyph : btn.label
-            font.family: btn.glyph.length > 0 ? btn.fontName : ""
-            font.pixelSize: btn.glyph.length > 0 ? 20 : 13
-            font.bold: btn.glyph.length === 0
-            color: btn.accent || btn.lit ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
+            spacing: 6
+            Text {
+                visible: btn.glyph.length > 0
+                text: btn.glyph
+                font.family: btn.fontName
+                font.pixelSize: btn.label.length > 0 ? 16 : 20
+                color: btn.ink.length ? btn.ink : (btn.accent || btn.lit ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e"))
+            }
+            Text {
+                visible: btn.label.length > 0
+                text: btn.label
+                font.pixelSize: 12
+                font.bold: true
+                color: btn.accent || btn.lit ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
+            }
         }
     }
 
@@ -112,14 +138,19 @@ Item {
                 tipWait.restart()
             } else {
                 tipWait.stop()
-                tipItem.visible = false
+                btn.dismissTip()
             }
         }
     }
     Timer {
         id: tipWait
-        interval: 380
+        interval: 280
         onTriggered: if (hv.hovered && btn.tip.length > 0) btn.placeTip()
+    }
+    Timer {
+        id: tipHide
+        interval: 140
+        onTriggered: tipItem.visible = false
     }
     Rectangle {
         anchors.fill: face
@@ -137,6 +168,10 @@ Item {
         height: tipText.height + 20
         property bool caretDown: true
         property real caretX: width / 2
+        property real restY: 0
+        opacity: 0
+        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+        Behavior on y { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
 
         Text {
             id: tipText
