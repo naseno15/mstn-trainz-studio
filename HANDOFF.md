@@ -1,6 +1,16 @@
 # MSTN Trainz Studio — continuation handoff
 
-**Last updated:** 2026-10-09 (Asia/Bangkok) — Home is the studio-card hub
+**Last updated:** 2026-10-09 (Asia/Bangkok) — Mesh Studio page is QML
+
+### Mesh Studio page is QML (2026-10-09)
+
+| Piece | Role |
+|--------|------|
+| `ui/qml/MeshPage.qml` | Glass sidebar, editor, settings, welcome, bottom nav, PBR HUD, shortcut line, bake strip |
+| `ui/mesh_qml.py` | Bridge. A mask on the Quick widget leaves the center click-through so orbit and pan still hit `MeshView` |
+| Sidebars | Left sidebar and right Editor are QML (`MeshSide.qml`, `MeshDock.qml`). The old widgets stay hidden and still own the data; clicks write back into them. Settings stays a widget in the center well |
+| Viewport | `MeshView` stays full-bleed under the chrome. It does not move into a center column |
+| Fallback | If the QML page fails to load, the widget nav and frost plates come back |
 
 ### Home is the studio-card hub (2026-10-09)
 
@@ -60,7 +70,7 @@ Studios (Mesh / Sounds / Engine / Assets / TexMesh) stay Qt Widgets. Only the hu
 | Fallback | If QML fails to load, widget `HomePage` / `FloatTitleBar` come back |
 | Paint | Qt Quick uses the **software** scene graph so it stays visible beside the mesh `QOpenGLWidget` (shared desktop GL was a black HOME) |
 
-Next phases: Engine Tuner, then Assets, Mesh Studio last. Layout stays as close as the widget version.
+Mesh Studio's page chrome is QML (section at the top). Layout stays as close as the widget version.
 
 ### QML Sounds Studio (2026-10-08)
 
@@ -160,7 +170,7 @@ Keep cinema glass look at rest; mid-slide paint must not re-run 14 soft-shadow r
 |--------|------|
 | Bottom nav (texmesh) | see **Texture & Mesh Lods tools** section above (was Texture · Parameter · Denoise · Mesh Ops) |
 | `io/param_map_edit.py` | m.pbrmetal RGBA ops · fill/offset/scale/B·C/mean/invert/overlay/paint |
-| `ui/assets/param_page.py` | Texture Editor canvas · `tools_panel` mounts in right dock · Save overwrite (+ `.bak` once) |
+| `ui/assets/param_page.py` | Texture Editor. Left list inserts the row immediately and decodes off the UI thread (thumb at 36px). Center top overlays ticked channels. Bottom channel cells take a gray drop that replaces that layer (a second drop replaces the overlay; × removes it) with Original / Modified tabs. A Color / Grey pill above the split (same orange track as the right dock) switches the center and every channel together. A gray drop is stored in that channel and shown in its tint (R red, G green, B blue, A white). Right dock tabs Adjust / Overlay / Paint / Export — Export writes one channel as Color or Grey. |
 | `io/bake_denoise.py` | OIDN RTLightmap → OpenCV NLM (+ guided/bilateral) · black UV lock |
 | `ui/assets/denoise_page.py` | Texture Denoiser preview · `tools_panel` in right dock · Save overwrite |
 | `vendor/oidn/bin` | Intel Open Image Denoise 2.5.1 Windows binaries (~75 MB) |
@@ -316,12 +326,12 @@ World is Z-up. The old flatten zeroed **Y**, so Up slid in XZ. `horizontal_walk_
 | Assets sidebars | Rules scan/fix still there (same engine) |
 | Out of scope | Script compile (197/220), DLC featured, CM dependency DB |
 
-**Ship:** v0.3.4 full onefile (HDRI + fonts + Assimp + OIDN)  
+**Ship:** v0.3.5 final Python onefile (HDRI + fonts + Assimp + OIDN)  
 **Owner chat:** continue from this handoff  
 **Root:** `c:\trs22\trainz_studio\`  
 **Backup (pre-rename):** `c:\trs22\backups\26-10-05\mesh_studio-pre-trainz-studio\`  
 **Run:** `start.bat` / `start.vbs` (silent) · `start_debug.bat` (console) · `python -m trainz_studio` (cwd = `c:\trs22`)  
-**EXE:** `trainz_studio\dist\MSTN_TrainzStudio.exe` (onefile, full assets) — rebuild: `pack\build.bat` · GitHub Release `v0.3.4`  
+**EXE:** `trainz_studio\dist\MSTN_TrainzStudio.exe` (onefile, full assets) — rebuild: `pack\build.bat` · GitHub Release `v0.3.5` (final Python)  
 **Shell:** `pack\shell\register.ps1` (Open + Quick Preview + Explorer pane) · `unregister.ps1`  
 **Smoke:** `python -m trainz_studio.check` from `c:\trs22` → expect `trainz_studio check: OK`
 
