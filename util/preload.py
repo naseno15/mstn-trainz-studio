@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import threading
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 _HUB_MODULES = (
     "trainz_studio.ui.frost",
@@ -13,11 +14,59 @@ _HUB_MODULES = (
     "trainz_studio.ui.assets.studio",
     "trainz_studio.ui.assets.packages",
     "trainz_studio.io.loaders",
+    "trainz_studio.io.trainz_install",
+    "trainz_studio.ui.trainzutil_host",
 )
 
 _lock = threading.Lock()
 _thread: Optional[threading.Thread] = None
 _done = False
+_current = ""
+_finished = 0
+_t0 = time.perf_counter()
+_log_fn: Optional[Callable[[str], None]] = None
+_pending: list[str] = []
+
+
+def preload_progress() -> tuple[str, int, int]:
+    """Module being imported, how many finished, and the list length."""
+    with _lock:
+        return _current, _finished, len(_HUB_MODULES)
+
+
+def set_boot_logger(fn: Optional[Callable[[str], None]]) -> None:
+    """UI sink for boot lines. Main-thread calls paint immediately; import thread queues."""
+    global _log_fn
+    _log_fn = fn
+    if fn is None:
+        with _lock:
+            _pending.clear()
+        return
+    drain_boot_log()
+
+
+def boot_log(text: str) -> None:
+    """One loading-dialog line: seconds since boot, then the call."""
+    line = f"{time.perf_counter() - _t0:6.2f}s  {text}"
+    fn = _log_fn
+    if threading.current_thread() is threading.main_thread():
+        if fn is not None:
+            fn(line)
+        return
+    with _lock:
+        if len(_pending) < 80:
+            _pending.append(line)
+
+
+def drain_boot_log() -> None:
+    fn = _log_fn
+    if fn is None:
+        return
+    with _lock:
+        lines = list(_pending)
+        _pending.clear()
+    for line in lines:
+        fn(line)
 
 
 def start_hub_module_preload() -> threading.Thread:
@@ -33,12 +82,21 @@ def start_hub_module_preload() -> threading.Thread:
             return t
 
         def _run() -> None:
-            global _done
+            global _done, _current, _finished
             for name in _HUB_MODULES:
+                with _lock:
+                    _current = name
+                short = name.rsplit(".", 1)[-1]
+                boot_log(f"import {name}")
+                started = time.perf_counter()
                 try:
                     __import__(name)
-                except Exception:
-                    pass
+                    boot_log(f"imported {short} · {(time.perf_counter() - started) * 1000:.0f} ms")
+                except Exception as exc:
+                    boot_log(f"import failed {short} · {exc}")
+                with _lock:
+                    _finished += 1
+                    _current = ""
             _done = True
 
         _thread = threading.Thread(target=_run, name="ts-hub-preload", daemon=True)
