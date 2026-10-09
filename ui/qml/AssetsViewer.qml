@@ -224,19 +224,28 @@ Item {
                     }
                     RaiseButton {
                         visible: bridge.viewFast
+                        width: 36
                         height: 36
-                        label: bridge.viewFastLabel
+                        glyph: bridge.glyphFast
+                        tip: viewer.tip("fast")
+                        fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                         onClicked: bridge.viewerFast()
                     }
                     RaiseButton {
                         visible: bridge.viewMesh
+                        width: 36
                         height: 36
-                        label: bridge.viewMeshLabel
+                        glyph: bridge.glyphMesh
+                        tip: viewer.tip("mesh")
+                        fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                         onClicked: bridge.viewerMesh()
                     }
                     RaiseButton {
+                        width: 36
                         height: 36
-                        label: bridge.viewRepl
+                        glyph: bridge.glyphRepl
+                        tip: viewer.tip("replace")
+                        fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                         onClicked: bridge.viewerReplace()
                     }
                     RaiseButton {
@@ -256,12 +265,14 @@ Item {
                         fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                         onClicked: bridge.viewerSaveCdp()
                     }
-                }
-                RaiseButton {
-                    width: parent.width
-                    height: 36
-                    label: bridge.viewFbx
-                    onClicked: bridge.viewerDeleteFbx()
+                    RaiseButton {
+                        width: 36
+                        height: 36
+                        glyph: bridge.glyphFbx
+                        tip: viewer.tip("fbx")
+                        fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
+                        onClicked: bridge.viewerDeleteFbx()
+                    }
                 }
             }
         }
