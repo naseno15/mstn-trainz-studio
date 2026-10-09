@@ -56,7 +56,7 @@ Item {
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            text: bridge.centerTitle
+            text: (typeof bridge.centerTitle === "string" ? qsTr(bridge.centerTitle) : bridge.centerTitle)
             color: center.ink
             font.pixelSize: 16
             font.bold: true
@@ -69,7 +69,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             wrapMode: Text.WordWrap
-            text: bridge.centerTip
+            text: (typeof bridge.centerTip === "string" ? qsTr(bridge.centerTip) : bridge.centerTip)
             color: center.mute
             font.pixelSize: 12
             visible: text.length > 0
@@ -104,7 +104,7 @@ Item {
                     anchors.top: parent.top
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    text: bridge.centerList
+                    text: (typeof bridge.centerList === "string" ? qsTr(bridge.centerList) : bridge.centerList)
                     color: center.mute
                     font.pixelSize: 12
                     elide: Text.ElideRight
@@ -116,10 +116,61 @@ Item {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
-                    onXChanged: center.place(tableSlot, "table")
-                    onYChanged: center.place(tableSlot, "table")
-                    onWidthChanged: center.place(tableSlot, "table")
-                    onHeightChanged: center.place(tableSlot, "table")
+                    property var rows: []
+                    function reload() {
+                        try { rows = JSON.parse(bridge.tableJson) }
+                        catch (e) { rows = [] }
+                    }
+                    Connections {
+                        target: bridge
+                        function onChanged() { tableSlot.reload() }
+                    }
+                    Component.onCompleted: reload()
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 12
+                        color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                        border.width: 1
+                        border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.12 : 0.40)
+                    }
+                    DropZone {
+                        anchors.fill: parent
+                        onDropped: function (drop) { bridge.dropCenter(drop.urls) }
+                    }
+                    ListView {
+                        id: fileList
+                        anchors.fill: parent
+                        clip: true
+                        spacing: 4
+                        model: tableSlot.rows
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: fileList.width
+                            height: 36
+                            radius: 8
+                            color: modelData.on ? Qt.rgba(1, 0.35, 0.12, 0.28) : Qt.rgba(1, 1, 1, bridge.dark ? 0.05 : 0.45)
+                            Text {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                verticalAlignment: Text.AlignVCenter
+                                text: (typeof modelData.text === "string" ? qsTr(modelData.text) : modelData.text)
+                                color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                            }
+                            TapHandler { onTapped: bridge.pickCenter(modelData.row) }
+                        }
+                    }
+                    Text {
+                        anchors.centerIn: parent
+                        visible: fileList.count === 0
+                        width: parent.width - 24
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                        text: bridge.page === "meshops" ? qsTr("Drop .trainzmesh, .im, or .fbx") : qsTr("Drop images")
+                        color: center.mute
+                        font.pixelSize: 13
+                    }
                 }
             }
 
@@ -167,7 +218,7 @@ Item {
                         anchors.right: refreshBtn.left
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
-                        text: bridge.centerPrev
+                        text: (typeof bridge.centerPrev === "string" ? qsTr(bridge.centerPrev) : bridge.centerPrev)
                         color: center.mute
                         font.pixelSize: 12
                         elide: Text.ElideRight
@@ -180,7 +231,7 @@ Item {
                         height: 28
                         glyph: bridge.glyphRefresh
                         fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
-                        tip: "Refresh preview"
+                        tip: qsTr("Refresh preview")
                         onClicked: bridge.refreshCenter()
                     }
                 }
@@ -196,6 +247,27 @@ Item {
                     onYChanged: center.place(leftSlot, "left")
                     onWidthChanged: center.place(leftSlot, "left")
                     onHeightChanged: center.place(leftSlot, "left")
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 12
+                        color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                        border.width: 1
+                        border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.12 : 0.40)
+                    }
+                    Flickable {
+                        anchors.fill: parent
+                        contentHeight: leftText.implicitHeight
+                        clip: true
+                        Text {
+                            id: leftText
+                            width: leftSlot.width
+                            wrapMode: Text.Wrap
+                            color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                            font.pixelSize: 12
+                            font.family: "Consolas"
+                            text: bridge.wellLeft.length > 0 ? bridge.wellLeft : qsTr("Preview")
+                        }
+                    }
                 }
 
                 MouseArea {
@@ -232,13 +304,50 @@ Item {
                     onYChanged: center.place(rightSlot, "right")
                     onWidthChanged: center.place(rightSlot, "right")
                     onHeightChanged: center.place(rightSlot, "right")
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 12
+                        color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                        border.width: 1
+                        border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.12 : 0.40)
+                    }
+                    Flickable {
+                        anchors.fill: parent
+                        contentHeight: rightText.implicitHeight
+                        clip: true
+                        Text {
+                            id: rightText
+                            width: rightSlot.width
+                            wrapMode: Text.Wrap
+                            color: bridge.dark ? "#c5cad3" : "#3a414a"
+                            font.pixelSize: 12
+                            font.family: "Consolas"
+                            text: bridge.wellRight.length > 0 ? bridge.wellRight : qsTr("Log")
+                        }
+                    }
                 }
             }
 
-            Item {
-                id: canvasSlot
-                visible: center.canvas
-                anchors.fill: parent
+                Item {
+                    id: canvasSlot
+                    visible: center.canvas
+                    anchors.fill: parent
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 12
+                        color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                        border.width: 1
+                        border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.12 : 0.40)
+                    }
+                    Text {
+                        anchors.centerIn: parent
+                        width: parent.width - 24
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                        text: bridge.page === "denoise" ? qsTr("Open a bake from the right dock") : qsTr("Open a parameter map from the right dock")
+                        color: center.mute
+                        font.pixelSize: 13
+                    }
                 onXChanged: center.place(canvasSlot, "canvas")
                 onYChanged: center.place(canvasSlot, "canvas")
                 onWidthChanged: center.place(canvasSlot, "canvas")

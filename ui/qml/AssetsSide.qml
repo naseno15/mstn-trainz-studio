@@ -44,14 +44,14 @@ GlassPlate {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                text: bridge.brand
+                text: (typeof bridge.brand === "string" ? qsTr(bridge.brand) : bridge.brand)
                 color: side.ink
                 font.pixelSize: 15
                 font.bold: true
             }
             Text {
                 width: parent.width
-                text: bridge.pageTitle
+                text: (typeof bridge.pageTitle === "string" ? qsTr(bridge.pageTitle) : bridge.pageTitle)
                 color: side.ink
                 font.pixelSize: 14
                 font.bold: true
@@ -59,10 +59,113 @@ GlassPlate {
             Text {
                 width: parent.width
                 wrapMode: Text.WordWrap
-                text: bridge.blurb
+                text: (typeof bridge.blurb === "string" ? qsTr(bridge.blurb) : bridge.blurb)
                 color: side.mute
                 font.pixelSize: 12
                 visible: text.length > 0
+            }
+        }
+
+        Item {
+            id: queueWell
+            visible: bridge.showQueue
+            anchors.top: head.bottom
+            anchors.bottom: foot.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: 10
+            anchors.bottomMargin: 8
+            property var rows: []
+            function parse() {
+                try { return JSON.parse(bridge.suite === "texmesh" ? bridge.paramQueueJson : bridge.queueJson) }
+                catch (e) { return [] }
+            }
+            Connections {
+                target: bridge
+                function onChanged() { queueWell.rows = queueWell.parse() }
+            }
+            Component.onCompleted: rows = parse()
+
+            Rectangle {
+                anchors.fill: parent
+                radius: 12
+                color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                border.width: 1
+                border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.12 : 0.40)
+            }
+            Text {
+                id: queueHead
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: 8
+                height: 16
+                text: bridge.suite === "texmesh" ? qsTr("Maps") : qsTr("Kind     Name     Size     Info")
+                color: side.mute
+                font.pixelSize: 11
+                font.bold: true
+                elide: Text.ElideRight
+            }
+
+            DropZone {
+                anchors.fill: parent
+                onDropped: function (drop) {
+                    if (bridge.suite === "texmesh") bridge.dropCenter(drop.urls)
+                    else bridge.dropPaths(drop.urls)
+                }
+            }
+
+            ListView {
+                id: queueList
+                anchors.top: queueHead.bottom
+                anchors.topMargin: 6
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 8
+                clip: true
+                spacing: 4
+                boundsBehavior: Flickable.StopAtBounds
+                model: queueWell.rows
+                delegate: Rectangle {
+                    required property var modelData
+                    width: queueList.width
+                    height: 48
+                    radius: 10
+                    color: modelData.on ? Qt.rgba(1, 0.35, 0.12, bridge.dark ? 0.28 : 0.18) : Qt.rgba(1, 1, 1, bridge.dark ? 0.05 : 0.45)
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 2
+                        Text {
+                            width: parent.width
+                            text: (typeof modelData.name === "string" ? qsTr(modelData.name) : modelData.name)
+                            color: side.ink
+                            font.pixelSize: 12
+                            font.bold: true
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            width: parent.width
+                            text: modelData.kind + qsTr("  ·  ") + modelData.size + qsTr("  ·  ") + modelData.info
+                            color: side.mute
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                    }
+                    TapHandler { onTapped: bridge.pickQueue(modelData.row) }
+                }
+            }
+
+            Text {
+                anchors.centerIn: parent
+                visible: queueList.count === 0
+                width: parent.width - 16
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: bridge.suite === "texmesh" ? qsTr("Drop images") : qsTr("Drop a CDP or a folder")
+                color: side.mute
+                font.pixelSize: 12
             }
         }
 
@@ -125,7 +228,7 @@ GlassPlate {
                         required property var modelData
                         width: actionCol.width
                         height: 40
-                        label: modelData.label
+                        label: (typeof modelData.label === "string" ? qsTr(modelData.label) : modelData.label)
                         accent: !!modelData.accent
                         enabled: modelData.enabled !== false
                         opacity: enabled ? 1 : 0.4
@@ -184,7 +287,7 @@ GlassPlate {
             }
             Text {
                 visible: bridge.showQueue
-                text: bridge.footerCap
+                text: (typeof bridge.footerCap === "string" ? qsTr(bridge.footerCap) : bridge.footerCap)
                 color: side.mute
                 font.pixelSize: 11
                 font.bold: true
@@ -217,7 +320,7 @@ GlassPlate {
             Text {
                 width: parent.width
                 wrapMode: Text.WordWrap
-                text: bridge.footNote
+                text: (typeof bridge.footNote === "string" ? qsTr(bridge.footNote) : bridge.footNote)
                 color: side.mute
                 font.pixelSize: 11
             }

@@ -70,7 +70,7 @@ Item {
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            width: bridge.dockOn ? bridge.dockW : 0
+            width: bridge.dockOn ? (bridge.viewerExpanded ? parent.width - side.width - 8 : bridge.dockW) : 0
             property bool widthReady: false
             Behavior on width {
                 enabled: dockSlot.widthReady && !stage.dockDrag
@@ -105,6 +105,175 @@ Item {
                 anchors.topMargin: viewerChrome.padTop
                 anchors.bottomMargin: viewerChrome.padBottom
                 visible: bridge.viewerOn && dockSlot.width > 40
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 11
+                    color: bridge.dark ? "#101319" : "#e2e6ec"
+                    border.width: 1
+                    border.color: bridge.dark ? "#050608" : "#aeb5c0"
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    radius: 9
+                    color: "transparent"
+                    border.width: 1
+                    border.color: bridge.dark ? "#2a303a" : "#ffffff"
+                }
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 2
+                    height: 5
+                    radius: 8
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.42) }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
+                }
+
+                Flickable {
+                    visible: bridge.viewPane === 0 && bridge.previewImage.length === 0 && !bridge.previewAudio
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    contentWidth: viewerText.implicitWidth
+                    contentHeight: viewerText.implicitHeight
+                    clip: true
+                    TextEdit {
+                        id: viewerText
+                        width: Math.max(previewSlot.width, implicitWidth)
+                        readOnly: true
+                        selectByMouse: true
+                        wrapMode: TextEdit.NoWrap
+                        textFormat: bridge.previewRich ? TextEdit.RichText : TextEdit.PlainText
+                        color: bridge.previewRich ? "#d4d4d4" : (bridge.dark ? "#f2f4f8" : "#1d1d1f")
+                        font.family: "Consolas"
+                        font.pixelSize: bridge.previewPt + 2
+                        text: bridge.previewOn ? bridge.previewBody : bridge.viewHint
+                    }
+                }
+
+                Image {
+                    visible: bridge.viewPane === 0 && bridge.previewImage.length > 0
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    source: bridge.previewImage
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    smooth: true
+                    mipmap: true
+                }
+
+                Column {
+                    visible: bridge.viewPane === 0 && bridge.previewAudio
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - 40, 320)
+                    spacing: 14
+                    Text {
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                        text: (typeof bridge.previewBody === "string" ? qsTr(bridge.previewBody) : bridge.previewBody)
+                        color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                        font.pixelSize: 13
+                    }
+                    Row {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        spacing: 8
+                        RaiseButton {
+                            width: 88
+                            height: 36
+                            label: qsTr("Play")
+                            accent: true
+                            onClicked: bridge.audioPlay()
+                        }
+                        RaiseButton {
+                            width: 88
+                            height: 36
+                            label: qsTr("Stop")
+                            onClicked: bridge.audioStop()
+                        }
+                    }
+                }
+
+                Flickable {
+                    id: editorFlick
+                    visible: bridge.viewPane === 1
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.left: editorGutter.right
+                    anchors.right: parent.right
+                    anchors.margins: 10
+                    anchors.leftMargin: 6
+                    contentWidth: editorText.implicitWidth
+                    contentHeight: editorText.implicitHeight
+                    clip: true
+                    TextEdit {
+                        id: editorText
+                        width: Math.max(previewSlot.width, implicitWidth)
+                        readOnly: false
+                        selectByMouse: true
+                        wrapMode: TextEdit.NoWrap
+                        textFormat: TextEdit.PlainText
+                        color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                        selectionColor: "#ff5a1f"
+                        font.family: "Consolas"
+                        font.pixelSize: bridge.previewPt + 2
+                        text: bridge.previewPlain
+                        onTextChanged: if (bridge.viewPane === 1) bridge.setPreviewText(text)
+                        Component.onCompleted: bridge.attachEditor(textDocument)
+                    }
+                }
+
+                FontMetrics {
+                    id: editorMetrics
+                    font.family: "Consolas"
+                    font.pixelSize: bridge.previewPt + 2
+                }
+                Item {
+                    id: editorGutter
+                    visible: bridge.viewPane === 1
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 3
+                    anchors.topMargin: 3
+                    anchors.bottomMargin: 3
+                    width: 46
+                    clip: true
+                    Rectangle {
+                        anchors.fill: parent
+                        color: bridge.dark ? "#0b0d11" : "#d4d9e1"
+                        Rectangle {
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            width: 1
+                            color: bridge.dark ? "#303640" : "#aeb5c0"
+                        }
+                    }
+                    Column {
+                        x: 0
+                        y: 10 - editorFlick.contentY
+                        width: parent.width - 7
+                        Repeater {
+                            model: Math.max(1, editorText.lineCount)
+                            Text {
+                                required property int index
+                                width: parent.width
+                                height: editorMetrics.lineSpacing
+                                horizontalAlignment: Text.AlignRight
+                                verticalAlignment: Text.AlignVCenter
+                                text: index + 1
+                                color: "#858585"
+                                font.family: "Consolas"
+                                font.pixelSize: bridge.previewPt
+                            }
+                        }
+                    }
+                }
 
                 function sync() {
                     if (!visible || width < 8 || height < 8) {
@@ -173,6 +342,7 @@ Item {
 
         Item {
             id: centerSlot
+            visible: !bridge.viewerExpanded
             anchors.left: side.right
             anchors.leftMargin: 8
             anchors.right: dockSlot.left
@@ -195,6 +365,515 @@ Item {
                 anchors.topMargin: centerChrome.padTop
                 anchors.bottomMargin: centerChrome.padBottom
 
+                property var finderRows: []
+                property var crumbRows: []
+                property real finderTypeWidth: 105
+                property real finderSizeWidth: 82
+                property real finderModifiedWidth: 132
+                function parseFinder() {
+                    try { return JSON.parse(bridge.finderJson) }
+                    catch (e) { return [] }
+                }
+                function parseCrumbs() {
+                    try { return JSON.parse(bridge.crumbsJson) }
+                    catch (e) { return [] }
+                }
+                Connections {
+                    target: bridge
+                    function onChanged() {
+                        centerBody.finderRows = centerBody.parseFinder()
+                        centerBody.crumbRows = centerBody.parseCrumbs()
+                    }
+                }
+                Component.onCompleted: {
+                    finderRows = parseFinder()
+                    crumbRows = parseCrumbs()
+                    sync()
+                }
+
+                Column {
+                    anchors.fill: parent
+                    visible: bridge.suite !== "texmesh"
+                    spacing: 8
+
+                    Item {
+                        id: finderBox
+                        visible: bridge.page === "packages"
+                        width: parent.width
+                        height: parent.height
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 12
+                            color: Qt.rgba(0, 0, 0, bridge.dark ? 0.28 : 0.06)
+                            border.width: 1
+                            border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.10 : 0.40)
+                        }
+                        Item {
+                            anchors.fill: parent
+                            anchors.margins: 12
+
+                            Item {
+                                id: finderHead
+                                anchors.top: parent.top
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                height: 18
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: qsTr("Finder")
+                                    color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                }
+                                Text {
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width * 0.62
+                                    horizontalAlignment: Text.AlignRight
+                                    text: (typeof bridge.finderMeta === "string" ? qsTr(bridge.finderMeta) : bridge.finderMeta)
+                                    color: bridge.dark ? "#8b93a1" : "#5c6570"
+                                    font.pixelSize: 12
+                                    elide: Text.ElideLeft
+                                }
+                            }
+
+                            Flickable {
+                                id: crumbFlick
+                                anchors.top: finderHead.bottom
+                                anchors.topMargin: 8
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                height: 32
+                                contentWidth: crumbRow.width
+                                contentHeight: height
+                                clip: true
+                                flickableDirection: Flickable.HorizontalFlick
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 8
+                                    color: Qt.rgba(0, 0, 0, bridge.dark ? 0.22 : 0.05)
+                                }
+                                Row {
+                                    id: crumbRow
+                                    height: 32
+                                    spacing: 4
+                                    leftPadding: 6
+                                    Repeater {
+                                        model: centerBody.crumbRows
+                                        delegate: Row {
+                                            required property var modelData
+                                            required property int index
+                                            height: 32
+                                            spacing: 4
+                                            Text {
+                                                visible: index > 0
+                                                text: qsTr("\u203a")
+                                                color: bridge.dark ? "#8b93a1" : "#5c6570"
+                                                font.pixelSize: 14
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                            Rectangle {
+                                                width: crumbLab.implicitWidth + 16
+                                                height: 24
+                                                radius: 8
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                color: modelData.hot ? "#ff5a1f" : Qt.rgba(1, 0.35, 0.12, bridge.dark ? 0.45 : 0.28)
+                                                Text {
+                                                    id: crumbLab
+                                                    anchors.centerIn: parent
+                                                    text: (modelData.label || "").length > 28 ? modelData.label.slice(0, 26) + qsTr("\u2026") : (modelData.label || "")
+                                                    color: "#ffffff"
+                                                    font.pixelSize: 11
+                                                    font.bold: true
+                                                }
+                                                TapHandler {
+                                                    enabled: modelData.depth >= 0
+                                                    onTapped: bridge.jumpCrumb(modelData.depth)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Row {
+                                id: searchRow
+                                anchors.top: crumbFlick.bottom
+                                anchors.topMargin: 8
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                height: 32
+                                spacing: 6
+                                RaiseButton {
+                                    width: 34
+                                    height: 32
+                                    label: qsTr("\u2190")
+                                    enabled: bridge.finderUpOn
+                                    onClicked: bridge.finderUp()
+                                }
+                                Rectangle {
+                                    width: parent.width - 34 - 52 - 12
+                                    height: 32
+                                    radius: 8
+                                    color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                                    TextInput {
+                                        anchors.fill: parent
+                                        anchors.margins: 8
+                                        color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                                        font.pixelSize: 12
+                                        clip: true
+                                        Text {
+                                            anchors.fill: parent
+                                            visible: parent.text.length === 0
+                                            text: qsTr("Search this list\u2026")
+                                            color: bridge.dark ? "#8b93a1" : "#5c6570"
+                                            font.pixelSize: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        onTextChanged: bridge.setFinderQuery(text)
+                                    }
+                                }
+                                RaiseButton {
+                                    width: 52
+                                    height: 32
+                                    label: qsTr(".fbx")
+                                    accent: bridge.finderFbx
+                                    onClicked: bridge.toggleFbx()
+                                }
+                            }
+
+                            Rectangle {
+                                id: finderHeader
+                                anchors.top: searchRow.bottom
+                                anchors.topMargin: 8
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                height: 30
+                                radius: 7
+                                color: Qt.rgba(0, 0, 0, bridge.dark ? 0.28 : 0.07)
+
+                                property real nameWidth: Math.max(150, width - centerBody.finderTypeWidth - centerBody.finderSizeWidth - centerBody.finderModifiedWidth)
+                                Row {
+                                    anchors.fill: parent
+                                    Repeater {
+                                        model: [
+                                            { title: "Name", key: "name", width: finderHeader.nameWidth },
+                                            { title: "Type", key: "type", width: centerBody.finderTypeWidth },
+                                            { title: "Size", key: "size", width: centerBody.finderSizeWidth },
+                                            { title: "Date modified", key: "modified", width: centerBody.finderModifiedWidth }
+                                        ]
+                                        delegate: Item {
+                                            required property var modelData
+                                            width: modelData.width
+                                            height: finderHeader.height
+                                            Text {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 10
+                                                anchors.rightMargin: 6
+                                                verticalAlignment: Text.AlignVCenter
+                                                horizontalAlignment: modelData.key === "size" ? Text.AlignRight : Text.AlignLeft
+                                                text: (typeof modelData.title === "string" ? qsTr(modelData.title) : modelData.title)
+                                                color: bridge.dark ? "#b8bec8" : "#4d5662"
+                                                font.pixelSize: 10
+                                                font.bold: true
+                                            }
+                                            TapHandler { onTapped: bridge.setFinderSort(modelData.key) }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    x: finderHeader.nameWidth - 2
+                                    width: 5; height: parent.height; color: "transparent"
+                                    property real startWidth: centerBody.finderTypeWidth
+                                    HoverHandler { cursorShape: Qt.SplitHCursor }
+                                    DragHandler {
+                                        xAxis.enabled: true; yAxis.enabled: false
+                                        onActiveChanged: if (active) parent.startWidth = centerBody.finderTypeWidth
+                                        onTranslationChanged: centerBody.finderTypeWidth = Math.max(70, parent.startWidth - translation.x)
+                                    }
+                                }
+                                Rectangle {
+                                    x: finderHeader.nameWidth + centerBody.finderTypeWidth - 2
+                                    width: 5; height: parent.height; color: "transparent"
+                                    property real startWidth: centerBody.finderTypeWidth
+                                    HoverHandler { cursorShape: Qt.SplitHCursor }
+                                    DragHandler {
+                                        xAxis.enabled: true; yAxis.enabled: false
+                                        onActiveChanged: if (active) parent.startWidth = centerBody.finderTypeWidth
+                                        onTranslationChanged: centerBody.finderTypeWidth = Math.max(70, parent.startWidth + translation.x)
+                                    }
+                                }
+                                Rectangle {
+                                    x: finderHeader.width - centerBody.finderModifiedWidth - 2
+                                    width: 5; height: parent.height; color: "transparent"
+                                    property real startWidth: centerBody.finderModifiedWidth
+                                    HoverHandler { cursorShape: Qt.SplitHCursor }
+                                    DragHandler {
+                                        xAxis.enabled: true; yAxis.enabled: false
+                                        onActiveChanged: if (active) parent.startWidth = centerBody.finderModifiedWidth
+                                        onTranslationChanged: centerBody.finderModifiedWidth = Math.max(105, parent.startWidth - translation.x)
+                                    }
+                                }
+                            }
+
+                            ListView {
+                                id: finderList
+                                anchors.top: finderHeader.bottom
+                                anchors.topMargin: 4
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: openFolderBtn.top
+                                anchors.bottomMargin: 8
+                                clip: true
+                                spacing: 2
+                                boundsBehavior: Flickable.StopAtBounds
+                                model: centerBody.finderRows
+                                delegate: Item {
+                                    required property var modelData
+                                    width: finderList.width
+                                    height: 52
+                                    HoverHandler { id: rowHover }
+
+                                    Item {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 6
+                                        anchors.rightMargin: 6
+                                        anchors.topMargin: 3
+                                        anchors.bottomMargin: 3
+                                        visible: modelData.on
+
+                                        Repeater {
+                                            model: 3
+                                            delegate: Rectangle {
+                                                required property int index
+                                                property real t: (index + 1) / 3
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 1 - t * 2
+                                                anchors.rightMargin: 1 - t * 2
+                                                anchors.topMargin: 1 + index
+                                                anchors.bottomMargin: -t * 2
+                                                radius: 12
+                                                color: Qt.rgba(0, 0, 0, 0.28 * (1.05 - t))
+                                            }
+                                        }
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            anchors.bottomMargin: 2
+                                            radius: 12
+                                            gradient: Gradient {
+                                                GradientStop { position: 0.0; color: "#ff7a45" }
+                                                GradientStop { position: 0.42; color: "#ff5a1f" }
+                                                GradientStop { position: 1.0; color: "#c43a10" }
+                                            }
+                                            border.width: 1
+                                            border.color: Qt.rgba(1, 0.84, 0.70, 0.60)
+                                            Rectangle {
+                                                anchors.left: parent.left
+                                                anchors.right: parent.right
+                                                anchors.top: parent.top
+                                                anchors.leftMargin: 14
+                                                anchors.rightMargin: 14
+                                                anchors.topMargin: 1
+                                                height: 1
+                                                color: Qt.rgba(1, 1, 1, 0.55)
+                                            }
+                                        }
+                                    }
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 6
+                                        anchors.rightMargin: 6
+                                        anchors.topMargin: 3
+                                        anchors.bottomMargin: 3
+                                        radius: 12
+                                        visible: !modelData.on && rowHover.hovered
+                                        color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.35)
+                                        border.width: 1
+                                        border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.10 : 0.40)
+                                    }
+                                    Row {
+                                        z: 2
+                                        anchors.fill: parent
+                                        Item {
+                                            width: finderHeader.nameWidth
+                                            height: parent.height
+                                            Rectangle {
+                                                x: 14
+                                                width: 28
+                                                height: 28
+                                                radius: 8
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                property color badgeColor: modelData.color || "#8e8e93"
+                                                color: modelData.on ? Qt.rgba(0, 0, 0, 0.22) : Qt.rgba(badgeColor.r, badgeColor.g, badgeColor.b, 0.22)
+                                                Text {
+                                                    anchors.centerIn: parent
+                                                    text: modelData.badge || qsTr("\u00b7")
+                                                    color: modelData.on ? "#ffffff" : modelData.color
+                                                    font.pixelSize: 12
+                                                    font.bold: true
+                                                }
+                                            }
+                                            Text {
+                                                x: 52
+                                                width: parent.width - 62
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: (typeof modelData.name === "string" ? qsTr(modelData.name) : modelData.name)
+                                                color: modelData.on ? "#ffffff" : (bridge.dark ? "#f2f4f8" : "#1d1d1f")
+                                                font.pixelSize: 12
+                                                font.bold: true
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                        Text {
+                                            width: centerBody.finderTypeWidth
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: modelData.type || ""
+                                            color: modelData.on ? "#ffffff" : (bridge.dark ? "#b8bec8" : "#4d5662")
+                                            font.pixelSize: 10
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            width: centerBody.finderSizeWidth
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            horizontalAlignment: Text.AlignRight
+                                            text: (typeof modelData.size === "string" ? qsTr(modelData.size) : modelData.size)
+                                            color: modelData.on ? "#ffffff" : "#98989d"
+                                            font.pixelSize: 11
+                                        }
+                                        Text {
+                                            width: centerBody.finderModifiedWidth
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            leftPadding: 12
+                                            text: modelData.modified || qsTr("\u2014")
+                                            color: modelData.on ? "#ffffff" : "#98989d"
+                                            font.pixelSize: 10
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                    TapHandler {
+                                        onTapped: bridge.pickFinder(modelData.row)
+                                        onDoubleTapped: if (modelData.kind === "asset" || modelData.kind === "dir") bridge.openFinder(modelData.row)
+                                    }
+                                }
+                            }
+                            Text {
+                                anchors.centerIn: finderList
+                                visible: finderList.count === 0
+                                width: finderList.width - 24
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.WordWrap
+                                text: qsTr("Finder is empty. Drop a CDP on the left queue.")
+                                color: bridge.dark ? "#8b93a1" : "#5c6570"
+                                font.pixelSize: 13
+                            }
+                            RaiseButton {
+                                id: openFolderBtn
+                                anchors.left: parent.left
+                                anchors.bottom: parent.bottom
+                                width: 140
+                                height: 36
+                                label: qsTr("Open folder\u2026")
+                                accent: true
+                                onClicked: bridge.openFolder()
+                            }
+                        }
+                    }
+
+                    Item {
+                        visible: bridge.page === "config"
+                        width: parent.width
+                        height: parent.height - 8
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 12
+                            color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.08)
+                            border.width: 1
+                            border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.12 : 0.40)
+                        }
+                        TextEdit {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                            font.family: "Consolas"
+                            font.pixelSize: 13
+                            wrapMode: TextEdit.NoWrap
+                            selectByMouse: true
+                            text: bridge.configText
+                            onTextChanged: bridge.configText = text
+                        }
+                    }
+                    TextEdit {
+                        visible: bridge.page === "kuid"
+                        width: parent.width
+                        height: parent.height * 0.42
+                        color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                        font.family: "Consolas"
+                        font.pixelSize: 13
+                        wrapMode: TextEdit.NoWrap
+                        selectByMouse: true
+                        text: bridge.kuidIn
+                        onTextChanged: bridge.kuidIn = text
+                    }
+                    TextEdit {
+                        visible: bridge.page === "export"
+                        width: parent.width
+                        height: 120
+                        color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                        font.family: "Consolas"
+                        font.pixelSize: 13
+                        wrapMode: TextEdit.NoWrap
+                        selectByMouse: true
+                        text: bridge.exportIn
+                        onTextChanged: bridge.exportIn = text
+                    }
+                    Text {
+                        visible: bridge.page === "kuid"
+                        width: parent.width
+                        color: bridge.dark ? "#8b93a1" : "#5c6570"
+                        font.pixelSize: 12
+                        text: (typeof bridge.kuidOut === "string" ? qsTr(bridge.kuidOut) : bridge.kuidOut)
+                        wrapMode: Text.Wrap
+                    }
+                    ListView {
+                        id: exportList
+                        visible: bridge.page === "export"
+                        width: parent.width
+                        height: Math.max(40, parent.height - 140)
+                        clip: true
+                        spacing: 4
+                        model: {
+                            try { return JSON.parse(bridge.exportJson) }
+                            catch (e) { return [] }
+                        }
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: exportList.width
+                            height: 36
+                            radius: 8
+                            color: Qt.rgba(1, 1, 1, bridge.dark ? 0.05 : 0.45)
+                            Text {
+                                anchors.left: parent.left
+                                anchors.leftMargin: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width * 0.62
+                                text: (typeof modelData.kuid === "string" ? qsTr(modelData.kuid) : modelData.kuid)
+                                color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                anchors.right: parent.right
+                                anchors.rightMargin: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: (typeof modelData.status === "string" ? qsTr(modelData.status) : modelData.status)
+                                color: bridge.dark ? "#8b93a1" : "#5c6570"
+                                font.pixelSize: 11
+                            }
+                        }
+                    }
+                }
+
                 function sync() {
                     if (!visible || width < 8 || height < 8) {
                         bridge.placeCenter(0, 0, 0, 0)
@@ -207,7 +886,6 @@ Item {
                 onYChanged: sync()
                 onWidthChanged: sync()
                 onHeightChanged: sync()
-                Component.onCompleted: sync()
             }
         }
 
@@ -339,7 +1017,7 @@ Item {
                 }
                 var at = chip.mapToItem(cluster, 0, 0)
                 var rowAt = row.mapToItem(cluster, 0, 0)
-                // Row still at the pre-layout origin — accepting that parks the pill off the label.
+                // Row still at the pre-layout origin; accepting that parks the pill off the label.
                 if (Math.abs(at.y - rowAt.y) > 1 || rowAt.y < 1) {
                     if (pillTries < 15)
                         pillRetry.restart()
@@ -415,7 +1093,7 @@ Item {
                 Text {
                     z: 2
                     anchors.centerIn: parent
-                    text: bridge.homeLabel
+                    text: (typeof bridge.homeLabel === "string" ? qsTr(bridge.homeLabel) : bridge.homeLabel)
                     font.family: mi.name.length > 0 ? mi.name : bridge.iconFont
                     font.pixelSize: bridge.navTall ? 24 : 22
                     color: homeH.hovered ? "#ff5a1f" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
@@ -499,7 +1177,7 @@ Item {
                     width: parent.width - 4
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
-                    text: label
+                    text: (typeof label === "string" ? qsTr(label) : label)
                     color: hot ? "#ffffff" : (bridge.dark ? "#f4f6fa" : "#1c1c1e")
                     font.pixelSize: 12
                     font.bold: hot
@@ -531,7 +1209,7 @@ Item {
                     delegate: NavChip {
                         required property var modelData
                         pageKey: modelData.key
-                        label: modelData.label
+                        label: (typeof modelData.label === "string" ? qsTr(modelData.label) : modelData.label)
                         chipW: modelData.w
                     }
                 }
@@ -552,7 +1230,7 @@ Item {
                     delegate: NavChip {
                         required property var modelData
                         pageKey: modelData.key
-                        label: modelData.label
+                        label: (typeof modelData.label === "string" ? qsTr(modelData.label) : modelData.label)
                         chipW: modelData.w
                     }
                 }

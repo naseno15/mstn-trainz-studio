@@ -43,7 +43,7 @@ Item {
 
                 Text {
                     width: parent.width
-                    text: bridge.viewTitle
+                    text: (typeof bridge.viewTitle === "string" ? qsTr(bridge.viewTitle) : bridge.viewTitle)
                     color: viewer.ink
                     font.pixelSize: 15
                     font.bold: true
@@ -125,7 +125,7 @@ Item {
                                     opacity: modelData.on ? 1 : 0.35
                                     Text {
                                         anchors.centerIn: parent
-                                        text: modelData.label
+                                        text: (typeof modelData.label === "string" ? qsTr(modelData.label) : modelData.label)
                                         color: bridge.viewPane === modelData.key ? "#ffffff" : viewer.ink
                                         font.pixelSize: 12
                                         font.bold: bridge.viewPane === modelData.key
@@ -141,14 +141,14 @@ Item {
                     RaiseButton {
                         width: 36
                         height: 36
-                        label: "A−"
+                        label: qsTr("A−")
                         tip: viewer.tip("smaller")
                         onClicked: bridge.viewerFont(-1)
                     }
                     Text {
                         width: 44
                         height: 36
-                        text: bridge.viewFont
+                        text: (typeof bridge.viewFont === "string" ? qsTr(bridge.viewFont) : bridge.viewFont)
                         color: viewer.mute
                         font.pixelSize: 11
                         horizontalAlignment: Text.AlignHCenter
@@ -157,7 +157,7 @@ Item {
                     RaiseButton {
                         width: 36
                         height: 36
-                        label: "A+"
+                        label: qsTr("A+")
                         tip: viewer.tip("larger")
                         onClicked: bridge.viewerFont(1)
                     }
@@ -189,7 +189,9 @@ Item {
                 anchors.topMargin: 8
                 anchors.left: parent.left
                 anchors.right: parent.right
-                text: bridge.viewHint
+                visible: text.length > 0
+                height: visible ? implicitHeight : 0
+                text: bridge.previewOn ? "" : bridge.viewHint
                 color: viewer.mute
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
@@ -219,7 +221,7 @@ Item {
                     RaiseButton {
                         visible: bridge.viewEngine
                         height: 36
-                        label: bridge.viewEngineLabel
+                        label: (typeof bridge.viewEngineLabel === "string" ? qsTr(bridge.viewEngineLabel) : bridge.viewEngineLabel)
                         onClicked: bridge.viewerEngine()
                     }
                     RaiseButton {

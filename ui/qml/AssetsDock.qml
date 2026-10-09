@@ -37,7 +37,7 @@ Item {
 
                 Text {
                     width: parent.width
-                    text: bridge.formTitle
+                    text: (typeof bridge.formTitle === "string" ? qsTr(bridge.formTitle) : bridge.formTitle)
                     color: dock.ink
                     font.pixelSize: 15
                     font.bold: true
@@ -114,7 +114,7 @@ Item {
                                 height: tabStrip.height
                                 Text {
                                     anchors.centerIn: parent
-                                    text: modelData
+                                    text: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                                     color: index === bridge.formTab ? "#ffffff" : dock.ink
                                     font.pixelSize: 12
                                     font.bold: index === bridge.formTab
@@ -200,7 +200,7 @@ Item {
                                     height: 36
                                     glyph: modelData.glyph || ""
                                     fontName: bridge.iconFont
-                                    tip: "Choose file"
+                                    tip: qsTr("Choose file")
                                     enabled: modelData.enabled !== false
                                     opacity: enabled ? 1 : 0.4
                                     onClicked: bridge.runDock(modelData.pick)
@@ -280,7 +280,7 @@ Item {
                                                 }
                                                 Text {
                                                     anchors.centerIn: parent
-                                                    text: modelData
+                                                    text: (typeof modelData === "string" ? qsTr(modelData) : modelData)
                                                     color: modelData === pills.current ? "#ffffff" : dock.ink
                                                     font.pixelSize: 11
                                                     font.bold: modelData === pills.current
@@ -310,7 +310,7 @@ Item {
                                     Text {
                                         anchors.centerIn: parent
                                         visible: modelData.on
-                                        text: "✓"
+                                        text: qsTr("✓")
                                         color: "#ffffff"
                                         font.pixelSize: 12
                                     }
