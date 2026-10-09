@@ -645,6 +645,7 @@ class HomePage(QFrame):
         on_engine: Callable[[], None],
         on_assets: Callable[[], None],
         on_texmesh: Callable[[], None],
+        on_trainzutil: Callable[[], None],
         on_drop: Callable[[list[Path]], None],
         theme_mode: str = "dark",
         parent: QWidget | None = None,
@@ -725,6 +726,12 @@ class HomePage(QFrame):
                 "LODs · maps · bake",
                 "texture",
                 on_texmesh,
+            ),
+            (
+                "TrainzUtil",
+                "Install · CDP · zip",
+                "upload_file",
+                on_trainzutil,
             ),
         )
         self._studio_cards: list[HomeStudioCard] = []
@@ -854,6 +861,7 @@ def build_home_page(
     on_engine: Callable[[], None],
     on_assets: Callable[[], None],
     on_texmesh: Callable[[], None],
+    on_trainzutil: Callable[[], None],
     on_drop: Callable[[list[Path]], None],
     theme_mode: str = "dark",
 ) -> HomePage:
@@ -864,6 +872,7 @@ def build_home_page(
         on_engine=on_engine,
         on_assets=on_assets,
         on_texmesh=on_texmesh,
+        on_trainzutil=on_trainzutil,
         on_drop=on_drop,
         theme_mode=theme_mode,
     )
