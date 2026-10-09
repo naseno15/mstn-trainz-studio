@@ -1,9 +1,11 @@
 import QtQuick
 
-// Assets Tools stage. Center pages and the right dock stay widgets in the wells.
+// Assets Tools stage. Center chrome is QML. Tables, editors, and canvases stay widgets in the well.
 // Packages queue stays a widget in the sidebar well. This page paints depth + nav.
 Item {
     id: root
+
+    Chrome { id: chrome }
 
     Rectangle {
         anchors.fill: parent
@@ -20,7 +22,7 @@ Item {
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         anchors.topMargin: 8
-        anchors.bottomMargin: 8
+        anchors.bottomMargin: chrome.stageMargin
 
         AssetsSide {
             id: side
@@ -32,7 +34,7 @@ Item {
                 var o = mapToItem(root, 0, 0)
                 if (o.x + width <= nav.x + 8 || o.x >= nav.x + nav.width - 8)
                     return 0
-                return nav.height
+                return chrome.contentInset(nav.height)
             }
         }
 
@@ -152,7 +154,7 @@ Item {
                 var o = mapToItem(root, 0, 0)
                 if (o.x + width <= nav.x + 8 || o.x >= nav.x + nav.width - 8)
                     return height
-                return Math.max(40, height - nav.height)
+                return Math.max(40, height - chrome.contentInset(nav.height))
             }
 
             function sync() {
@@ -177,19 +179,36 @@ Item {
             anchors.rightMargin: dockSlot.width > 8 ? 12 : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            anchors.bottomMargin: nav.height + 8
+            anchors.bottomMargin: chrome.contentInset(nav.height)
 
-            function sync() {
-                if (width > 2 && height > 2) {
+            AssetsCenter {
+                id: centerChrome
+                anchors.fill: parent
+            }
+
+            Item {
+                id: centerBody
+                visible: bridge.centerKind === "page"
+                anchors.fill: parent
+                anchors.leftMargin: centerChrome.padSide
+                anchors.rightMargin: centerChrome.padSide
+                anchors.topMargin: centerChrome.padTop
+                anchors.bottomMargin: centerChrome.padBottom
+
+                function sync() {
+                    if (!visible || width < 8 || height < 8) {
+                        bridge.placeCenter(0, 0, 0, 0)
+                        return
+                    }
                     var p = mapToItem(root, 0, 0)
                     bridge.placeCenter(p.x, p.y, width, height)
                 }
+                onXChanged: sync()
+                onYChanged: sync()
+                onWidthChanged: sync()
+                onHeightChanged: sync()
+                Component.onCompleted: sync()
             }
-            onXChanged: sync()
-            onYChanged: sync()
-            onWidthChanged: sync()
-            onHeightChanged: sync()
-            Component.onCompleted: sync()
         }
 
         MouseArea {
@@ -249,7 +268,7 @@ Item {
         readonly property real laneLeft: stage.x + side.width + 8
         readonly property real laneRight: dockSlot.width > 8 ? (stage.x + dockSlot.x - 8) : (stage.x + stage.width - 8)
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 14
+        anchors.bottomMargin: chrome.barMargin
         width: Math.min(root.width - 32, Math.max(420, cluster.width + 40))
         x: {
             var lane = laneRight - laneLeft
@@ -573,7 +592,8 @@ Item {
             dockSlot.sync()
             previewSlot.sync()
             formToolSlot.sync()
-            centerSlot.sync()
+            centerBody.sync()
+            centerChrome.syncWells()
         }
     }
 }
