@@ -1,4 +1,4 @@
-"""QML chrome for Assets Tools. Pages, queue, and the right dock stay widgets."""
+"""QML chrome for Assets Tools. Tables, editors, canvases, and the queue stay widgets."""
 from __future__ import annotations
 
 import json
@@ -10,9 +10,80 @@ from ..icons import ensure_material_icons, glyph
 from .sidebar import _ACTIONS, _ACTION_ICONS, _PACKAGE_FOOTER, _PAGE_TITLES
 
 _ASSETS_LEFT = (("packages", "Packages", 108), ("config", "Config", 100))
-_ASSETS_RIGHT = (("kuid", "KUID", 96),)
+_ASSETS_RIGHT = (("kuid", "KUID", 96), ("export", "Export", 96))
 _TEX_LEFT = (("meshops", "Mesh\nLods", 100), ("texture", "Texture\nParams", 116))
 _TEX_RIGHT = (("parameter", "Texture\nEditor", 116), ("denoise", "Texture\nDenoiser", 128))
+
+# Center plate copy. Widget titles with these object names are hidden while QML is up.
+_CENTER = {
+    "packages": (
+        "Packages",
+        "ซ้าย (sidebar): queue · กลาง: Finder (ดับเบิลคลิกเข้าโฟลเดอร์ · breadcrumb ย้อน · ค้นหา) · ขวา: preview",
+    ),
+    "config": (
+        "Config / chump",
+        "Edit config.chump as text (ChumpLib-style), save binary, or pack / export config.txt.",
+    ),
+    "texture": (
+        "Texture.txt",
+        "Drop PBR maps onto the table — groups albedo/normal/parameter. "
+        "Dims · channels · size · VE rules auto-scan (37/39/65…). "
+        "Double-click a row to select the whole set.",
+    ),
+    "meshops": (
+        "LM.txt LOD",
+        "Drop meshes onto the table → Save all writes one .lm.txt each. "
+        "Tick LOD to combine those rows into a shared LOD table instead. "
+        "FBX / trainzmesh material names are checked for .m.pbrmetal / .m.onetex.",
+    ),
+    "parameter": (
+        "Parameter map",
+        "R=Emissive · G=Roughness · B=AO · A=Metallic — edits stay in memory until Save.",
+    ),
+    "denoise": (
+        "Bake Denoise",
+        "AO / lightmap grain · {eng}. Denoise previews in memory — Save overwrites (+ .bak once).",
+    ),
+    "kuid": (
+        "KUID",
+        "Paste CM text → normalize. Hex + hash-XX from public KUID format.",
+    ),
+    "export": (
+        "Export",
+        "Paste KUIDs. Commas are optional. "
+        "Export each writes one .cdp per checked asset. "
+        "Export one CDP puts every checked asset in a single file. "
+        "TrainzUtil createCDP — the Launcher must be open.",
+    ),
+}
+
+# Body under the center title. "page" keeps the widget stack. The other two
+# paint their chrome in QML and only park the table / editors / canvas.
+_CENTER_KIND = {
+    "texture": "split",
+    "meshops": "split",
+    "parameter": "canvas",
+    "denoise": "canvas",
+}
+_SPLIT_LABELS = {
+    "texture": ("Images · PBR sets", "texture.txt preview"),
+    "meshops": ("Mesh files", "lm.txt preview · material check"),
+}
+
+_DOCK_GLYPH = {
+    "paramOpen": "file_open",
+    "paramSave": "save",
+    "paramUndo": "undo",
+    "paramRedo": "redo",
+    "paramRevert": "history",
+    "paramOverlay": "add_photo_alternate",
+    "denoiseOpen": "file_open",
+    "denoiseRun": "play_arrow",
+    "denoiseSave": "save",
+    "denoiseRevert": "history",
+    "showOrig": "history",
+    "showWork": "fact_check",
+}
 
 
 class AssetsBridge(QObject):
@@ -68,12 +139,22 @@ class AssetsBridge(QObject):
         self._glyph_expand = glyph("fullscreen")
         self._glyph_save = glyph("save")
         self._glyph_delete = glyph("delete")
+        self._glyph_fast = glyph("view_in_ar")
+        self._glyph_mesh = glyph("open_in_new")
+        self._glyph_repl = glyph("swap_horiz")
+        self._glyph_fbx = glyph("delete_sweep")
         self._form_on = False
         self._form_title = ""
         self._form_tabs = "[]"
         self._form_tab = 0
         self._form_tool = False
         self._form_blocks = "[]"
+        self._center_title = "Packages"
+        self._center_tip = ""
+        self._center_kind = "page"
+        self._center_list = ""
+        self._center_prev = ""
+        self._glyph_refresh = glyph("refresh")
 
     def _bump(self) -> None:
         self.changed.emit()
@@ -93,7 +174,7 @@ class AssetsBridge(QObject):
             left, right = _TEX_LEFT, _TEX_RIGHT
         else:
             page = host._page
-            self._page = page if page in ("packages", "config", "kuid") else "packages"
+            self._page = page if page in ("packages", "config", "kuid", "export") else "packages"
             left, right = _ASSETS_LEFT, _ASSETS_RIGHT
         self._left = json.dumps(
             [{"key": k, "label": t(lab), "w": w} for k, lab, w in left]
@@ -103,8 +184,29 @@ class AssetsBridge(QObject):
         )
         self._footer_cap = t("CDP / TZarc")
         self._foot_note = t("Native writers — no external Software.exe launch.")
+        self._sync_center_copy()
         self.sync_side()
         self.sync_viewer()
+
+    def _sync_center_copy(self) -> None:
+        from ..i18n import t
+        from ...io.bake_denoise import oidn_available
+
+        title, tip = _CENTER.get(self._page, _CENTER["packages"])
+        self._center_title = t(title)
+        self._center_kind = _CENTER_KIND.get(self._page, "page")
+        list_lab, prev_lab = _SPLIT_LABELS.get(self._page, ("", ""))
+        self._center_list = t(list_lab) if list_lab else ""
+        self._center_prev = t(prev_lab) if prev_lab else ""
+        if self._page == "denoise":
+            eng = "OIDN ready" if oidn_available() else "OIDN missing · OpenCV fallback"
+            text = t(tip)
+            try:
+                self._center_tip = text.format(eng=t(eng))
+            except (KeyError, ValueError, IndexError):
+                self._center_tip = text
+        else:
+            self._center_tip = t(tip)
 
     def sync_side(self) -> None:
         from ..i18n import t
@@ -118,7 +220,8 @@ class AssetsBridge(QObject):
         flags = getattr(side, "_action_enabled", {})
         rows = []
         for label, action, accent in _ACTIONS.get(page, []):
-            icon_name = _ACTION_ICONS.get(action, "")
+            spec = _ACTION_ICONS.get(action)
+            icon_name, face = spec if spec else ("", "")
             mark = glyph(icon_name) if icon_name else ""
             row = {
                 "id": action,
@@ -129,6 +232,8 @@ class AssetsBridge(QObject):
             if mark:
                 row["glyph"] = mark
                 row["tip"] = t(label)
+                if face:
+                    row["face"] = face
             rows.append(row)
         self._actions = json.dumps(rows)
         foot = []
@@ -237,6 +342,10 @@ class AssetsBridge(QObject):
     glyphExpand = Property(str, lambda self: self._glyph_expand, notify=changed)
     glyphSave = Property(str, lambda self: self._glyph_save, notify=changed)
     glyphDelete = Property(str, lambda self: self._glyph_delete, notify=changed)
+    glyphFast = Property(str, lambda self: self._glyph_fast, notify=changed)
+    glyphMesh = Property(str, lambda self: self._glyph_mesh, notify=changed)
+    glyphRepl = Property(str, lambda self: self._glyph_repl, notify=changed)
+    glyphFbx = Property(str, lambda self: self._glyph_fbx, notify=changed)
     viewTips = Property(str, lambda self: self._view_tips, notify=changed)
     formOn = Property(bool, lambda self: self._form_on, notify=changed)
     formTitle = Property(str, lambda self: self._form_title, notify=changed)
@@ -244,6 +353,12 @@ class AssetsBridge(QObject):
     formTab = Property(int, lambda self: self._form_tab, notify=changed)
     formTool = Property(bool, lambda self: self._form_tool, notify=changed)
     formBlocks = Property(str, lambda self: self._form_blocks, notify=changed)
+    centerTitle = Property(str, lambda self: self._center_title, notify=changed)
+    centerTip = Property(str, lambda self: self._center_tip, notify=changed)
+    centerKind = Property(str, lambda self: self._center_kind, notify=changed)
+    centerList = Property(str, lambda self: self._center_list, notify=changed)
+    centerPrev = Property(str, lambda self: self._center_prev, notify=changed)
+    glyphRefresh = Property(str, lambda self: self._glyph_refresh, notify=changed)
 
     @Slot(str)
     def setPage(self, page: str) -> None:
@@ -305,7 +420,69 @@ class AssetsBridge(QObject):
 
     @Slot(float, float, float, float)
     def placeCenter(self, x: float, y: float, w: float, h: float) -> None:
+        if self._center_kind != "page" or w < 8 or h < 8:
+            self._host._mid_host.hide()
+            return
         self._place(self._host._mid_host, x, y, w, h, hide_small=False)
+
+    def _well_widget(self, key: str) -> QWidget | None:
+        host = self._host
+        page = self._page
+        if key == "table":
+            if page == "texture":
+                return host.tex_list
+            if page == "meshops":
+                return host.lm_table
+        elif key == "left":
+            if page == "texture":
+                return host.tex_preview
+            if page == "meshops":
+                return host.lm_preview
+        elif key == "right":
+            if page == "texture":
+                return host.tex_log
+            if page == "meshops":
+                return host.lm_log
+        elif key == "canvas":
+            if page == "parameter":
+                return host.param_page._canvas
+            if page == "denoise":
+                return host.denoise_page._preview
+        return None
+
+    def _well_group(self, key: str) -> tuple[QWidget, ...]:
+        host = self._host
+        if key == "table":
+            return (host.tex_list, host.lm_table)
+        if key == "left":
+            return (host.tex_preview, host.lm_preview)
+        if key == "right":
+            return (host.tex_log, host.lm_log)
+        if key == "canvas":
+            return (host.param_page._canvas, host.denoise_page._preview)
+        return ()
+
+    @Slot(str, float, float, float, float)
+    def placeWell(self, key: str, x: float, y: float, w: float, h: float) -> None:
+        if not getattr(self._host, "_texmesh_lifted", False):
+            return
+        want = "split" if key in ("table", "left", "right") else "canvas"
+        show = self._well_widget(key) if self._center_kind == want else None
+        for widget in self._well_group(key):
+            if widget is not show:
+                widget.hide()
+        if show is None or w < 8 or h < 8:
+            if show is not None:
+                show.hide()
+            return
+        self._place(show, x, y, w, h, hide_small=True)
+
+    @Slot()
+    def refreshCenter(self) -> None:
+        if self._page == "texture":
+            self._host._tex_refresh_preview()
+        elif self._page == "meshops":
+            self._host._lm_refresh_preview()
 
     def sync_viewer(self) -> None:
         page = getattr(self._host, "packages_page", None)
@@ -327,11 +504,7 @@ class AssetsBridge(QObject):
         self._view_engine = page.btn_engine_tuner.isVisible()
         self._view_fast = page.btn_fast_preview.isVisible()
         self._view_mesh = page.btn_mesh_studio.isVisible()
-        self._view_engine_label = page.btn_engine_tuner.text()
-        self._view_fast_label = page.btn_fast_preview.text()
-        self._view_mesh_label = page.btn_mesh_studio.text()
-        self._view_repl = page.btn_repl.text()
-        self._view_fbx = page.btn_del_all_fbx.text()
+        self._view_engine_label = "Open in Engine Tuner"
         self._glyph_expand = glyph("fullscreen_exit" if self._view_expanded else "fullscreen")
         from ..i18n import t
 
@@ -348,65 +521,69 @@ class AssetsBridge(QObject):
                 "saveText": t("Save text…"),
                 "delete": t("Delete"),
                 "saveCdp": t("Save CDP…"),
+                "fast": t("Fast preview — solid mesh. .im with no geometry shows a.* points"),
+                "mesh": t("Open in Mesh Studio with textures"),
+                "replace": t("Replace this file…"),
+                "fbx": t("Delete all .fbx in this CDP…"),
             }
         )
         self._bump()
 
-    def _page(self):
+    def _packages(self):
         return self._host.packages_page
 
     @Slot(int)
     def setViewerPane(self, index: int) -> None:
-        self._page()._on_pane_mode(1 if int(index) == 1 else 0)
+        self._packages()._on_pane_mode(1 if int(index) == 1 else 0)
         self.sync_viewer()
 
     @Slot(int)
     def viewerFont(self, delta: int) -> None:
-        self._page()._bump_font(int(delta))
+        self._packages()._bump_font(int(delta))
         self.sync_viewer()
 
     @Slot()
     def viewerBack(self) -> None:
-        self._page()._nested_back()
+        self._packages()._nested_back()
         self.sync_viewer()
 
     @Slot()
     def viewerExpand(self) -> None:
-        self._page()._toggle_viewer_expand()
+        self._packages()._toggle_viewer_expand()
         self.sync_viewer()
 
     @Slot()
     def viewerSave(self) -> None:
         if self._view_save:
-            self._page()._save_preview_text()
+            self._packages()._save_preview_text()
 
     @Slot()
     def viewerEngine(self) -> None:
-        self._page()._open_in_engine_tuner()
+        self._packages()._open_in_engine_tuner()
 
     @Slot()
     def viewerFast(self) -> None:
-        self._page()._start_fast_mesh_preview()
+        self._packages()._start_fast_mesh_preview()
 
     @Slot()
     def viewerMesh(self) -> None:
-        self._page()._open_in_mesh_studio()
+        self._packages()._open_in_mesh_studio()
 
     @Slot()
     def viewerReplace(self) -> None:
-        self._page()._replace_selected()
+        self._packages()._replace_selected()
 
     @Slot()
     def viewerDelete(self) -> None:
-        self._page()._delete_selected()
+        self._packages()._delete_selected()
 
     @Slot()
     def viewerSaveCdp(self) -> None:
-        self._page().save_active_cdp()
+        self._packages().save_active_cdp()
 
     @Slot()
     def viewerDeleteFbx(self) -> None:
-        self._page()._delete_all_fbx()
+        self._packages()._delete_all_fbx()
 
     @Slot(float, float, float, float)
     def placeDock(self, x: float, y: float, w: float, h: float) -> None:
@@ -473,6 +650,13 @@ class AssetsBridge(QObject):
         self._form_tabs = json.dumps(tabs)
         self._form_tab = tab
         self._form_tool = tool
+        for block in blocks:
+            if block.get("type") != "buttons":
+                continue
+            for item in block.get("items", []):
+                name = _DOCK_GLYPH.get(str(item.get("id", "")))
+                if name:
+                    item["glyph"] = glyph(name)
         self._form_blocks = json.dumps(blocks)
         self._bump()
 
@@ -506,14 +690,57 @@ class AssetsBridge(QObject):
 
     def _texture_param_blocks(self) -> list[dict]:
         host = self._host
+        alpha_on = bool(getattr(host, "_tex_alpha_on", False))
         return [
-            self._field("primary", "Primary", host.tex_primary.text(), placeholder="body_albedo.tga"),
-            self._field("alpha", "Alpha", host.tex_alpha.text(), placeholder="optional alpha map…"),
+            self._file(
+                "primary",
+                "Primary",
+                host.tex_primary.text(),
+                pick="primaryPick",
+                placeholder="body_albedo.tga",
+            ),
+            self._file(
+                "alpha",
+                "Alpha",
+                host.tex_alpha.text(),
+                pick="alphaPick",
+                placeholder="optional alpha map…",
+                check="alphaOn",
+                on=alpha_on,
+                enabled=alpha_on,
+            ),
             self._pills("tile", "Tile", host.tex_tile),
             self._pills("usage", "UsageHint", host.tex_usage),
             self._pills("normal", "NormalMapHint", host.tex_normal),
             self._pills("compress", "Compression", host.tex_compress),
         ]
+
+    def _file(
+        self,
+        fid: str,
+        label: str,
+        text: str,
+        *,
+        pick: str,
+        placeholder: str = "",
+        check: str = "",
+        on: bool = False,
+        enabled: bool = True,
+    ) -> dict:
+        row = {
+            "type": "file",
+            "id": fid,
+            "label": label,
+            "value": text,
+            "placeholder": placeholder,
+            "pick": pick,
+            "glyph": glyph("folder_open"),
+            "enabled": enabled,
+        }
+        if check:
+            row["check"] = check
+            row["on"] = on
+        return row
 
     def _texture_prep_blocks(self) -> list[dict]:
         host = self._host
@@ -675,6 +902,12 @@ class AssetsBridge(QObject):
                 host.tex_primary.setText(raw)
             elif key == "alpha":
                 host.tex_alpha.setText(raw)
+                if raw.strip():
+                    host._tex_alpha_on = True
+            elif key == "alphaOn":
+                host._tex_alpha_on = raw == "1"
+                if not host._tex_alpha_on:
+                    host.tex_alpha.setText("")
             elif key == "tile":
                 host.tex_tile.set_value(raw)
                 host._tex_refresh_preview()
@@ -785,6 +1018,8 @@ class AssetsBridge(QObject):
             "paramRevert": lambda: page and page.revert(),
             "paramSave": lambda: page and page.save(),
             "paramOverlay": lambda: page and page._do_overlay(),
+            "primaryPick": lambda: host._tex_pick_map("primary"),
+            "alphaPick": lambda: host._tex_pick_map("alpha"),
             "denoiseOpen": lambda: den and den.open_file(),
             "denoiseRun": lambda: den and den.run_denoise(),
             "showOrig": lambda: den and den._show_orig(),
