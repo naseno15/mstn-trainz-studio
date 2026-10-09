@@ -51,19 +51,54 @@ Item {
             spacing: 8
 
             Row {
+                id: lights
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
-                Rectangle {
-                    width: 13; height: 13; radius: 6.5; color: "#ff5f57"
-                    TapHandler { onTapped: bridge.requestClose() }
+                HoverHandler { id: cluster }
+
+                component Light: Rectangle {
+                    id: disc
+                    property string glyph: ""
+                    property string tipText: ""
+                    signal pressed()
+                    width: 13
+                    height: 13
+                    radius: 6.5
+                    Text {
+                        anchors.centerIn: parent
+                        text: disc.glyph
+                        font.pixelSize: 10
+                        font.bold: true
+                        color: "#4a3018"
+                        opacity: cluster.hovered ? 1 : 0
+                        Behavior on opacity { NumberAnimation { duration: 90 } }
+                    }
+                    HoverHandler {
+                        onHoveredChanged: {
+                            if (hovered) glassTip.showFor(disc, disc.tipText)
+                            else if (glassTip.anchorItem === disc) glassTip.hide()
+                        }
+                    }
+                    TapHandler { onTapped: disc.pressed() }
                 }
-                Rectangle {
-                    width: 13; height: 13; radius: 6.5; color: "#febc2e"
-                    TapHandler { onTapped: bridge.requestMin() }
+
+                Light {
+                    color: "#ff5f57"
+                    glyph: "×"
+                    tipText: "Close"
+                    onPressed: bridge.requestClose()
                 }
-                Rectangle {
-                    width: 13; height: 13; radius: 6.5; color: "#28c840"
-                    TapHandler { onTapped: bridge.requestZoom() }
+                Light {
+                    color: "#febc2e"
+                    glyph: "−"
+                    tipText: "Minimize"
+                    onPressed: bridge.requestMin()
+                }
+                Light {
+                    color: "#28c840"
+                    glyph: bridge.zoomed ? "▢" : "+"
+                    tipText: bridge.zoomed ? "Restore" : "Maximize"
+                    onPressed: bridge.requestZoom()
                 }
             }
 
@@ -89,7 +124,13 @@ Item {
                                : (bridge.dark ? "#f2f4f8" : "#1d1d1f")
                         font.pixelSize: 13
                     }
-                    HoverHandler { id: menuHover }
+                    HoverHandler {
+                        id: menuHover
+                        onHoveredChanged: {
+                            if (hovered && bridge.openKey.length > 0 && bridge.openKey !== menuBtn.key)
+                                bridge.toggleMenu(menuBtn.key, menuBtn.mapToGlobal(0, menuBtn.height).x, menuBtn.mapToGlobal(0, menuBtn.height).y)
+                        }
+                    }
                     TapHandler {
                         onTapped: bridge.toggleMenu(menuBtn.key, menuBtn.mapToGlobal(0, menuBtn.height).x, menuBtn.mapToGlobal(0, menuBtn.height).y)
                     }
@@ -109,9 +150,25 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.SizeAllCursor
-                    onPressed: bridge.startMove()
+                    property real pressX: 0
+                    property real pressY: 0
+                    onPressed: function (mouse) {
+                        pressX = mouse.x
+                        pressY = mouse.y
+                    }
+                    onDoubleClicked: bridge.requestZoom()
+                    onPositionChanged: function (mouse) {
+                        if (!pressed) return
+                        if (Math.abs(mouse.x - pressX) + Math.abs(mouse.y - pressY) < 4) return
+                        bridge.startMove()
+                    }
                 }
             }
         }
+    }
+
+    GlassTip {
+        id: glassTip
+        dark: bridge.dark
     }
 }
