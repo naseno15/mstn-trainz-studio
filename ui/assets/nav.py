@@ -238,9 +238,9 @@ class AssetsPageNav(_ScrubPillNav):
     # texmesh order: Mesh Lods · Texture Params | Home | Texture Editor · Texture Denoiser
     SUITE_PAGES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...]]] = {
         "assets": (
-            ("packages", "config", "kuid"),
-            ("Packages", "Config", "KUID"),
-            (92, 92, 92),
+            ("packages", "config", "kuid", "export"),
+            ("Packages", "Config", "KUID", "Export"),
+            (92, 92, 92, 92),
         ),
         "texmesh": (
             ("meshops", "texture", "parameter", "denoise"),

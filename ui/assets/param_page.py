@@ -233,13 +233,13 @@ class ParameterPage(QWidget):
         lay.setSpacing(8)
 
         title = QLabel("Parameter map")
-        title.setObjectName("welcomeTitle")
+        title.setObjectName("pageHead")
         title.setFont(app_font(16, QFont.Weight.Bold))
         lay.addWidget(title)
         tip = QLabel(
             "R=Emissive · G=Roughness · B=AO · A=Metallic — edits stay in memory until Save."
         )
-        tip.setObjectName("mutedTip")
+        tip.setObjectName("pageBlurb")
         tip.setWordWrap(True)
         lay.addWidget(tip)
 

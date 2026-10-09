@@ -122,7 +122,7 @@ class DenoisePage(QWidget):
         lay.setSpacing(8)
 
         title = QLabel("Bake Denoise")
-        title.setObjectName("welcomeTitle")
+        title.setObjectName("pageHead")
         title.setFont(app_font(16, QFont.Weight.Bold))
         lay.addWidget(title)
 
@@ -130,7 +130,7 @@ class DenoisePage(QWidget):
         tip = QLabel(
             f"AO / lightmap grain · {eng}. Denoise previews in memory — Save overwrites (+ .bak once)."
         )
-        tip.setObjectName("mutedTip")
+        tip.setObjectName("pageBlurb")
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
