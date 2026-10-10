@@ -190,6 +190,7 @@ private:
     int tab_ = 0;
     QString page_ = QStringLiteral("preview");
     QString path_;
+    QStringList scene_paths_;  // every file currently in the scene (drops append to this)
     QByteArray file_bytes_;
     bool dirty_ = false;
     QString tip_;

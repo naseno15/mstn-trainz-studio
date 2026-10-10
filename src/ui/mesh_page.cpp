@@ -402,6 +402,7 @@ void MeshBridge::load_file(const QString& path) {
     load_steps_ = 0;
     load_name_ = QFileInfo(path).fileName();
     scene_ = false;
+    scene_paths_ = {path};
     auto stop = [this] {
         loading_ = false;
         load_open_ = false;
@@ -558,6 +559,7 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
     if (loading_ || paths.isEmpty()) return;
     loading_ = true;
     scene_ = true;
+    scene_paths_ = paths;
     load_steps_ = 0;
     load_name_ = QStringLiteral("asset preview");
     rows_.clear();
@@ -883,6 +885,7 @@ void MeshBridge::publish() {
         {QStringLiteral("materials"), materials},
         {QStringLiteral("mats"), mats},
         {QStringLiteral("file"), loaded ? QJsonObject{{QStringLiteral("name"), file_label}, {QStringLiteral("show"), file_show_}, {QStringLiteral("atts"), file_atts_}} : QJsonValue()},
+        {QStringLiteral("files"), [&] { QJsonArray a; if (scene_) for (const QString& p : scene_paths_) a.append(QFileInfo(p).fileName()); return a; }()},
         {QStringLiteral("infoOpen"), info_open_},
         {QStringLiteral("face"), face_},
         {QStringLiteral("cap"), QStringLiteral("a.* → edit on right")},
@@ -992,10 +995,35 @@ void MeshBridge::openFixture() {
     emit changed();
 }
 void MeshBridge::dropUrls(const QVariantList& urls) {
-    if (loading_ || urls.isEmpty()) return;
-    const QUrl url(urls.front().toString());
-    const QString path = url.isLocalFile() ? url.toLocalFile() : urls.front().toString();
-    load_file(path);
+    if (urls.isEmpty()) return;
+    if (loading_) {
+        post_status(QStringLiteral("Still loading — drop again when it finishes"));
+        return;
+    }
+    // Drops append to the scene. ponytail: 2+ files load through the read-only scene preview
+    // (no per-mesh editing, whole scene reloads each drop); upgrade = incremental part append.
+    QStringList ok;
+    int skipped = 0;
+    for (const QVariant& value : urls) {
+        const QUrl url(value.toString());
+        const QString path = url.isLocalFile() ? url.toLocalFile() : value.toString();
+        if (path.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) ok << path;
+        else ++skipped;
+    }
+    if (ok.isEmpty()) {
+        post_status(QStringLiteral("Unsupported file — Mesh Studio opens .trainzmesh and .im"));
+        return;
+    }
+    QStringList all = scene_paths_;
+    for (const QString& p : ok) if (!all.contains(p)) all << p;
+    if (skipped > 0) post_status(QStringLiteral("%1 unsupported file(s) skipped").arg(skipped));
+    if (all.size() == 1) {
+        load_file(all.first());
+        return;
+    }
+    QStringList labels;
+    for (const QString& p : all) labels << QFileInfo(p).fileName();
+    load_scene(all, labels, {});
 }
 void MeshBridge::noteChrome(const QVariant& rects) {
     const QVariantList packed = rects.toList();

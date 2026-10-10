@@ -200,6 +200,19 @@ Item {
                                         font.pixelSize: 11
                                     }
                                 }
+                                Repeater {
+                                    model: side.bag.files || []
+                                    Text {
+                                        width: parent.width
+                                        height: 20
+                                        verticalAlignment: Text.AlignVCenter
+                                        leftPadding: 8
+                                        text: modelData
+                                        color: side.ink
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                    }
+                                }
                         }
                         Row {
                             width: parent.width
