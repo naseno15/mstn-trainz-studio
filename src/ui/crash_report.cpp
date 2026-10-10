@@ -11,6 +11,9 @@
 #include <QFileInfo>
 #include <QMouseEvent>
 #include <QMutex>
+#include <QPointer>
+#include <QScreen>
+#include <QTimer>
 #include <QWindow>
 #include "ui/i18n.h"
 #include <QQmlContext>
@@ -142,9 +145,16 @@ void CrashBridge::copyError(const QString& selected) {
 }
 
 void CrashBridge::dismiss() {
-    dialog_->hide();  // translucent QQuickWidget windows can linger on Windows until hidden explicitly
-    dialog_->accept();
-    if (quit_on_ok_) QCoreApplication::quit();
+    // Close after the click handler returns; the QML tap that called us is still on the stack.
+    QPointer<QDialog> dialog = dialog_;
+    const bool quit = quit_on_ok_;
+    QTimer::singleShot(0, qApp, [dialog, quit] {
+        if (dialog) {
+            dialog->hide();  // translucent QQuickWidget windows can linger on Windows until hidden explicitly
+            dialog->accept();
+        }
+        if (quit) QCoreApplication::quit();
+    });
 }
 
 namespace {
@@ -182,9 +192,14 @@ QMessageBox::StandardButton ui_box(QMessageBox::Icon icon, QWidget* parent, cons
 
 QDialog* make_crash_dialog(const QString& title, const QString& summary, const QString& detail, const QString& kind, bool quit_on_ok) {
     auto* dialog = new QDialog;
-    make_borderless(dialog);
+    // Full-screen translucent sheet: QML paints a soft scrim over the app and centres the card.
+    // No drag filter here, so a press can never start a system move and swallow the button release.
+    dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    dialog->setAttribute(Qt::WA_TranslucentBackground, true);
     dialog->setWindowTitle(QStringLiteral("Trainz Studio"));
-    dialog->resize(640, 560);
+    const QWidget* anchor = QApplication::activeWindow();
+    const QScreen* screen = anchor && anchor->screen() ? anchor->screen() : QGuiApplication::primaryScreen();
+    dialog->setGeometry(screen ? screen->availableGeometry() : QRect(0, 0, 640, 560));
     auto* view = new QQuickWidget(dialog);
     auto* bridge = new CrashBridge(dialog, title, summary, detail, kind, quit_on_ok);
     view->setResizeMode(QQuickWidget::SizeRootObjectToView);
@@ -200,6 +215,9 @@ QDialog* make_crash_dialog(const QString& title, const QString& summary, const Q
 
 void show_crash_dialog(const QString& title, const QString& summary, const QString& detail, const QString& kind, bool quit_on_ok) {
     QDialog* dialog = make_crash_dialog(title, summary, detail, kind, quit_on_ok);
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();  // first click must hit the button, not just activate the window
     dialog->exec();
     delete dialog;
 }

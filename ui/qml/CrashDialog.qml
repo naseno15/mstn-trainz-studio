@@ -4,6 +4,13 @@ import QtQuick
 Item {
     id: root
 
+    // Soft grey-black veil over the whole app so the card does not fight the page behind it.
+    Rectangle {
+        anchors.fill: parent
+        color: Qt.rgba(0.04, 0.05, 0.07, bridge.dark ? 0.45 : 0.28)
+        MouseArea { anchors.fill: parent }  // swallow clicks outside the card
+    }
+
     GlassPlate {
         id: card
         anchors.centerIn: parent
