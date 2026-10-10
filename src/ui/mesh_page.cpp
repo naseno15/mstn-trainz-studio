@@ -495,6 +495,17 @@ void MeshBridge::load_file(const QString& path) {
                 mats_.push_back(std::move(edit));
             }
         }
+        // No material blocks (lights, markers): list the parts' own material names (else albedo name, else part name), one per part.
+        if (mats_.empty()) {
+            for (const MeshRow& row : rows_) {
+                QString name = row.material;
+                if (name.isEmpty()) name = QFileInfo(row.albedo).completeBaseName();
+                if (name.isEmpty()) name = row.name;
+                MatEdit edit;
+                edit.block.name = name.toStdString();
+                mats_.push_back(std::move(edit));
+            }
+        }
     } catch (const std::exception& error) {
         tip_ = QString::fromUtf8(error.what());
         stop();
