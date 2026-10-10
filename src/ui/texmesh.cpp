@@ -37,7 +37,15 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
+#include <QEasingCurve>
+#include <QPointer>
+#include <QThread>
+#include <QVariantAnimation>
+#include <array>
 #include <cmath>
+#include <optional>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -154,13 +162,27 @@ void mutate_channels(QImage& image, bool r, bool g, bool b, bool a, const std::f
     }
 }
 
+// Runs fn(row) for every row on all cores; rows are independent in the filters below.
+void parallel_rows(int rows, const std::function<void(int)>& fn) {
+    std::atomic<int> next{0};
+    auto work = [&] {
+        for (int y = next.fetch_add(1); y < rows; y = next.fetch_add(1)) fn(y);
+    };
+    const int count = std::max(1u, std::min(std::thread::hardware_concurrency(), 16u));
+    std::vector<std::thread> pool;
+    for (int i = 1; i < count; ++i) pool.emplace_back(work);
+    work();
+    for (std::thread& t : pool) t.join();
+}
+
 QImage box_blur(const QImage& src, int radius) {
     if (radius < 1) return src;
     QImage image = src.convertToFormat(QImage::Format_RGBA8888);
     QImage out = image;
+    out.detach();  // before the threads touch scanLine()
     const int w = image.width();
     const int h = image.height();
-    for (int y = 0; y < h; ++y) {
+    parallel_rows(h, [&](int y) {
         uchar* dst = out.scanLine(y);
         for (int x = 0; x < w; ++x) {
             int sum[4] = {};
@@ -178,7 +200,7 @@ QImage box_blur(const QImage& src, int radius) {
             for (int c = 0; c < 4; ++c) dst[c] = static_cast<uchar>(sum[c] / std::max(1, count));
             dst += 4;
         }
-    }
+    });
     return out;
 }
 
@@ -308,12 +330,14 @@ QImage read_pfm(const QString& path, const QImage& alpha_source) {
     return out;
 }
 
-QImage bilateral_rgb(const QImage& src, int radius, int sigma) {
+QImage bilateral_rgb(const QImage& src, int radius, int sigma, const std::function<void(int)>& report = {}) {
     const QImage image = src.convertToFormat(QImage::Format_RGBA8888);
     QImage out = image;
+    out.detach();  // before the threads touch scanLine()
     radius = std::clamp(radius, 1, 6);
     sigma = std::max(8, sigma);
-    for (int y = 0; y < image.height(); ++y) {
+    parallel_rows(image.height(), [&](int y) {
+        if (report && y % 16 == 0) report(y * 100 / image.height());
         uchar* dst = out.scanLine(y);
         for (int x = 0; x < image.width(); ++x) {
             const uchar* center = image.constScanLine(y) + x * 4;
@@ -337,7 +361,7 @@ QImage bilateral_rgb(const QImage& src, int radius, int sigma) {
             dst[3] = center[3];
             dst += 4;
         }
-    }
+    });
     return out;
 }
 
@@ -411,6 +435,15 @@ public:
         add_row(hist, QStringLiteral("Redo"), [this] { redo(); });
         add_row(hist, QStringLiteral("Save map"), [this] { save(); });
         lay->addLayout(hist);
+    }
+
+    void clear() {
+        image_ = QImage();
+        path_.clear();
+        undo_.clear();
+        redo_.clear();
+        preview_->setPixmap(QPixmap());
+        preview_->setText(QStringLiteral("Select a map in the table."));
     }
 
     void open_path(const QString& path) {
@@ -557,6 +590,60 @@ private:
     QSlider* denoise_ = nullptr;
 };
 
+// Denoise preview: wheel zoom at the cursor, drag to pan, double-click to fit. Falls back to QLabel text when empty.
+class ZoomLabel : public QLabel {
+public:
+    using QLabel::QLabel;
+    void set_image(const QImage& image) {
+        const bool fresh = image_.size() != image.size();
+        image_ = image;
+        if (fresh) reset();
+        update();
+    }
+
+protected:
+    QRectF target() const {
+        const double fit = std::min(double(width()) / image_.width(), double(height()) / image_.height());
+        const QSizeF s = image_.size() * fit * zoom_;
+        return QRectF(QPointF((width() - s.width()) / 2 + pan_.x(), (height() - s.height()) / 2 + pan_.y()), s);
+    }
+    void reset() { zoom_ = 1; pan_ = {}; }
+    void paintEvent(QPaintEvent* event) override {
+        if (image_.isNull()) return QLabel::paintEvent(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, zoom_ <= 1.01);
+        painter.drawImage(target(), image_);
+    }
+    void wheelEvent(QWheelEvent* event) override {
+        if (image_.isNull()) return;
+        const QRectF before = target();
+        const QPointF at = event->position();
+        const double factor = event->angleDelta().y() > 0 ? 1.25 : 0.8;
+        const double next = std::clamp(zoom_ * factor, 1.0, 32.0);
+        const double k = next / zoom_;
+        zoom_ = next;
+        // keep the point under the cursor fixed
+        const QPointF centre = before.center();
+        const QPointF moved = at + (centre - at) * k;
+        pan_ += moved - centre;
+        if (zoom_ <= 1.0) pan_ = {};
+        update();
+    }
+    void mousePressEvent(QMouseEvent* event) override { from_ = event->position(); }
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (!(event->buttons() & Qt::LeftButton) || zoom_ <= 1.0) return;
+        pan_ += event->position() - from_;
+        from_ = event->position();
+        update();
+    }
+    void mouseDoubleClickEvent(QMouseEvent*) override { reset(); update(); }
+
+private:
+    QImage image_;
+    double zoom_ = 1;
+    QPointF pan_, from_;
+};
+
 class ParamCanvas : public QWidget {
 public:
     explicit ParamCanvas(Texmesh* owner) : QWidget(nullptr), owner_(owner) {
@@ -571,12 +658,13 @@ protected:
         painter.fillRect(rect(), QColor(ui_dark() ? QStringLiteral("#12161c") : QStringLiteral("#e9edf2")));
         const bool dark = ui_dark();
         // Orange-pill segmented bar, same look as the right dock tabs.
-        auto strip = [&](const QRect& r, const QStringList& labels, int sel) {
+        auto strip = [&](const QRect& r, const QStringList& labels, int sel, int slot) {
+            const double pos = glide(slot, sel);
             painter.setPen(QColor(255, 255, 255, dark ? 20 : 100));
             painter.setBrush(QColor(0, 0, 0, dark ? 82 : 15));
             painter.drawRoundedRect(r, r.height() / 3.0, r.height() / 3.0);
             const int sw = (r.width() - 6) / labels.size();
-            const QRect pill(r.left() + 3 + sel * sw, r.top() + 3, sw, r.height() - 6);
+            const QRect pill(r.left() + 3 + int(std::lround(pos * sw)), r.top() + 3, sw, r.height() - 6);
             QLinearGradient grad(pill.topLeft(), pill.bottomLeft());
             grad.setColorAt(0, QColor("#ff7a45"));
             grad.setColorAt(0.42, QColor("#ff5a1f"));
@@ -589,11 +677,28 @@ protected:
                 painter.drawText(QRect(r.left() + 3 + i * sw, r.top(), sw, r.height()), Qt::AlignCenter, labels[i]);
             }
         };
-        strip(tab_rect(), {QStringLiteral("Color"), QStringLiteral("Grey")}, param_gray_cached() ? 1 : 0);
-        const QImage view = owner_->param_view();
+        strip(tab_rect(), {QStringLiteral("Color"), QStringLiteral("Grey")}, param_gray_cached() ? 1 : 0, 4);
         const QRect top = top_rect();
-        if (!view.isNull()) painter.drawImage(top, view);
-        else {
+        if (!owner_->param_image_.isNull()) {
+            const QImage& view = cached_view();
+            const QRectF target = image_rect();
+            painter.save();
+            painter.setClipRect(top);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, zoom_ <= 1.01 && !stroke_);
+            painter.drawImage(target, view);
+            painter.setClipping(false);
+            painter.restore();
+            if (owner_->paint_tool_ == QLatin1String("Brush") && hover_.has_value() && top.contains(*hover_) && target.contains(QPointF(*hover_))) {
+                const double r = std::max(1, owner_->brush_) * target.width() / std::max(1, owner_->param_image_.width());
+                painter.setClipRect(top);
+                painter.setBrush(Qt::NoBrush);
+                painter.setPen(QPen(QColor(255, 255, 255, 220), 1));
+                painter.drawEllipse(QPointF(*hover_), r, r);
+                painter.setPen(QPen(QColor(0, 0, 0, 160), 1));
+                painter.drawEllipse(QPointF(*hover_), r + 1, r + 1);
+                painter.setClipping(false);
+            }
+        } else {
             painter.setPen(QColor(QStringLiteral("#8b93a1")));
             painter.drawText(top, Qt::AlignCenter, QStringLiteral("Open a parameter map, or drop one on the queue."));
         }
@@ -601,33 +706,58 @@ protected:
         const char* names[] = {"Emissive", "Roughness", "AO", "Metallic"};
         for (int i = 0; i < 4; ++i) {
             const QRect cell = cell_rect(i);
+            // Paint-target checkbox: the brush only draws into ticked channels.
+            const bool on = *channel_flag(i);
+            const QRect cb = check_rect(i);
+            painter.setPen(QColor(on ? QStringLiteral("#ff5a1f") : QStringLiteral("#8b93a1")));
+            painter.setBrush(on ? QColor("#ff5a1f") : Qt::NoBrush);
+            painter.drawRoundedRect(cb, 3, 3);
+            if (on) {
+                painter.setPen(QPen(Qt::white, 2));
+                painter.drawLine(cb.left() + 3, cb.center().y(), cb.center().x() - 1, cb.bottom() - 3);
+                painter.drawLine(cb.center().x() - 1, cb.bottom() - 3, cb.right() - 3, cb.top() + 3);
+            }
             painter.setPen(QColor(QStringLiteral("#8b93a1")));
-            painter.drawText(cell.adjusted(4, 0, -4, 0).intersected(QRect(cell.left(), cell.top(), cell.width() - 70, 22)), Qt::AlignLeft | Qt::AlignVCenter, QString::fromLatin1(keys[i]) + QStringLiteral(" ") + QString::fromLatin1(names[i]));
+            painter.drawText(cell.adjusted(26, 0, -4, 0).intersected(QRect(cell.left(), cell.top(), cell.width() - 70, 22)), Qt::AlignLeft | Qt::AlignVCenter, QString::fromLatin1(keys[i]) + QStringLiteral(" ") + QString::fromLatin1(names[i]));
             painter.setPen(QColor(255, 255, 255, dark ? 30 : 120));
             painter.setBrush(QColor(0, 0, 0, dark ? 82 : 15));
             painter.drawRoundedRect(denoise_rect(i), 7, 7);
             painter.setPen(QColor(dark ? "#f2f4f8" : "#1d1d1f"));
             painter.drawText(denoise_rect(i), Qt::AlignCenter, QStringLiteral("Denoise"));
-            strip(orig_rect(i), {QStringLiteral("Original"), QStringLiteral("Edited")}, owner_->ch_orig_[i] ? 0 : 1);
+            strip(orig_rect(i), {QStringLiteral("Original"), QStringLiteral("Edited")}, owner_->ch_orig_[i] ? 0 : 1, i);
             if (!owner_->param_image_.isNull()) {
-                QImage plane(owner_->param_image_.size(), QImage::Format_RGBA8888);
-                plane.fill(Qt::black);
-                const int ch = channel_index(QString::fromLatin1(keys[i]));
+                const QRect box = cell.adjusted(4, 52, -4, -4);
                 const bool use_orig = owner_->ch_orig_[i] && owner_->param_original_.size() == owner_->param_image_.size();
-                const QImage src = (use_orig ? owner_->param_original_ : owner_->param_image_).convertToFormat(QImage::Format_RGBA8888);
-                for (int y = 0; y < src.height(); ++y) {
-                    const uchar* in = src.constScanLine(y);
+                const QImage& source = use_orig ? owner_->param_original_ : owner_->param_image_;
+                const std::array<qint64, 4> key = {source.cacheKey(), qint64(owner_->param_gray_) | (qint64(box.width()) << 8) | (qint64(box.height()) << 32), qint64(i), 0};
+                // While a stroke is live the small channel previews keep their last frame; they refresh on release.
+                if (plane_key_[i] != key && (!stroke_ || plane_[i].isNull())) {
+                    plane_key_[i] = key;
+                    // Extract the channel from a cell-sized copy, not the full-resolution image.
+                    // Nearest-neighbour sampling of the raw bytes: QImage::scaled() would premultiply by alpha,
+                    // and a map whose alpha is 0 (common for parameter maps) would come out black.
+                    const QImage full = source.format() == QImage::Format_RGBA8888 ? source : source.convertToFormat(QImage::Format_RGBA8888);
+                    const double fit = std::min(double(std::max(1, box.width())) / full.width(), double(std::max(1, box.height())) / full.height());
+                    const QSize target(std::max(1, int(full.width() * fit)), std::max(1, int(full.height() * fit)));
+                    QImage plane(target, QImage::Format_RGBA8888);
+                    plane.fill(Qt::black);
+                    const int ch = channel_index(QString::fromLatin1(keys[i]));
+                    for (int y = 0; y < target.height(); ++y) {
+                    const uchar* in = full.constScanLine(std::min(full.height() - 1, int((y + 0.5) * full.height() / target.height())));
                     uchar* out = plane.scanLine(y);
-                    for (int x = 0; x < src.width(); ++x) {
-                        const int v = in[x * 4 + ch];
+                    for (int x = 0; x < target.width(); ++x) {
+                        const int v = in[std::min(full.width() - 1, int((x + 0.5) * full.width() / target.width())) * 4 + ch];
                         const bool gray = owner_->param_gray_ || keys[i][0] == 'A';
                         out[x * 4 + 0] = gray || ch == 0 ? static_cast<uchar>(v) : 0;
                         out[x * 4 + 1] = gray || ch == 1 ? static_cast<uchar>(v) : 0;
                         out[x * 4 + 2] = gray || ch == 2 ? static_cast<uchar>(v) : 0;
                         out[x * 4 + 3] = 255;
                     }
+                    }
+                    plane_[i] = plane;
                 }
-                painter.drawImage(cell.adjusted(4, 52, -4, -4), plane);
+                const QSize ps = plane_[i].size();
+                painter.drawImage(QPoint(box.left() + (box.width() - ps.width()) / 2, box.top() + (box.height() - ps.height()) / 2), plane_[i]);
             }
         }
     }
@@ -641,6 +771,13 @@ protected:
             return;
         }
         for (int i = 0; i < 4; ++i) {
+            if (check_rect(i).adjusted(-2, -2, 60, 2).contains(pos)) {
+                bool* flag = channel_flag(i);
+                *flag = !*flag;
+                emit owner_->changed();  // keeps the side-panel checkbox in sync
+                update();
+                return;
+            }
             if (denoise_rect(i).contains(pos)) {
                 owner_->denoise_channel(i);
                 update();
@@ -653,10 +790,54 @@ protected:
                 return;
             }
         }
+        if (event->button() == Qt::MiddleButton || event->button() == Qt::RightButton) {
+            pan_from_ = event->position();
+            return;
+        }
         paint_at(pos, true);
     }
     void mouseMoveEvent(QMouseEvent* event) override {
+        hover_ = event->position().toPoint();
+        if (event->buttons() & (Qt::MiddleButton | Qt::RightButton)) {
+            pan_ += event->position() - pan_from_;
+            pan_from_ = event->position();
+            update();
+            return;
+        }
         if (event->buttons() & Qt::LeftButton) paint_at(event->position().toPoint(), false);
+        else if (owner_->paint_tool_ == QLatin1String("Brush")) update();
+    }
+    void mouseReleaseEvent(QMouseEvent*) override {
+        stroke_ = false;
+        update();  // full repaint once: smooth scaling and the channel previews catch up
+    }
+    void leaveEvent(QEvent*) override {
+        hover_.reset();
+        update();
+    }
+    // Wheel zooms around the cursor; middle/right drag pans; double-click resets.
+    void wheelEvent(QWheelEvent* event) override {
+        const QRect top = top_rect();
+        const QPointF at = event->position();
+        if (owner_->param_image_.isNull() || !top.contains(at.toPoint())) return;
+        const QRectF before = image_rect();
+        const double next = std::clamp(zoom_ * std::pow(1.25, event->angleDelta().y() / 120.0), 1.0, 32.0);
+        const QPointF unit((at.x() - before.left()) / before.width(), (at.y() - before.top()) / before.height());
+        zoom_ = next;
+        pan_ = QPointF();
+        const QRectF base = image_rect();
+        // Keep the pixel under the cursor fixed.
+        const QSizeF size = base.size();
+        pan_ = (at - QPointF(size.width() * unit.x(), size.height() * unit.y())) - base.topLeft();
+        if (zoom_ <= 1.0) pan_ = QPointF();
+        update();
+    }
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (top_rect().contains(event->position().toPoint())) {
+            zoom_ = 1;
+            pan_ = QPointF();
+            update();
+        }
     }
     void dragEnterEvent(QDragEnterEvent* event) override {
         if (event->mimeData()->hasUrls()) event->acceptProposedAction();
@@ -702,37 +883,132 @@ private:
     void paint_at(const QPoint& pos, bool begin) {
         if (owner_->param_image_.isNull()) return;
         const QRect top = top_rect();
-        if (!top.contains(pos)) return;
+        const QRectF target = image_rect();
+        if (!top.contains(pos) || !target.contains(QPointF(pos))) {
+            stroke_ = false;
+            return;
+        }
         QImage& image = owner_->param_image_;
-        image = image.convertToFormat(QImage::Format_RGBA8888);
-        const int x = (pos.x() - top.left()) * image.width() / std::max(1, top.width());
-        const int y = (pos.y() - top.top()) * image.height() / std::max(1, top.height());
+        if (image.format() != QImage::Format_RGBA8888) image = image.convertToFormat(QImage::Format_RGBA8888);
+        const QPointF at((pos.x() - target.left()) * image.width() / target.width(), (pos.y() - target.top()) * image.height() / target.height());
         if (owner_->paint_tool_ == QLatin1String("Magic")) {
             if (!begin) return;
-            owner_->pick_magic(x, y);
+            owner_->pick_magic(int(at.x()), int(at.y()));
             update();
             return;
         }
         if (owner_->paint_tool_ != QLatin1String("Brush")) return;
         if (begin) owner_->push_undo();
+        cached_view();  // make sure the colour view matches the pixels before we patch it
+        // Stamp along the segment from the last point so fast strokes stay continuous.
         const int radius = std::max(1, owner_->brush_);
+        const double step = std::max(1.0, radius / 3.0);
+        QRect dirty;
+        if (!begin && stroke_) {
+            const QPointF delta = at - last_;
+            const double len = std::hypot(delta.x(), delta.y());
+            for (double d = step; d < len; d += step) dirty |= stamp(image, last_ + delta * (d / len), radius);
+        }
+        dirty |= stamp(image, at, radius);
+        last_ = at;
+        stroke_ = true;
+        // Patch only the touched pixels of the cached view, then repaint just the canvas area.
+        if (!view_.isNull() && view_.size() == image.size()) {
+            owner_->param_view_rect(view_, dirty);
+            view_key_ = view_key();
+        }
+        update(top_rect());
+    }
+    std::array<qint64, 4> view_key() const {
+        return {owner_->param_image_.cacheKey(), qint64(owner_->ch_r_) | (qint64(owner_->ch_g_) << 1) | (qint64(owner_->ch_b_) << 2) | (qint64(owner_->ch_a_) << 3) | (qint64(owner_->param_gray_) << 4), qint64(owner_->view_rev_), 1};
+    }
+    bool* channel_flag(int i) { return i == 0 ? &owner_->ch_r_ : i == 1 ? &owner_->ch_g_ : i == 2 ? &owner_->ch_b_ : &owner_->ch_a_; }
+    QRect check_rect(int i) const { const QRect c = cell_rect(i); return QRect(c.left() + 4, c.top() + 3, 16, 16); }
+    QRect stamp(QImage& image, const QPointF& at, int radius) {
+        const int x = int(at.x());
+        const int y = int(at.y());
         const bool use[4] = {owner_->ch_r_, owner_->ch_g_, owner_->ch_b_, owner_->ch_a_};
         for (int ky = -radius; ky <= radius; ++ky) {
+            const int yy = y + ky;
+            if (yy < 0 || yy >= image.height()) continue;
+            uchar* row = image.scanLine(yy);
             for (int kx = -radius; kx <= radius; ++kx) {
                 const int xx = x + kx;
-                const int yy = y + ky;
-                if (xx < 0 || yy < 0 || xx >= image.width() || yy >= image.height()) continue;
+                if (xx < 0 || xx >= image.width()) continue;
                 if (kx * kx + ky * ky > radius * radius) continue;
                 if (!owner_->magic_allows(xx, yy)) continue;
-                uchar* p = image.scanLine(yy) + xx * 4;
+                uchar* p = row + xx * 4;
                 const double fall = 1.0 - std::sqrt(double(kx * kx + ky * ky)) / radius * (1.0 - owner_->hard_ / 100.0);
                 for (int c = 0; c < 4; ++c)
                     if (use[c]) p[c] = static_cast<uchar>(std::clamp(int(p[c] * (1.0 - fall) + owner_->paint_val_ * fall), 0, 255));
             }
         }
-        update();
-        owner_->show_parameter();
+        return QRect(x - radius, y - radius, radius * 2 + 1, radius * 2 + 1);
     }
+    // Pill position (in slots) for segmented strip `slot`; slides to `sel` over 160 ms like the dock tabs.
+    double glide(int slot, int sel) {
+        if (!glide_init_[slot]) {
+            glide_init_[slot] = true;
+            glide_pos_[slot] = glide_to_[slot] = sel;
+        } else if (glide_to_[slot] != sel) {
+            glide_to_[slot] = sel;
+            if (!glide_anim_[slot]) {
+                glide_anim_[slot] = new QVariantAnimation(this);
+                glide_anim_[slot]->setDuration(160);
+                glide_anim_[slot]->setEasingCurve(QEasingCurve::OutCubic);
+                connect(glide_anim_[slot], &QVariantAnimation::valueChanged, this, [this, slot](const QVariant& v) {
+                    glide_pos_[slot] = v.toDouble();
+                    update();
+                });
+            }
+            glide_anim_[slot]->stop();
+            glide_anim_[slot]->setStartValue(glide_pos_[slot]);
+            glide_anim_[slot]->setEndValue(double(sel));
+            glide_anim_[slot]->start();
+        }
+        return glide_pos_[slot];
+    }
+    bool glide_init_[5] = {};
+    double glide_pos_[5] = {};
+    int glide_to_[5] = {};
+    QVariantAnimation* glide_anim_[5] = {};
+
+    // Image rect on screen: fitted (aspect kept) inside top_rect, then zoomed/panned.
+    QRectF image_rect() {
+        const QImage& img = owner_->param_image_;
+        const QRect top = top_rect();
+        if (img.isNull()) return top;
+        if (owner_->param_path_ != seen_path_ || img.size() != seen_size_) {
+            seen_path_ = owner_->param_path_;
+            seen_size_ = img.size();
+            zoom_ = 1;
+            pan_ = QPointF();
+        }
+        const double fit = std::min(double(top.width()) / img.width(), double(top.height()) / img.height());
+        const QSizeF size(img.width() * fit * zoom_, img.height() * fit * zoom_);
+        return QRectF(QPointF(top.center()) - QPointF(size.width() / 2, size.height() / 2) + pan_, size);
+    }
+    // Colour view of the image; rebuilt only when the pixels or channel switches change.
+    const QImage& cached_view() {
+        const std::array<qint64, 4> key = view_key();
+        if (view_key_ != key) {
+            view_key_ = key;
+            view_ = owner_->param_view();
+        }
+        return view_;
+    }
+    std::array<qint64, 4> view_key_ = {-1, -1, -1, -1};
+    QImage view_;
+    std::array<qint64, 4> plane_key_[4] = {{-1, -1, -1, -1}, {-1, -1, -1, -1}, {-1, -1, -1, -1}, {-1, -1, -1, -1}};
+    QImage plane_[4];
+    double zoom_ = 1;
+    QPointF pan_;
+    QPointF pan_from_;
+    QPointF last_;
+    bool stroke_ = false;
+    std::optional<QPoint> hover_;
+    QString seen_path_;
+    QSize seen_size_;
     Texmesh* owner_ = nullptr;
 };
 
@@ -771,7 +1047,7 @@ Texmesh::Texmesh(QWidget* host) : QObject(host), host_(host) {
     apply_themed_qss(param_queue_, QString::fromLatin1(k_style));
     param_queue_->setAcceptDrops(true);
     param_queue_->hide();
-    denoise_view_ = new QLabel(host_);
+    denoise_view_ = new ZoomLabel(host_);
     denoise_view_->setAlignment(Qt::AlignCenter);
     apply_themed_qss(denoise_view_, QString::fromLatin1(k_style));
     denoise_view_->hide();
@@ -821,6 +1097,7 @@ void Texmesh::set_page(const QString& page) {
     form_tab_ = 0;
     if (page == QLatin1String("texture")) refresh_texture();
     if (page == QLatin1String("meshops")) refresh_mesh();
+    if (page == QLatin1String("denoise") && denoise_view_) show_denoise(!show_work_);
     sync_canvas();
     emit changed();
 }
@@ -1113,6 +1390,11 @@ void Texmesh::set_field(const QString& key, const QString& raw) {
     else if (key == QLatin1String("oidn")) prefer_oidn_ = raw == QLatin1String("1");
     else if (key == QLatin1String("lockBlack")) lock_black_ = raw == QLatin1String("1");
     else if (key == QLatin1String("black")) black_ = int(num(black_));
+    if (page_ == QLatin1String("denoise") && !denoise_orig_.isNull() && (key == QLatin1String("strength") || key == QLatin1String("oidn") || key == QLatin1String("lockBlack") || key == QLatin1String("black"))) {
+        // Live preview: re-run with the new setting (queued once if a run is in flight).
+        if (denoise_busy_) setProperty("dn_again", true);
+        else start_denoise(-1);
+    }
     refresh_texture();
     refresh_mesh();
     if (param_canvas_) param_canvas_->update();
@@ -1178,6 +1460,7 @@ void Texmesh::run_action(const QString& action) {
         if (!param_original_.isNull()) {
             push_undo();
             param_image_ = param_original_;
+            std::fill(std::begin(ch_orig_), std::end(ch_orig_), true);
             show_parameter();
         }
     } else if (action == QLatin1String("doOffset") || action == QLatin1String("doScale") || action == QLatin1String("doFill") || action == QLatin1String("doBc") || action == QLatin1String("doMean") || action == QLatin1String("doInvert")) param_op(action);
@@ -1219,7 +1502,7 @@ void Texmesh::run_action(const QString& action) {
     else if (action == QLatin1String("denoise_open") || action == QLatin1String("denoiseOpen")) {
         const QString path = QFileDialog::getOpenFileName(host_, QStringLiteral("Bake"), {}, QStringLiteral("Images (*.png *.tga *.jpg *.jpeg *.bmp *.tif *.tiff)"));
         if (!path.isEmpty()) open_denoise_path(path);
-    } else if (action == QLatin1String("denoise_run") || action == QLatin1String("denoiseRun")) run_denoise();
+    } else if (action == QLatin1String("denoise_run") || action == QLatin1String("denoiseRun")) start_denoise(-1);
     else if (action == QLatin1String("showOrig")) show_denoise(true);
     else if (action == QLatin1String("showWork")) show_denoise(false);
     else if (action == QLatin1String("denoise_revert") || action == QLatin1String("denoiseRevert")) show_denoise(true);
@@ -1231,7 +1514,27 @@ void Texmesh::queue_remove() {
     const int row = param_queue_->currentRow();
     if (row >= 0) delete param_queue_->takeItem(row);
 }
-void Texmesh::queue_clear() { param_queue_->clear(); }
+void Texmesh::queue_clear() {
+    // Clear the table of the active page too, not just the parameter list.
+    param_queue_->clear();
+    if (page_ == QLatin1String("texture")) {
+        tex_table_->setRowCount(0);
+        static_cast<MapEditor*>(map_view_)->clear();
+        primary_.clear();
+        refresh_texture();
+    } else if (page_ == QLatin1String("meshops")) {
+        lm_table_->setRowCount(0);
+    } else if (page_ == QLatin1String("parameter")) {
+        param_image_ = QImage();
+        param_original_ = QImage();
+        param_path_.clear();
+        undo_.clear();
+        redo_.clear();
+        magic_.clear();
+        show_parameter();
+    }
+    emit changed();
+}
 
 QString Texmesh::texture_text() const {
     std::vector<std::pair<std::string, std::string>> keys{{"Primary", primary_.toStdString()}};
@@ -1772,7 +2075,7 @@ void Texmesh::open_parameter_path(const QString& path) {
     param_path_ = path;
     param_original_ = image.convertToFormat(QImage::Format_RGBA8888);
     param_image_ = param_original_;
-    std::fill(std::begin(ch_orig_), std::end(ch_orig_), false);
+    std::fill(std::begin(ch_orig_), std::end(ch_orig_), true);
     undo_.clear();
     redo_.clear();
     magic_.clear();
@@ -1787,6 +2090,10 @@ void Texmesh::show_parameter() {
 
 void Texmesh::push_undo() {
     if (param_image_.isNull()) return;
+    // Every edit goes through here: channels it touches switch their preview to "Edited".
+    const bool touched[4] = {ch_r_, ch_g_, ch_b_, ch_a_};
+    for (int c = 0; c < 4; ++c)
+        if (touched[c]) ch_orig_[c] = false;
     undo_.push_back(param_image_);
     if (undo_.size() > 32) undo_.erase(undo_.begin());
     redo_.clear();
@@ -1851,12 +2158,19 @@ void Texmesh::export_channel(const QString& key) {
 
 QImage Texmesh::param_view() const {
     if (param_image_.isNull()) return {};
-    const QImage src = param_image_.convertToFormat(QImage::Format_RGBA8888);
-    QImage out(src.size(), QImage::Format_RGBA8888);
-    for (int y = 0; y < src.height(); ++y) {
+    QImage out(param_image_.size(), QImage::Format_RGBA8888);
+    param_view_rect(out, QRect(QPoint(0, 0), param_image_.size()));
+    return out;
+}
+
+// Repaints only `area` of the colour view (a brush dab touches a few hundred pixels, not the whole map).
+void Texmesh::param_view_rect(QImage& out, const QRect& area) const {
+    const QImage src = param_image_.format() == QImage::Format_RGBA8888 ? param_image_ : param_image_.convertToFormat(QImage::Format_RGBA8888);
+    const QRect box = area.intersected(QRect(QPoint(0, 0), src.size()));
+    for (int y = box.top(); y <= box.bottom(); ++y) {
         const uchar* in = src.constScanLine(y);
         uchar* dst = out.scanLine(y);
-        for (int x = 0; x < src.width(); ++x) {
+        for (int x = box.left(); x <= box.right(); ++x) {
             float rgb[3] = {};
             if (ch_r_) rgb[0] = in[x * 4];
             if (ch_g_) rgb[1] = in[x * 4 + 1];
@@ -1883,7 +2197,6 @@ QImage Texmesh::param_view() const {
             dst[x * 4 + 3] = 255;
         }
     }
-    return out;
 }
 
 void Texmesh::open_denoise_path(const QString& path) {
@@ -1901,12 +2214,12 @@ void Texmesh::open_denoise_path(const QString& path) {
 void Texmesh::show_denoise(bool original) {
     show_work_ = !original && !denoise_work_.isNull();
     const QImage& image = show_work_ ? denoise_work_ : denoise_orig_;
-    if (!image.isNull()) denoise_view_->setPixmap(QPixmap::fromImage(image).scaled(std::max(denoise_view_->width(), 480), std::max(denoise_view_->height(), 320), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    static_cast<ZoomLabel*>(denoise_view_)->set_image(image);
     denoise_view_->setText(image.isNull() ? QStringLiteral("Open a bake.") : QString());
 }
 
-void Texmesh::run_denoise() {
-    if (denoise_orig_.isNull()) return;
+// Pure compute (safe off the UI thread). Parameter names mirror the old members on purpose.
+static QImage denoise_compute(const QImage& denoise_orig_, const QString& strength_, bool prefer_oidn_, bool lock_black_, int black_, QString& denoise_prog_, const std::function<void(int)>& report = {}) {
     const QString quality = strength_ == QLatin1String("light") ? QStringLiteral("balanced") : QStringLiteral("high");
     int radius = 4;
     int sigma = 60;
@@ -1922,8 +2235,10 @@ void Texmesh::run_denoise() {
     } else if (strength_ == QLatin1String("nuclear")) {
         radius = 6;
         sigma = 110;
-        detail = 0.16;
+        detail = 0;
     }
+    // Several bilateral passes: one 13x13 pass barely touches real noise.
+    const int passes = strength_ == QLatin1String("light") ? 1 : strength_ == QLatin1String("heavy") ? 3 : strength_ == QLatin1String("nuclear") ? 5 : 2;
     QImage work;
     const QString exe = oidn_exe();
     if (prefer_oidn_ && !exe.isEmpty()) {
@@ -1949,7 +2264,9 @@ void Texmesh::run_denoise() {
     }
     if (work.isNull()) {
         denoise_prog_ = exe.isEmpty() ? QStringLiteral("Bilateral fallback") : QStringLiteral("OIDN failed, bilateral fallback");
-        work = bilateral_rgb(denoise_orig_, std::min(radius, 6), sigma);
+        work = denoise_orig_;
+        for (int i = 0; i < passes; ++i)
+            work = bilateral_rgb(work, std::min(radius, 6), sigma, [&, i](int p) { if (report) report((i * 100 + p) / passes); });
     }
     if (detail > 0) {
         const QImage blur = box_blur(work, 1);
@@ -1978,7 +2295,12 @@ void Texmesh::run_denoise() {
                 if (nearly_black(in + x * 4, black_)) std::memcpy(out + x * 4, in + x * 4, 4);
         }
     }
-    denoise_work_ = work;
+    return work;
+}
+
+void Texmesh::run_denoise() {
+    if (denoise_orig_.isNull()) return;
+    denoise_work_ = denoise_compute(denoise_orig_, strength_, prefer_oidn_, lock_black_, black_, denoise_prog_);
     show_denoise(false);
     status_ = denoise_prog_;
     emit changed();
@@ -1997,22 +2319,77 @@ void Texmesh::denoise_channel(int ch) {
             out[x * 4 + 3] = 255;
         }
     }
+    if (denoise_busy_) {
+        status_ = QStringLiteral("Denoise already running…");
+        emit changed();
+        return;
+    }
+    // Show the grey channel on the Denoiser page right away; the result lands there and in the channel.
     denoise_orig_ = plane;
     denoise_work_ = {};
-    run_denoise();
-    if (denoise_work_.isNull() || denoise_work_.size() != src.size()) return;
-    push_undo();
-    param_image_ = param_image_.convertToFormat(QImage::Format_RGBA8888);
-    for (int y = 0; y < param_image_.height(); ++y) {
-        const uchar* in = denoise_work_.constScanLine(y);
-        uchar* out = param_image_.scanLine(y);
-        for (int x = 0; x < param_image_.width(); ++x)
-            out[x * 4 + ch] = uchar((in[x * 4] + in[x * 4 + 1] + in[x * 4 + 2]) / 3);
-    }
-    ch_orig_[ch] = false;
-    show_parameter();
-    status_ = QStringLiteral("Denoised channel ") + QStringLiteral("RGBA").mid(ch, 1);
+    denoise_prog_ = QStringLiteral("Denoising channel ") + QStringLiteral("RGBA").mid(ch, 1) + QStringLiteral("…");
+    show_denoise(true);
+    emit pageRequested(QStringLiteral("denoise"));
+    start_denoise(ch);
+}
+
+// Runs the denoiser on denoise_orig_ off the UI thread. ch >= 0 also writes the result back into that channel.
+void Texmesh::start_denoise(int ch) {
+    if (denoise_orig_.isNull() || denoise_busy_) return;
+    // The heavy part (OIDN process / bilateral filter) runs on a worker so the window keeps responding.
+    denoise_busy_ = true;
+    const QString name = ch >= 0 ? QStringLiteral("RGBA").mid(ch, 1) : QStringLiteral("image");
+    status_ = QStringLiteral("Denoising ") + name + QStringLiteral("…");
+    StatusHub::instance()->progress(QStringLiteral("Denoise"), 0, status_);
     emit changed();
+    const QImage plane = denoise_orig_;
+    const QString strength = strength_;
+    const bool prefer = prefer_oidn_, lock = lock_black_;
+    const int black = black_;
+    QPointer<Texmesh> self(this);
+    QThread* thread = QThread::create([self, plane, strength, prefer, lock, black, ch, name] {
+        QString prog;
+        auto last = std::make_shared<std::atomic<int>>(-1);
+        const QImage work = denoise_compute(plane, strength, prefer, lock, black, prog, [last, name](int pct) {
+            // Called from worker threads; hop to the UI thread, and only on whole-percent changes.
+            if (last->exchange(pct) == pct) return;
+            QMetaObject::invokeMethod(qApp, [pct, name] { StatusHub::instance()->progress(QStringLiteral("Denoise"), pct, QStringLiteral("Denoising ") + name + QStringLiteral(" · %1%").arg(pct)); }, Qt::QueuedConnection);
+        });
+        if (!self) return;
+        QMetaObject::invokeMethod(self.data(), [self, work, prog, ch, name] {
+            if (!self) return;
+            self->denoise_busy_ = false;
+            self->denoise_work_ = work;
+            self->denoise_prog_ = prog;
+            self->show_denoise(false);
+            if (self->property("dn_again").toBool()) {
+                self->setProperty("dn_again", false);
+                self->start_denoise(-1);
+            }
+            if (ch < 0 || work.isNull() || work.size() != self->param_image_.size()) {
+                self->status_ = work.isNull() ? QStringLiteral("Denoise failed") : QStringLiteral("Denoised · ") + prog;
+                StatusHub::instance()->finish(self->status_);
+                emit self->changed();
+                return;
+            }
+            self->push_undo();
+            self->param_image_ = self->param_image_.convertToFormat(QImage::Format_RGBA8888);
+            const QImage done = work.convertToFormat(QImage::Format_RGBA8888);
+            for (int y = 0; y < self->param_image_.height(); ++y) {
+                const uchar* in = done.constScanLine(y);
+                uchar* out = self->param_image_.scanLine(y);
+                for (int x = 0; x < self->param_image_.width(); ++x)
+                    out[x * 4 + ch] = uchar((in[x * 4] + in[x * 4 + 1] + in[x * 4 + 2]) / 3);
+            }
+            self->ch_orig_[ch] = false;
+            self->show_parameter();
+            self->status_ = QStringLiteral("Denoised channel ") + name + QStringLiteral(" · ") + prog;
+            StatusHub::instance()->finish(self->status_);
+            emit self->changed();
+        }, Qt::QueuedConnection);
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
 }
 
 void Texmesh::pick_magic(int x, int y) {
@@ -2022,13 +2399,17 @@ void Texmesh::pick_magic(int x, int y) {
     for (int row = 0; row < src.height(); ++row)
         std::memcpy(packed.data() + static_cast<size_t>(row * src.width() * 4), src.constScanLine(row), static_cast<size_t>(src.width() * 4));
     magic_ = magic_mask_of(packed.data(), src.width(), src.height(), x, y, tol_, contig_);
+    ++view_rev_;
     const int count = int(std::count(magic_.begin(), magic_.end(), 1));
     stamp_note_ = QStringLiteral("Magic select %1 px").arg(count);
     status_ = stamp_note_;
     emit changed();
 }
 
-void Texmesh::clear_magic() { magic_.clear(); }
+void Texmesh::clear_magic() {
+    magic_.clear();
+    ++view_rev_;
+}
 
 bool Texmesh::magic_allows(int x, int y) const {
     if (magic_.empty() || param_image_.isNull()) return true;
