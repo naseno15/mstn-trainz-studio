@@ -47,7 +47,7 @@ cmake --build build --target check_shell --parallel
 
 ## Boot and window
 
-`src/main.cpp` shows a frameless boot dialog (brand, orange bar, stage line) before `ShellWindow`, then closes it when the main window is up. Stages are reported from the shell constructor (`Starting…`, `Chrome`, `Studios`, `Ready`). `check_shell` asserts at least four stage callbacks.
+`src/main.cpp` shows a frameless boot dialog (brand, orange bar, stage line) before `ShellWindow`, then closes it when the main window is up. Stages are reported from the shell constructor (`Starting…`, `Chrome`, `Studios`, `Ready`). `check_shell` asserts at least four stage callbacks. The × on the card, Esc, and Alt+F4 abort startup immediately, including while a QML compile is blocking the UI thread, and still clear `session.lock`.
 
 Home ↔ studio switches grab the old page and fade that pixmap on a sibling label (180ms). The effect stays off the OpenGL view. Title menus are a `Qt::Tool` window (not `Popup`) so a click outside or Esc dismisses them; open plays a short scale/fade in `MenuDrop.qml`. Traffic lights show × − + and a `GlassTip` while the cluster is hovered. Dragging the caption uses `startSystemMove`; `WM_EXITSIZEMOVE` maximizes when the cursor is on the top screen edge. Min/max window flags stay on so Windows snap still has a thick frame.
 
@@ -70,6 +70,6 @@ A compile definition that only one check needs (such as `FIXTURE_DIR`) belongs o
 
 ## TrainzUtil parity (Python trainzutil_host.py / trainz_install.py)
 - Library: Modified/Size from content index (original/local/editing), Author/Build via shared cache ~/.cache/trainz_studio/tu-archive-meta.json, Type codes -> names (trainz_meta.cpp category_label).
-- View Detail: picks drive sidebar cards (cover, deps, credits, status). Tools: Inspect/Export/Each CDP/Tuner (-> Engine page, save commits back)/Packages (-> Assets)/Edit/Submit/Validate/Backups/Encrypt.
+- View Detail: picks drive sidebar cards (cover, deps, credits, status). Tools: Inspect/Export/Each CDP/Tuner (-> Engine page, save commits back)/Packages (-> Assets)/Edit/Submit/Validate/Backups/Encrypt. Export and Each CDP fill the right Progress list (`N of M`) the same way Validate does.
 - Install: zip/cdp sources with nested zips, staged installs, real ok/fail from TrainzUtil output.
 - Check: check_trainzutil (check_meta covers labels, index, author scan).
