@@ -148,70 +148,61 @@ Item {
                                     Text { text: "Mesh file"; color: side.mute; font.pixelSize: 10 }
                                 }
                                 Rectangle { width: parent.width; height: 1; color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.28) }
-                                Item {
-                                    width: parent.width
-                                    height: 30
-                                    Rectangle {
-                                        anchors.fill: parent
-                                        radius: 7
-                                        visible: (side.bag.file && side.bag.file.name || "").length > 0
-                                        color: "#ff5a1f"
-                                    }
-                                    Row {
-                                        anchors.fill: parent
-                                        spacing: 6
-                                        visible: (side.bag.file && side.bag.file.name || "").length > 0
-                                        Item {
-                                            width: 36
-                                            height: 30
-                                            CheckBox {
-                                                anchors.centerIn: parent
-                                                on: !!(side.bag.file && side.bag.file.show)
-                                                onToggled: bridge.setChecked("fileShow", !(side.bag.file && side.bag.file.show))
-                                            }
-                                        }
-                                        Item {
-                                            width: 36
-                                            height: 30
-                                            CheckBox {
-                                                anchors.centerIn: parent
-                                                on: !!(side.bag.file && side.bag.file.atts)
-                                                onToggled: bridge.setChecked("fileAtts", !(side.bag.file && side.bag.file.atts))
-                                            }
-                                        }
-                                        Text {
-                                            width: parent.width - 84
-                                            height: 30
-                                            verticalAlignment: Text.AlignVCenter
-                                            text: (side.bag.file && side.bag.file.name) || ""
-                                            color: "#ffffff"
-                                            font.pixelSize: 12
-                                            font.bold: true
-                                            elide: Text.ElideRight
-                                        }
-                                    }
-                                    Text {
-                                        anchors.fill: parent
-                                        visible: (side.bag.file && side.bag.file.name || "").length === 0
-                                        verticalAlignment: Text.AlignVCenter
-                                        horizontalAlignment: Text.AlignHCenter
-                                        text: qsTr("No mesh in the scene")
-                                        color: side.mute
-                                        font.pixelSize: 11
-                                    }
-                                }
                                 Repeater {
                                     model: side.bag.files || []
-                                    Text {
+                                    Item {
                                         width: parent.width
-                                        height: 20
-                                        verticalAlignment: Text.AlignVCenter
-                                        leftPadding: 8
-                                        text: modelData
-                                        color: side.ink
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
+                                        height: 30
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            radius: 7
+                                            visible: !!modelData.sel
+                                            color: "#ff5a1f"
+                                        }
+                                        TapHandler { onTapped: bridge.clickId("file:" + index) }
+                                        Row {
+                                            anchors.fill: parent
+                                            spacing: 6
+                                            Item {
+                                                width: 36
+                                                height: 30
+                                                CheckBox {
+                                                    anchors.centerIn: parent
+                                                    on: !!modelData.show
+                                                    onToggled: bridge.setChecked("fileShow:" + index, !modelData.show)
+                                                }
+                                            }
+                                            Item {
+                                                width: 36
+                                                height: 30
+                                                CheckBox {
+                                                    anchors.centerIn: parent
+                                                    on: !!modelData.atts
+                                                    onToggled: bridge.setChecked("fileAtts:" + index, !modelData.atts)
+                                                }
+                                            }
+                                            Text {
+                                                width: parent.width - 84
+                                                height: 30
+                                                verticalAlignment: Text.AlignVCenter
+                                                text: modelData.name
+                                                color: modelData.sel ? "#ffffff" : side.ink
+                                                font.pixelSize: 12
+                                                font.bold: !!modelData.sel
+                                                elide: Text.ElideRight
+                                            }
+                                        }
                                     }
+                                }
+                                Text {
+                                    width: parent.width
+                                    height: 30
+                                    visible: (side.bag.files || []).length === 0
+                                    verticalAlignment: Text.AlignVCenter
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: qsTr("No mesh in the scene")
+                                    color: side.mute
+                                    font.pixelSize: 11
                                 }
                         }
                         Row {

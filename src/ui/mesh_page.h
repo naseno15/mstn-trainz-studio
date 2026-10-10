@@ -190,6 +190,9 @@ private:
     int tab_ = 0;
     QString page_ = QStringLiteral("preview");
     QString path_;
+    QList<bool> file_shows_, file_attl_;  // per scene file (parallel to scene_paths_)
+    QList<int> part_file_;                // file index of every row in rows_
+    int sel_file_ = 0;
     QStringList scene_paths_;  // every file currently in the scene (drops append to this)
     QByteArray file_bytes_;
     bool dirty_ = false;

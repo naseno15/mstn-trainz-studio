@@ -425,6 +425,9 @@ void MeshBridge::load_file(const QString& path) {
     mat_i_ = 0;
     file_show_ = true;
     file_atts_ = true;
+    file_shows_ = {true};
+    file_attl_ = {true};
+    sel_file_ = 0;
     bounds_set_ = false;
     anims_ = 0;
     std::vector<ViewPart> drawn;
@@ -539,6 +542,7 @@ void MeshBridge::load_file(const QString& path) {
         rows_[static_cast<size_t>(i)].two = on;
     }
     report_load(QStringLiteral("Uploading mesh…"), 98);
+    part_file_.assign(rows_.size(), 0);
     if (view_) view_->setParts(std::move(drawn));
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     file_bytes_ = bytes;
@@ -560,6 +564,10 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
     loading_ = true;
     scene_ = true;
     scene_paths_ = paths;
+    file_shows_ = QList<bool>(paths.size(), true);
+    file_attl_ = QList<bool>(paths.size(), true);
+    part_file_.clear();
+    sel_file_ = 0;
     load_steps_ = 0;
     load_name_ = QStringLiteral("asset preview");
     rows_.clear();
@@ -689,6 +697,7 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             meta.tris = static_cast<int>(row.indices.size() / 3);
             meta.tex_file = at >= 0 ? pixels[static_cast<size_t>(at)].path : QString();
             rows_.push_back(meta);
+            part_file_.push_back(f);
             MatEdit edit;
             edit.block.name = meta.name.toStdString();
             mats_.push_back(std::move(edit));
@@ -885,7 +894,13 @@ void MeshBridge::publish() {
         {QStringLiteral("materials"), materials},
         {QStringLiteral("mats"), mats},
         {QStringLiteral("file"), loaded ? QJsonObject{{QStringLiteral("name"), file_label}, {QStringLiteral("show"), file_show_}, {QStringLiteral("atts"), file_atts_}} : QJsonValue()},
-        {QStringLiteral("files"), [&] { QJsonArray a; if (scene_) for (const QString& p : scene_paths_) a.append(QFileInfo(p).fileName()); return a; }()},
+        {QStringLiteral("files"), [&] {
+            QJsonArray a;
+            if (loaded)
+                for (int i = 0; i < scene_paths_.size(); ++i)
+                    a.append(QJsonObject{{QStringLiteral("name"), QFileInfo(scene_paths_[i]).fileName()}, {QStringLiteral("show"), file_shows_.value(i, true)}, {QStringLiteral("atts"), file_attl_.value(i, true)}, {QStringLiteral("sel"), i == sel_file_}});
+            return a;
+        }()},
         {QStringLiteral("infoOpen"), info_open_},
         {QStringLiteral("face"), face_},
         {QStringLiteral("cap"), QStringLiteral("a.* → edit on right")},
@@ -1072,7 +1087,35 @@ void MeshBridge::clickId(const QString& id) {
         if (!file.isEmpty()) setText(QStringLiteral("tex:") + id.mid(10), QFileInfo(file).fileName());
         return;
     } else if (id == QLatin1String("open") || id == QLatin1String("folder")) browse();
-    else if (id == QLatin1String("clearMesh") || id == QLatin1String("removeMesh")) {
+    else if (id.startsWith(QLatin1String("file:"))) {
+        sel_file_ = std::clamp(id.mid(5).toInt(), 0, std::max(0, int(scene_paths_.size()) - 1));
+        publish();
+        return;
+    } else if (id == QLatin1String("removeMesh") && scene_paths_.size() > 1 && !loading_) {
+        QStringList paths = scene_paths_;
+        QList<bool> shows = file_shows_, atts = file_attl_;
+        const int at = sel_file_;
+        paths.removeAt(at);
+        shows.removeAt(at);
+        atts.removeAt(at);
+        QStringList labels;
+        for (const QString& p : paths) labels << QFileInfo(p).fileName();
+        if (paths.size() == 1) load_file(paths.first());
+        else load_scene(paths, labels, {});
+        file_shows_ = shows;  // keep each remaining file's Show / Atts choice
+        file_attl_ = atts;
+        if (view_)
+            for (int i = 0; i < int(part_file_.size()); ++i) view_->setShown(i, file_shows_.value(part_file_[i], true));
+        publish();
+        return;
+    } else if (id == QLatin1String("clearMesh") || id == QLatin1String("removeMesh")) {
+        scene_ = false;
+        scene_paths_.clear();
+        file_shows_.clear();
+        file_attl_.clear();
+        part_file_.clear();
+        sel_file_ = 0;
+        shortcut_.clear();
         rows_.clear();
         mats_.clear();
         path_.clear();
@@ -1200,6 +1243,16 @@ void MeshBridge::setChecked(const QString& key, bool on) {
                 rows_[static_cast<size_t>(i)].two = on;
                 if (view_) view_->setPartTwo(i, on);
             }
+        }
+    } else if (key.startsWith(QLatin1String("fileShow:")) || key.startsWith(QLatin1String("fileAtts:"))) {
+        const int f = key.mid(9).toInt();
+        if (f >= 0 && f < scene_paths_.size()) {
+            if (key.startsWith(QLatin1String("fileShow:"))) {
+                file_shows_[f] = on;
+                if (view_)
+                    for (int i = 0; i < int(part_file_.size()); ++i)
+                        if (part_file_[i] == f) view_->setShown(i, on);
+            } else file_attl_[f] = on;
         }
     } else if (key == QLatin1String("fileShow")) {
         file_show_ = on;
