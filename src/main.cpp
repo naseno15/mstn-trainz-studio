@@ -3,17 +3,27 @@
 #include "ui/shell_window.h"
 
 #include <QApplication>
+#include <QCloseEvent>
 #include <QDialog>
 #include <QElapsedTimer>
 #include <QEasingCurve>
 #include <QFrame>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QMoveEvent>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QScreen>
 #include <QThread>
 #include <QVBoxLayout>
 
+#include <atomic>
+#include <cstdlib>
+#include <thread>
+
 #include <windows.h>
+
+struct BootAbort {};
 
 namespace {
 
@@ -80,15 +90,53 @@ public:
         lay->addWidget(stage_);
         lay->addWidget(history_);
 
+        close_ = new QPushButton(QStringLiteral("×"), card);
+        close_->setCursor(Qt::PointingHandCursor);
+        close_->setFocusPolicy(Qt::NoFocus);
+        close_->setGeometry(width() - 46, 12, 28, 28);
+        close_->setStyleSheet(QStringLiteral(
+            "QPushButton { color:#f2f4f8; background:rgba(0,0,0,90); border:1px solid rgba(255,255,255,50); border-radius:14px; font-size:16px; font-weight:600; }"
+            "QPushButton:hover { background:#ff5a1f; color:#ffffff; }"));
+        connect(close_, &QPushButton::clicked, this, [this] { stop_ = true; });
+        close_->raise();
+
         auto* root = new QVBoxLayout(this);
         root->setContentsMargins(0, 0, 0, 0);
         root->addWidget(card);
         if (const QScreen* screen = QGuiApplication::primaryScreen()) move(screen->availableGeometry().center() - rect().center());
     }
 
+    ~BootDialog() override { stop_watch(); }
+
     void showEvent(QShowEvent* event) override {
         QDialog::showEvent(event);
         enable_acrylic(reinterpret_cast<HWND>(winId()));
+        publish_hit();
+        start_watch();
+    }
+
+    void moveEvent(QMoveEvent* event) override {
+        QDialog::moveEvent(event);
+        publish_hit();
+    }
+
+    void keyPressEvent(QKeyEvent* event) override {
+        if (event->key() == Qt::Key_Escape) stop_ = true;
+        else QDialog::keyPressEvent(event);
+    }
+
+    void closeEvent(QCloseEvent* event) override {
+        if (allow_close_) {
+            QDialog::closeEvent(event);
+            return;
+        }
+        stop_ = true;
+        event->ignore();
+    }
+
+    void stop_watch() {
+        watch_run_ = false;
+        if (watch_.joinable()) watch_.join();
     }
 
     void set_stage(const QString& text, int pct) {
@@ -106,7 +154,7 @@ public:
         render_history();
         stage_->setText(QStringLiteral("Ready"));
         glide_to(100);
-        pump(260);
+        pump(260, true);
     }
     void dissolve() {
         QElapsedTimer clock;
@@ -114,17 +162,19 @@ public:
         constexpr int ms = 320;
         while (clock.elapsed() < ms) {
             setWindowOpacity(1.0 - QEasingCurve(QEasingCurve::InOutQuad).valueForProgress(double(clock.elapsed()) / ms));
-            pump(8);
+            pump(8, false);
         }
+        allow_close_ = true;
         close();
     }
 
 private:
-    static void pump(int ms) {
+    void pump(int ms, bool input) {
         QElapsedTimer clock;
         clock.start();
         do {
-            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+            QApplication::processEvents(input ? QEventLoop::AllEvents : QEventLoop::ExcludeUserInputEvents);
+            if (stop_) throw BootAbort{};
             QThread::msleep(4);
         } while (clock.elapsed() < ms);
     }
@@ -140,11 +190,48 @@ private:
             const int now = from + int((to - from) * curve.valueForProgress(double(clock.elapsed()) / ms));
             bar_->setValue(now);
             pct_->setText(QStringLiteral("%1%").arg(now / 10));
-            pump(8);
+            pump(8, true);
         }
         bar_->setValue(to);
         pct_->setText(QStringLiteral("%1%").arg(pct));
-        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        QApplication::processEvents();
+        if (stop_) throw BootAbort{};
+    }
+
+    void publish_hit() {
+        if (!close_) return;
+        const QPoint g = close_->mapToGlobal(QPoint(0, 0));
+        hit_l_ = g.x() - 8;
+        hit_t_ = g.y() - 8;
+        hit_r_ = g.x() + close_->width() + 8;
+        hit_b_ = g.y() + close_->height() + 8;
+    }
+
+    // QML compile blocks the UI thread, so Esc, Alt+F4, and the × still have to be seen from outside the event loop.
+    void start_watch() {
+        if (watch_.joinable()) return;
+        watch_run_ = true;
+        watch_ = std::thread([this] {
+            bool mouse_armed = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0;
+            bool esc_armed = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) == 0;
+            bool f4_armed = (GetAsyncKeyState(VK_F4) & 0x8000) == 0;
+            while (watch_run_) {
+                const bool esc = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+                const bool f4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0;
+                const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                if (!esc_armed) esc_armed = !esc;
+                if (!f4_armed) f4_armed = !f4;
+                if (!mouse_armed) mouse_armed = !down;
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                const bool on_close = cursor.x >= hit_l_ && cursor.x < hit_r_ && cursor.y >= hit_t_ && cursor.y < hit_b_;
+                if (watch_run_ && ((esc_armed && esc) || (f4_armed && f4 && (GetAsyncKeyState(VK_MENU) & 0x8000)) || (mouse_armed && down && on_close))) {
+                    end_crash_session();
+                    std::_Exit(0);
+                }
+                Sleep(16);
+            }
+        });
     }
 
     void render_history() {
@@ -161,6 +248,15 @@ private:
     QLabel* pct_ = nullptr;
     QStringList done_;
     QProgressBar* bar_ = nullptr;
+    QPushButton* close_ = nullptr;
+    bool stop_ = false;
+    bool allow_close_ = false;
+    std::atomic<bool> watch_run_{false};
+    std::atomic<int> hit_l_{0};
+    std::atomic<int> hit_t_{0};
+    std::atomic<int> hit_r_{0};
+    std::atomic<int> hit_b_{0};
+    std::thread watch_;
 };
 
 }  // namespace
@@ -172,14 +268,21 @@ int main(int argc, char** argv) {
     app.installEventFilter(new DropHighlight(&app));
     BootDialog boot;
     boot.show();
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    ShellWindow window(nullptr, [&boot](const QString& text, int pct) { boot.set_stage(text, pct); });
-    boot.finish();
-    window.showMaximized();  // fills the work area, not full screen
-    boot.dissolve();
-    if (const QString tail = previous_crash_tail(); !tail.isEmpty())
-        show_crash_dialog(QStringLiteral("Trainz Studio closed unexpectedly"), QStringLiteral("The last session did not exit cleanly. The end of its log is below."), tail, QStringLiteral("warning"));
-    const int code = app.exec();
-    end_crash_session();
-    return code;
+    QApplication::processEvents();
+    try {
+        ShellWindow window(nullptr, [&boot](const QString& text, int pct) { boot.set_stage(text, pct); });
+        boot.stop_watch();
+        boot.finish();
+        window.showMaximized();  // fills the work area, not full screen
+        boot.dissolve();
+        if (const QString tail = previous_crash_tail(); !tail.isEmpty())
+            show_crash_dialog(QStringLiteral("Trainz Studio closed unexpectedly"), QStringLiteral("The last session did not exit cleanly. The end of its log is below."), tail, QStringLiteral("warning"));
+        const int code = app.exec();
+        end_crash_session();
+        return code;
+    } catch (const BootAbort&) {
+        boot.stop_watch();
+        end_crash_session();
+        return 0;
+    }
 }
