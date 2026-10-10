@@ -63,6 +63,7 @@ public:
 
 signals:
     void changed();
+    void pageRequested(const QString& page);
 
 private:
     void refresh_texture();
@@ -94,11 +95,13 @@ private:
     void export_channel(const QString& key);
     void open_denoise_path(const QString& path);
     void run_denoise();
+    void start_denoise(int ch);
     void show_denoise(bool original);
     void save_denoise();
     void denoise_channel(int ch);
-    bool ch_orig_[4] = {false, false, false, false};
+    bool ch_orig_[4] = {true, true, true, true};  // a channel shows "Original" until an edit touches it
     QImage param_view() const;
+    void param_view_rect(QImage& out, const QRect& area) const;
     void pick_magic(int x, int y);
     void clear_magic();
     bool magic_allows(int x, int y) const;
@@ -179,6 +182,8 @@ private:
     std::vector<QImage> undo_;
     std::vector<QImage> redo_;
     std::vector<unsigned char> magic_;
+    bool denoise_busy_ = false;
+    int view_rev_ = 0;  // bumped when the magic mask changes so ParamCanvas rebuilds its cached view
 
     QImage denoise_orig_;
     QImage denoise_work_;

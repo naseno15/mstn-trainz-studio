@@ -395,6 +395,7 @@ AssetsBridge::AssetsBridge(QObject* parent) : QObject(parent) {
     if (auto* host = qobject_cast<QWidget*>(parent)) {
         tex_ = new Texmesh(host);
         connect(tex_, &Texmesh::changed, this, &AssetsBridge::changed);
+        connect(tex_, &Texmesh::pageRequested, this, &AssetsBridge::setPage);
         build_tools(host);
     }
 }
@@ -691,6 +692,13 @@ void AssetsBridge::runAction(const QString& action) {
         return;
     }
     if (action == QLatin1String("export_each") || action == QLatin1String("export_one")) start_export(action == QLatin1String("export_one"));
+}
+
+void AssetsBridge::undoEdit() {
+    if (suite_ == QLatin1String("texmesh") && tex_) tex_->run_action(QStringLiteral("param_undo"));
+}
+void AssetsBridge::redoEdit() {
+    if (suite_ == QLatin1String("texmesh") && tex_) tex_->run_action(QStringLiteral("param_redo"));
 }
 
 void AssetsBridge::queueClear() {

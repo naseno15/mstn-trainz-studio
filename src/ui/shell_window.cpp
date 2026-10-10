@@ -80,7 +80,7 @@ QString page_verb(const QString& page, const QString& verb) {
         {QStringLiteral("sounds"), {{QStringLiteral("open"), QStringLiteral("call:browse")}, {QStringLiteral("saveAs"), QStringLiteral("call:saveAs")}}},
         {QStringLiteral("engine"), {{QStringLiteral("open"), QStringLiteral("call:openFile")}, {QStringLiteral("save"), QStringLiteral("call:saveFile")}, {QStringLiteral("saveAs"), QStringLiteral("call:saveFileAs")}, {QStringLiteral("undo"), QStringLiteral("call:undoEdit")}, {QStringLiteral("redo"), QStringLiteral("call:redoEdit")}}},
         {QStringLiteral("assets"), {{QStringLiteral("open"), QStringLiteral("call:openFolder")}, {QStringLiteral("save"), QStringLiteral("call:viewerSave")}}},
-        {QStringLiteral("texmesh"), {{QStringLiteral("open"), QStringLiteral("call:openFolder")}}},
+        {QStringLiteral("texmesh"), {{QStringLiteral("open"), QStringLiteral("call:openFolder")}, {QStringLiteral("undo"), QStringLiteral("call:undoEdit")}, {QStringLiteral("redo"), QStringLiteral("call:redoEdit")}}},
         {QStringLiteral("trainzutil"), {{QStringLiteral("open"), QStringLiteral("call:addFiles")}}},
     };
     return table.value(page).value(verb);

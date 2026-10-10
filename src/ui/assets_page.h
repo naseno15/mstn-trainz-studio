@@ -251,6 +251,8 @@ public:
     Q_INVOKABLE void viewerBack();
     Q_INVOKABLE void viewerExpand();
     Q_INVOKABLE void viewerSave();
+    Q_INVOKABLE void undoEdit();  // Edit ▸ Undo / Ctrl+Z (image editor)
+    Q_INVOKABLE void redoEdit();
     Q_INVOKABLE void viewerEngine();
     void applyEngineText(const QString& text);
     Q_INVOKABLE void viewerFast();
