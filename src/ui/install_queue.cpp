@@ -14,6 +14,7 @@ void InstallQueue::set_runner(Runner runner) { runner_ = std::move(runner); }
 
 void InstallQueue::enqueue(const QList<InstallJob>& jobs) {
     stopped_ = false;
+    if (active_ == 0 && pending_.isEmpty()) finished_.clear();  // a fresh batch must not carry the old one
     pending_ += jobs;
     start_next();
 }

@@ -505,7 +505,6 @@ QString trainzutil_under_common(const QString& common_dir) {
     QStringList hits;
     const QFileInfoList children = common.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QFileInfo& child : children) {
-        if (!child.fileName().contains(QLatin1String("trainz"), Qt::CaseInsensitive)) continue;
         const QString exe = child.filePath() + QStringLiteral("/TrainzUtil.exe");
         if (QFileInfo(exe).isFile()) hits << QFileInfo(exe).absoluteFilePath();
     }
@@ -518,6 +517,31 @@ QString trainzutil_under_common(const QString& common_dir) {
         return left_name.compare(right_name, Qt::CaseInsensitive) < 0;
     });
     return hits.isEmpty() ? QString() : hits.first();
+}
+
+// Every Steam library's steamapps/common: registry Steam path + libraryfolders.vdf "path" entries.
+QStringList steam_commons() {
+    QStringList roots;
+#ifdef Q_OS_WIN
+    for (const char* key : {"HKEY_CURRENT_USER\\Software\\Valve\\Steam", "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Valve\\Steam"}) {
+        const QSettings reg(QString::fromLatin1(key), QSettings::NativeFormat);
+        for (const char* name : {"SteamPath", "InstallPath"}) {
+            const QString value = reg.value(QString::fromLatin1(name)).toString();
+            if (!value.isEmpty()) roots << value;
+        }
+    }
+#endif
+    static const QRegularExpression path_re(QStringLiteral("\"path\"\\s+\"([^\"]+)\""));
+    const QStringList base = roots;
+    for (const QString& root : base) {
+        QFile vdf(QDir(root).filePath(QStringLiteral("steamapps/libraryfolders.vdf")));
+        if (!vdf.open(QIODevice::ReadOnly)) continue;
+        const QString text = QString::fromUtf8(vdf.readAll());
+        for (auto it = path_re.globalMatch(text); it.hasNext();) roots << QString(it.next().captured(1)).replace(QStringLiteral("\\\\"), QStringLiteral("/"));
+    }
+    QStringList out;
+    for (const QString& root : roots) out << QDir(root).filePath(QStringLiteral("steamapps/common"));
+    return out;
 }
 
 QString find_trainzutil(const QString& saved) {
@@ -551,6 +575,12 @@ QString find_trainzutil(const QString& saved) {
             seen.insert(key);
             commons << common;
         }
+    }
+    for (const QString& common : steam_commons()) {
+        const QString key = QDir::cleanPath(common).toLower();
+        if (seen.contains(key) || !QFileInfo(common).isDir()) continue;
+        seen.insert(key);
+        commons << common;
     }
     for (const QString& common : commons) {
         const QString hit = trainzutil_under_common(common);
@@ -1126,8 +1156,19 @@ void TrainzUtilBridge::showPage(const QString& page) {
 void TrainzUtilBridge::goHome() { emit homeRequested(); }
 
 void TrainzUtilBridge::browseUtil() {
-    const QString path = QFileDialog::getOpenFileName(nullptr, QStringLiteral("TrainzUtil.exe"), {}, QStringLiteral("TrainzUtil (TrainzUtil.exe)"));
-    if (path.isEmpty()) return;
+    // Pick the Trainz root folder (or a Steam library / its common folder); TrainzUtil.exe is located inside.
+    const QString dir = QFileDialog::getExistingDirectory(nullptr, QStringLiteral("Select the Trainz folder (or TrainzUtil.exe's folder)"), QFileInfo(util_path_).absolutePath());
+    if (dir.isEmpty()) return;
+    QString path = first_file({dir + QStringLiteral("/TrainzUtil.exe")});
+    if (path.isEmpty()) path = trainzutil_under_common(dir);
+    if (path.isEmpty()) path = trainzutil_under_common(dir + QStringLiteral("/steamapps/common"));
+    if (path.isEmpty()) path = trainzutil_under_common(dir + QStringLiteral("/common"));
+    if (path.isEmpty()) {
+        library_summary_ = QStringLiteral("TrainzUtil.exe was not found in ") + QDir::toNativeSeparators(dir);
+        note(library_summary_);
+        emit changed();
+        return;
+    }
     util_path_ = path;
     QSettings(QStringLiteral("MSTN"), QStringLiteral("TrainzStudio")).setValue(QStringLiteral("trainzutil/exe"), path);
     queue_->set_exe(path);
@@ -1140,6 +1181,12 @@ void TrainzUtilBridge::browseData() {
         return;
     }
     want_data_ = true;
+    if (util_path_.isEmpty() || !QFileInfo(util_path_).isFile()) {
+        want_data_ = false;
+        browseUtil();  // no TrainzUtil yet: let the user point at the Trainz folder
+        if (QFileInfo(util_path_).isFile()) want_data_ = true;
+        return;
+    }
     if (scanning_) {
         library_summary_ = QStringLiteral("Reading the Trainz data folder…");
         emit changed();
@@ -1282,9 +1329,15 @@ void TrainzUtilBridge::clearSources() {
         clearScripts();
         return;
     }
+    queue_->stop();
     sources_.clear();
     jobs_.clear();
     job_order_.clear();
+    job_pct_.clear();
+    job_status_.clear();
+    install_rows_.clear();
+    install_order_.clear();
+    publish_tasks();
     selected_source_.clear();
     view_stack_.clear();
     publish_sources();
@@ -1504,6 +1557,7 @@ void TrainzUtilBridge::installChecked() {
 }
 
 void TrainzUtilBridge::note_install(const QString& job_id, const QString& state, int percent, const QString& line) {
+    if (!jobs_.contains(job_id)) return;  // cleared/removed while a process was still reporting
     const QString key = QStringLiteral("install:") + job_id;
     QVariantMap row = install_rows_.value(key);
     if (row.isEmpty()) {
@@ -1801,7 +1855,12 @@ void TrainzUtilBridge::removeSource(const QString& source_id) {
     sources_.erase(it);
     for (auto job = jobs_.begin(); job != jobs_.end();) {
         if (job->source == path) {
-            job_order_.removeAll(job.key());
+            const QString key = job.key();
+            job_order_.removeAll(key);
+            job_pct_.remove(key);
+            job_status_.remove(key);
+            install_rows_.remove(QStringLiteral("install:") + key);
+            install_order_.removeAll(QStringLiteral("install:") + key);
             job = jobs_.erase(job);
         } else {
             ++job;

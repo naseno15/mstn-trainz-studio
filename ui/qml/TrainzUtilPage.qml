@@ -818,12 +818,11 @@ Item {
                         onClicked: bridge.browseData()
                     }
                     RaiseButton {
-                        visible: bridge.utilPath.indexOf("not found") >= 0
                         width: 40
                         height: 36
                         glyph: bridge.glyphFolder
                         fontName: bridge.iconFont
-                        tip: qsTr("Browse TrainzUtil.exe")
+                        tip: qsTr("Select the Trainz folder")
                         onClicked: bridge.browseUtil()
                     }
                     RaiseButton {
