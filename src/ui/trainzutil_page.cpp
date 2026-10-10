@@ -2213,6 +2213,10 @@ void TrainzUtilBridge::measurePacked() {
 }
 
 void TrainzUtilBridge::export_selected(bool separate) {
+    if (task_busy_) {
+        note(QStringLiteral("Wait for the current task"));
+        return;
+    }
     const QStringList kuids = library_->selected_kuids();
     if (kuids.isEmpty()) {
         note(QStringLiteral("Select at least one asset"));
@@ -2229,29 +2233,104 @@ void TrainzUtilBridge::export_selected(bool separate) {
     if (dest.isEmpty()) return;
     QHash<QString, QString> names;
     for (const QString& kuid : kuids) names.insert(kuid, library_->name_for(kuid));
-    const QString exe = util_path_;
-    note(QStringLiteral("Exporting…"));
-    QPointer<TrainzUtilBridge> self(this);
-    spawn([self, exe, kuids, names, separate, dest] {
-        QString text;
-        if (separate) {
-            int wrote = 0;
-            for (const QString& kuid : kuids) {
-                const QString raw = create_cdp(exe, dest + QLatin1Char('/') + cdp_stem(names.value(kuid), kuid) + QStringLiteral(".cdp"), {kuid});
-                if (blocked(raw)) {
-                    text = QStringLiteral("Open the Trainz Launcher first");
-                    break;
-                }
-                ++wrote;
-            }
-            if (text.isEmpty()) text = QStringLiteral("Exported %1 CDP files to %2").arg(wrote).arg(QDir::toNativeSeparators(dest));
-        } else {
-            text = tidy_trainzutil(create_cdp(exe, dest, kuids)) + QStringLiteral("\nExported ") + QDir::toNativeSeparators(dest);
+    const QString label = separate ? QStringLiteral("Each CDP") : QStringLiteral("Export");
+    const int gen = ++task_gen_;
+    task_busy_ = true;
+    QVariantList rows;
+    if (separate) {
+        for (const QString& kuid : kuids) {
+            rows << QVariantMap{
+                {QStringLiteral("taskId"), QStringLiteral("cdp:") + kuid},
+                {QStringLiteral("kuid"), kuid},
+                {QStringLiteral("name"), names.value(kuid)},
+                {QStringLiteral("action"), label},
+                {QStringLiteral("state"), QStringLiteral("Queued")},
+                {QStringLiteral("detail"), QStringLiteral("Queued")},
+                {QStringLiteral("log"), QStringLiteral("Queued")},
+                {QStringLiteral("percent"), 0},
+            };
         }
-        post([self, text] {
+    } else {
+        rows << QVariantMap{
+            {QStringLiteral("taskId"), QStringLiteral("cdp:one")},
+            {QStringLiteral("name"), QFileInfo(dest).fileName()},
+            {QStringLiteral("action"), label},
+            {QStringLiteral("state"), QStringLiteral("Queued")},
+            {QStringLiteral("detail"), QStringLiteral("%1 assets").arg(kuids.size())},
+            {QStringLiteral("log"), QStringLiteral("Queued")},
+            {QStringLiteral("percent"), 0},
+        };
+    }
+    batch_rows_ = rows;
+    task_summary_ = QStringLiteral("%1 · 0 of %2").arg(label).arg(rows.size());
+    task_percent_ = 0;
+    publish_tasks();
+    const QString exe = util_path_;
+    QPointer<TrainzUtilBridge> self(this);
+    spawn([self, exe, kuids, names, separate, dest, gen, label, rows]() mutable {
+        auto step = [&](const QString& summary, int percent, bool busy) {
+            post([self, gen, rows, summary, percent, busy] {
+                if (!self || gen != self->task_gen_) return;
+                self->task_busy_ = busy;
+                self->batch_rows_ = rows;
+                self->task_summary_ = summary;
+                self->task_percent_ = std::clamp(percent, 0, 100);
+                self->publish_tasks();
+            });
+        };
+        const int total = static_cast<int>(rows.size());
+        int failed = 0;
+        auto mark = [&](int i, bool ok, const QString& raw, const QString& path) {
+            QVariantMap row = rows[i].toMap();
+            const qint64 size = QFileInfo(path).size();
+            const auto [util_ok, util_detail] = task_outcome(raw);
+            const bool wrote = ok && util_ok && size > 0;
+            row[QStringLiteral("state")] = wrote ? QStringLiteral("Done") : QStringLiteral("Failed");
+            row[QStringLiteral("percent")] = 100;
+            row[QStringLiteral("log")] = raw;
+            row[QStringLiteral("detail")] = wrote ? QStringLiteral("Wrote %1 (%2)").arg(QFileInfo(path).fileName(), format_bytes(size)) : util_detail;
+            rows[i] = row;
+            if (!wrote) ++failed;
+            return wrote;
+        };
+        if (separate) {
+            for (int i = 0; i < total; ++i) {
+                QVariantMap row = rows[i].toMap();
+                const QString path = dest + QLatin1Char('/') + cdp_stem(names.value(row.value(QStringLiteral("kuid")).toString()), row.value(QStringLiteral("kuid")).toString()) + QStringLiteral(".cdp");
+                row[QStringLiteral("state")] = QStringLiteral("Running");
+                row[QStringLiteral("percent")] = 40;
+                row[QStringLiteral("detail")] = QFileInfo(path).fileName();
+                rows[i] = row;
+                step(QStringLiteral("%1 · %2 of %3").arg(label).arg(i + 1).arg(total), static_cast<int>((i + 0.4) / total * 100), true);
+                const QString raw = create_cdp(exe, path, {row.value(QStringLiteral("kuid")).toString()});
+                mark(i, !blocked(raw), raw, path);
+                if (blocked(raw)) {
+                    for (int j = i + 1; j < total; ++j) {
+                        QVariantMap rest = rows[j].toMap();
+                        rest[QStringLiteral("state")] = QStringLiteral("Stopped");
+                        rows[j] = rest;
+                    }
+                    step(QStringLiteral("Open the Trainz Launcher first"), (i + 1) * 100 / total, false);
+                    return;
+                }
+            }
+        } else {
+            QVariantMap row = rows[0].toMap();
+            row[QStringLiteral("state")] = QStringLiteral("Running");
+            row[QStringLiteral("percent")] = 40;
+            row[QStringLiteral("detail")] = QStringLiteral("createCDP × %1").arg(kuids.size());
+            rows[0] = row;
+            step(QStringLiteral("%1 · 1 of 1").arg(label), 40, true);
+            const QString raw = create_cdp(exe, dest, kuids);
+            mark(0, !blocked(raw), raw, dest);
+        }
+        QString summary = QStringLiteral("%1 · %2 done").arg(label).arg(total - failed);
+        if (failed) summary += QStringLiteral(" · %1 failed").arg(failed);
+        step(summary, 100, false);
+        post([self, summary] {
             if (!self) return;
-            self->report(text);
-            post_status(text.section(QLatin1Char('\n'), -1).trimmed());
+            self->report(summary);
+            post_status(summary);
         });
     });
 }
