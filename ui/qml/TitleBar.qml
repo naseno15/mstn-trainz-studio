@@ -2,21 +2,12 @@ import QtQuick
 
 Item {
     id: root
+    clip: true
 
-    Repeater {
-        model: 5
-        delegate: Rectangle {
-            required property int index
-            property real t: (index + 1) / 5
-            property real spread: 8 + t * 16
-            anchors.fill: parent
-            anchors.leftMargin: 10 - spread * 0.45
-            anchors.rightMargin: 10 - spread * 0.45
-            anchors.topMargin: 8 + index * 0.6
-            anchors.bottomMargin: 2 - t * 4
-            radius: 24
-            color: Qt.rgba(0, 0, 0, (bridge.dark ? 0.20 : 0.09) * (1.05 - t))
-        }
+    // Same tone as the top of the page below, so the strip reads as one surface (no black band).
+    Rectangle {
+        anchors.fill: parent
+        color: bridge.dark ? "#1c2430" : "#f7f8fb"
     }
 
     Rectangle {
