@@ -1,3 +1,4 @@
+#include "ui/app_update.h"
 #include "ui/crash_report.h"
 #include "ui/feedback.h"
 #include "ui/shell_window.h"
@@ -264,6 +265,7 @@ private:
 int main(int argc, char** argv) {
     prepare_qt_runtime();
     QApplication app(argc, argv);
+    apply_ui_font();
     install_crash_log();
     app.installEventFilter(new DropHighlight(&app));
     BootDialog boot;
@@ -277,6 +279,7 @@ int main(int argc, char** argv) {
         boot.dissolve();
         if (const QString tail = previous_crash_tail(); !tail.isEmpty())
             show_crash_dialog(QStringLiteral("Trainz Studio closed unexpectedly"), QStringLiteral("The last session did not exit cleanly. The end of its log is below."), tail, QStringLiteral("warning"));
+        start_update_check(&window);
         const int code = app.exec();
         end_crash_session();
         return code;
