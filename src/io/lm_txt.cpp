@@ -52,6 +52,18 @@ LmFile parse_lm_txt(const std::string& text) {
     return lm;
 }
 
+std::string lm_mesh_ref(const std::string& path) {
+    std::string name = path;
+    const auto slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) name = name.substr(slash + 1);
+    if (name.size() >= 4) {
+        std::string tail = name.substr(name.size() - 4);
+        for (char& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (tail == ".fbx") return name.substr(0, name.size() - 4) + ".trainzmesh";
+    }
+    return name;
+}
+
 std::string format_lm_txt(const LmFile& lm) {
     if (lm.meshes.empty()) throw std::runtime_error("LM needs at least one mesh");
     std::vector<LmMesh> meshes = lm.meshes;
@@ -76,4 +88,8 @@ void check_lm_txt_logic() {
     if (lm.meshes.size() != 2 || lm.meshes[0].name != "far.im") throw std::runtime_error("lm sort");
     const std::string text = format_lm_txt(lm);
     if (text.find("name=\"far.im\"") == std::string::npos || text.find("calcPoint = near;") == std::string::npos) throw std::runtime_error("lm format");
+    if (lm_mesh_ref("door/doorback.fbx") != "doorback.trainzmesh") throw std::runtime_error("lm fbx ref");
+    if (lm_mesh_ref("Door.FBX") != "Door.trainzmesh") throw std::runtime_error("lm fbx case");
+    if (lm_mesh_ref("cab.im") != "cab.im") throw std::runtime_error("lm im ref");
+    if (lm_mesh_ref("body.trainzmesh") != "body.trainzmesh") throw std::runtime_error("lm trainzmesh ref");
 }

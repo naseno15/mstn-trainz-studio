@@ -21,4 +21,6 @@ struct LmFile {
 
 LmFile parse_lm_txt(const std::string& text);
 std::string format_lm_txt(const LmFile& lm);
+// Name written into .lm.txt. FBX is submitted to Content Manager, which compiles it to .trainzmesh. .im stays .im.
+std::string lm_mesh_ref(const std::string& path);
 void check_lm_txt_logic();

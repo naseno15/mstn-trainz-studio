@@ -1875,7 +1875,7 @@ void Texmesh::add_meshes(const QStringList& paths) {
         lm_table_->setItem(row, 0, lod);
         auto* width = new QTableWidgetItem(QStringLiteral("1"));
         lm_table_->setItem(row, 1, width);
-        auto* name = new QTableWidgetItem(path == QLatin1String("mesh.im") ? path : QFileInfo(path).fileName());
+        auto* name = new QTableWidgetItem(QString::fromStdString(lm_mesh_ref(path.toStdString())));
         if (path != QLatin1String("mesh.im")) name->setData(Qt::UserRole, path);
         name->setToolTip(path);
         lm_table_->setItem(row, 2, name);
