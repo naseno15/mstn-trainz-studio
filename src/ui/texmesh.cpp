@@ -1145,7 +1145,7 @@ QString Texmesh::foot_note() const { return status_.isEmpty() ? blurb() : status
 bool Texmesh::show_queue() const { return page_ == QLatin1String("parameter"); }
 int Texmesh::dock_width() const {
     // Mesh Lods, Texture Params, Texture Editor, Texture Denoiser share one dock width.
-    return 440;
+    return 260;
 }
 QString Texmesh::status_line() const { return status_; }
 
@@ -1178,7 +1178,6 @@ QString Texmesh::actions_json() const {
         add(QStringLiteral("Revert"), QStringLiteral("denoise_revert"), false);
     } else {
         add(QStringLiteral("Add mesh row"), QStringLiteral("lm_add"), false);
-        add(QStringLiteral("Remove selected"), QStringLiteral("lm_remove"), false);
         add(QStringLiteral("Rules scan"), QStringLiteral("lm_rules_scan"), true);
         add(QStringLiteral("Scan materials"), QStringLiteral("lm_mat_scan"), false);
         add(QStringLiteral("Fix material names…"), QStringLiteral("lm_mat_fix"), true);
@@ -1473,6 +1472,9 @@ void Texmesh::run_action(const QString& action) {
     else if (action == QLatin1String("lm_remove")) {
         const auto rows = lm_table_->selectionModel()->selectedRows();
         for (int i = rows.size() - 1; i >= 0; --i) lm_table_->removeRow(rows[i].row());
+        refresh_mesh();
+    } else if (action == QLatin1String("lm_clear")) {
+        if (lm_table_ != nullptr) lm_table_->setRowCount(0);
         refresh_mesh();
     } else if (action == QLatin1String("lm_rules_scan") || action == QLatin1String("lm_rules_fix")) scan_mesh_rules();
     else if (action == QLatin1String("lm_mat_scan")) scan_materials(false);

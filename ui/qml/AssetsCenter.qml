@@ -103,19 +103,48 @@ Item {
                 anchors.right: parent.right
                 height: center.split ? Math.max(80, (work.height - 36) * center.splitRatio) : 0
 
-                Text {
-                    id: listLab
+                Item {
+                    id: listBar
                     anchors.top: parent.top
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    text: (typeof bridge.centerList === "string" ? qsTr(bridge.centerList) : bridge.centerList)
-                    color: center.mute
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
+                    height: 28
+
+                    Text {
+                        id: listLab
+                        anchors.left: parent.left
+                        anchors.right: meshTools.left
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: (typeof bridge.centerList === "string" ? qsTr(bridge.centerList) : bridge.centerList)
+                        color: center.mute
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+                    Row {
+                        id: meshTools
+                        visible: bridge.page === "meshops"
+                        width: visible ? implicitWidth : 0
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 6
+                        RaiseButton {
+                            width: 128
+                            height: 28
+                            label: qsTr("Clear selected")
+                            onClicked: bridge.runAction("lm_remove")
+                        }
+                        RaiseButton {
+                            width: 92
+                            height: 28
+                            label: qsTr("Clear all")
+                            onClicked: bridge.runAction("lm_clear")
+                        }
+                    }
                 }
                 Item {
                     id: tableSlot
-                    anchors.top: listLab.bottom
+                    anchors.top: listBar.bottom
                     anchors.topMargin: 4
                     anchors.left: parent.left
                     anchors.right: parent.right

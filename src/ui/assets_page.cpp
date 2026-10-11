@@ -615,7 +615,7 @@ void AssetsBridge::setSideW(double width) {
     emit layoutChanged();
 }
 void AssetsBridge::setDockW(double width) {
-    const int next = std::max(280, std::min(720, static_cast<int>(width)));
+    const int next = std::max(220, std::min(720, static_cast<int>(width)));
     if (next == dock_w_) return;
     dock_w_ = next;
     emit layoutChanged();
