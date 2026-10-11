@@ -229,6 +229,8 @@ public:
     Q_INVOKABLE void dropPaths(const QStringList& paths);
     Q_INVOKABLE void dropCenter(const QStringList& paths);
     Q_INVOKABLE void pickCenter(int row);
+    Q_INVOKABLE void setMeshLod(int row, bool on);
+    Q_INVOKABLE void setMeshWidth(int row, const QString& text);
     Q_INVOKABLE void pickQueue(int row);
     Q_INVOKABLE void openFinder(int row);
     Q_INVOKABLE void pickFinder(int row);

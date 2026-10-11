@@ -141,19 +141,96 @@ Item {
                         anchors.fill: parent
                         onFilesDropped: function (drop) { bridge.dropCenter(drop.urls) }
                     }
+                    Item {
+                        id: meshHead
+                        visible: bridge.page === "meshops"
+                        anchors.top: parent.top
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        height: visible ? 30 : 0
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 6
+                            anchors.bottomMargin: 0
+                            radius: 7
+                            color: Qt.rgba(0, 0, 0, bridge.dark ? 0.28 : 0.07)
+                        }
+                        Row {
+                            anchors.fill: parent
+                            anchors.margins: 6
+                            anchors.bottomMargin: 0
+                            Text {
+                                width: Math.max(80, meshHead.width - 12 - 72 - 52 - 108)
+                                height: parent.height
+                                leftPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("Name")
+                                color: bridge.dark ? "#b8bec8" : "#4d5662"
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
+                            Text {
+                                width: 72
+                                height: parent.height
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("Width")
+                                color: bridge.dark ? "#b8bec8" : "#4d5662"
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
+                            Text {
+                                width: 52
+                                height: parent.height
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("LOD")
+                                color: bridge.dark ? "#b8bec8" : "#4d5662"
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
+                            Text {
+                                width: 108
+                                height: parent.height
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("Type")
+                                color: bridge.dark ? "#b8bec8" : "#4d5662"
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
+                        }
+                    }
                     ListView {
                         id: fileList
-                        anchors.fill: parent
+                        anchors.top: meshHead.bottom
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
                         clip: true
-                        spacing: 4
+                        spacing: bridge.page === "meshops" ? 0 : 4
                         model: tableSlot.rows
-                        delegate: Rectangle {
+                        delegate: Item {
                             required property var modelData
                             width: fileList.width
-                            height: 36
-                            radius: 8
-                            color: modelData.on ? Qt.rgba(1, 0.35, 0.12, 0.28) : Qt.rgba(1, 1, 1, bridge.dark ? 0.05 : 0.45)
+                            height: bridge.page === "meshops" ? 32 : 36
+                            HoverHandler { id: rowHover }
+
+                            Rectangle {
+                                visible: bridge.page !== "meshops"
+                                anchors.fill: parent
+                                radius: 8
+                                color: modelData.on ? Qt.rgba(1, 0.35, 0.12, 0.28) : Qt.rgba(1, 1, 1, bridge.dark ? 0.05 : 0.45)
+                            }
+                            Rectangle {
+                                visible: bridge.page === "meshops" && (modelData.on || rowHover.hovered)
+                                anchors.fill: parent
+                                anchors.leftMargin: 4
+                                anchors.rightMargin: 4
+                                anchors.topMargin: 1
+                                anchors.bottomMargin: 1
+                                radius: 6
+                                color: modelData.on ? "#0a84ff" : Qt.rgba(1, 1, 1, bridge.dark ? 0.06 : 0.45)
+                            }
                             Text {
+                                visible: bridge.page !== "meshops"
                                 anchors.fill: parent
                                 anchors.margins: 8
                                 verticalAlignment: Text.AlignVCenter
@@ -162,7 +239,94 @@ Item {
                                 font.pixelSize: 12
                                 elide: Text.ElideRight
                             }
-                            TapHandler { onTapped: bridge.pickCenter(modelData.row) }
+                            Row {
+                                visible: bridge.page === "meshops"
+                                anchors.fill: parent
+                                anchors.leftMargin: 6
+                                anchors.rightMargin: 6
+                                Item {
+                                    width: Math.max(80, fileList.width - 12 - 72 - 52 - 108)
+                                    height: parent.height
+                                    Item {
+                                        x: 8
+                                        width: 22
+                                        height: 22
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        Rectangle {
+                                            x: 4
+                                            y: 0
+                                            width: 14
+                                            height: 18
+                                            radius: 2
+                                            color: modelData.on ? "#ffffff" : (bridge.dark ? "#e8eaed" : "#ffffff")
+                                            border.width: 1
+                                            border.color: modelData.on ? Qt.rgba(1, 1, 1, 0.65) : "#c5c9d1"
+                                        }
+                                        Rectangle {
+                                            x: 12
+                                            y: 0
+                                            width: 6
+                                            height: 6
+                                            color: modelData.color || "#ff9f0a"
+                                        }
+                                        Rectangle {
+                                            x: 7
+                                            y: 11
+                                            width: 8
+                                            height: 2
+                                            radius: 1
+                                            color: modelData.on ? "#0a84ff" : (modelData.color || "#ff9f0a")
+                                        }
+                                    }
+                                    Text {
+                                        x: 36
+                                        width: parent.width - 42
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: modelData.name || ""
+                                        color: modelData.on ? "#ffffff" : (bridge.dark ? "#f2f4f8" : "#1d1d1f")
+                                        font.pixelSize: 12
+                                        elide: Text.ElideRight
+                                    }
+                                    TapHandler { onTapped: bridge.pickCenter(modelData.row) }
+                                }
+                                TextInput {
+                                    width: 72
+                                    height: parent.height
+                                    verticalAlignment: Text.AlignVCenter
+                                    text: modelData.width || "1"
+                                    color: modelData.on ? "#ffffff" : (bridge.dark ? "#f2f4f8" : "#1d1d1f")
+                                    font.pixelSize: 12
+                                    selectByMouse: true
+                                    onEditingFinished: bridge.setMeshWidth(modelData.row, text)
+                                }
+                                Item {
+                                    width: 52
+                                    height: parent.height
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 16
+                                        height: 16
+                                        radius: 4
+                                        color: modelData.lod ? "#ff5a1f" : "transparent"
+                                        border.width: 1
+                                        border.color: modelData.on ? "#ffffff" : "#ff5a1f"
+                                    }
+                                    TapHandler { onTapped: bridge.setMeshLod(modelData.row, !modelData.lod) }
+                                }
+                                Text {
+                                    width: 108
+                                    height: parent.height
+                                    verticalAlignment: Text.AlignVCenter
+                                    text: modelData.type || ""
+                                    color: modelData.on ? "#ffffff" : (modelData.color || "#ff9f0a")
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                }
+                            }
+                            TapHandler {
+                                enabled: bridge.page !== "meshops"
+                                onTapped: bridge.pickCenter(modelData.row)
+                            }
                         }
                     }
                     Text {

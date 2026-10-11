@@ -1366,6 +1366,12 @@ void AssetsBridge::dropCenter(const QStringList& paths) {
 void AssetsBridge::pickCenter(int row) {
     if (suite_ == QLatin1String("texmesh") && tex_ != nullptr) tex_->pick_row(row);
 }
+void AssetsBridge::setMeshLod(int row, bool on) {
+    if (suite_ == QLatin1String("texmesh") && tex_ != nullptr) tex_->set_mesh_lod(row, on);
+}
+void AssetsBridge::setMeshWidth(int row, const QString& text) {
+    if (suite_ == QLatin1String("texmesh") && tex_ != nullptr) tex_->set_mesh_width(row, text);
+}
 
 void AssetsBridge::dropPaths(const QStringList& paths) {
     QStringList local;

@@ -44,6 +44,8 @@ public:
     QString well_right() const;
     void drop_paths(const QStringList& paths);
     void pick_row(int row);
+    void set_mesh_lod(int row, bool on);
+    void set_mesh_width(int row, const QString& text);
     QString footer_cap() const;
     QString foot_note() const;
     bool show_queue() const;

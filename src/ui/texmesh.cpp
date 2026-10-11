@@ -1204,7 +1204,31 @@ static QString table_dump(QTableWidget* table) {
 
 QString Texmesh::table_json() const {
     if (page_ == QLatin1String("texture")) return table_dump(tex_table_);
-    if (page_ == QLatin1String("meshops")) return table_dump(lm_table_);
+    if (page_ == QLatin1String("meshops")) {
+        QJsonArray rows;
+        if (lm_table_ == nullptr) return QStringLiteral("[]");
+        for (int row = 0; row < lm_table_->rowCount(); ++row) {
+            auto* name = lm_table_->item(row, 2);
+            auto* width = lm_table_->item(row, 1);
+            auto* lod = lm_table_->item(row, 0);
+            if (name == nullptr) continue;
+            const QString source = name->data(Qt::UserRole).toString();
+            const QString suf = QFileInfo(source.isEmpty() ? name->text() : source).suffix().toLower();
+            const bool fbx = suf == QLatin1String("fbx");
+            rows.append(QJsonObject{
+                {QStringLiteral("row"), row},
+                {QStringLiteral("name"), name->text()},
+                {QStringLiteral("width"), width == nullptr ? QStringLiteral("1") : width->text()},
+                {QStringLiteral("lod"), lod != nullptr && lod->checkState() == Qt::Checked},
+                {QStringLiteral("type"), fbx ? QStringLiteral("FBX") : (suf == QLatin1String("im") ? QStringLiteral("IM") : QStringLiteral("trainzmesh"))},
+                {QStringLiteral("color"), QStringLiteral("#ff9f0a")},
+                {QStringLiteral("kind"), QStringLiteral("file")},
+                {QStringLiteral("on"), row == lm_table_->currentRow()},
+                {QStringLiteral("text"), name->text()},
+            });
+        }
+        return QString::fromUtf8(QJsonDocument(rows).toJson(QJsonDocument::Compact));
+    }
     return QStringLiteral("[]");
 }
 
@@ -1257,6 +1281,22 @@ void Texmesh::pick_row(int row) {
     QTableWidget* table = page_ == QLatin1String("meshops") ? lm_table_ : tex_table_;
     if (table == nullptr || row < 0 || row >= table->rowCount()) return;
     table->selectRow(row);
+    emit changed();
+}
+
+void Texmesh::set_mesh_lod(int row, bool on) {
+    if (lm_table_ == nullptr || row < 0 || row >= lm_table_->rowCount()) return;
+    auto* lod = lm_table_->item(row, 0);
+    if (lod == nullptr) return;
+    lod->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+    emit changed();
+}
+
+void Texmesh::set_mesh_width(int row, const QString& text) {
+    if (lm_table_ == nullptr || row < 0 || row >= lm_table_->rowCount()) return;
+    auto* width = lm_table_->item(row, 1);
+    if (width == nullptr) return;
+    width->setText(text.trimmed().isEmpty() ? QStringLiteral("1") : text.trimmed());
     emit changed();
 }
 
