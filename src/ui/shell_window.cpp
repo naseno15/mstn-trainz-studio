@@ -36,6 +36,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QUrl>
 #include <QKeySequence>
 #include <QMessageBox>
 #include <QSettings>
@@ -174,7 +175,7 @@ void ShellBridge::openStudio(const QString& studio_id) {
     set_page(studio_id);
 }
 
-void ShellBridge::dropUrls(const QVariantList&) {}
+void ShellBridge::dropUrls(const QVariantList& urls) { emit filesDropped(urls); }
 
 void ShellBridge::requestClose() { emit closeRequested(); }
 void ShellBridge::requestMin() { emit minRequested(); }
@@ -273,77 +274,25 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     footer_ = load_quick(QStringLiteral("StatusBar.qml"), false);
     footer_->setFixedHeight(30);
     qApp->installEventFilter(this);
-    boot_stage(QStringLiteral("Opening TrainzUtil studio (library, installer, backups)"), 44);
 
     blank_ = new QLabel(QStringLiteral("Home"));
     blank_->setAlignment(Qt::AlignCenter);
     apply_themed_qss(blank_, QStringLiteral("background:#12161c;color:#f2f4f8;font-size:28px;"));
 
-    trainz_ = new TrainzUtilPage(this);
-    connect(trainz_, &TrainzUtilPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
-    boot_stage(QStringLiteral("Opening Engine Tuner studio (curves, simulation)"), 54);
-    engine_ = new EngineTunerPage(this);
-    boot_stage(QStringLiteral("Opening Assets Tools and Texture & Mesh studios"), 62);
-    assets_ = new AssetsPage(this);
-    boot_stage(QStringLiteral("Wiring studio links"), 70);
-    connect(engine_, &EngineTunerPage::homeRequested, this, [this] {
-        if (!engine_kuid_.isEmpty()) {
-            engine_kuid_.clear();
-            bridge_->set_page(QStringLiteral("trainzutil"));
-            return;
-        }
-        bridge_->set_page(engine_->cdpSession() ? QStringLiteral("assets") : QStringLiteral("home"));
-    });
-    connect(engine_, &EngineTunerPage::cdpSaveRequested, this, [this](const QString& text) {
-        if (!engine_kuid_.isEmpty()) {
-            trainz_->commit_enginespec(engine_kuid_, text);
-            engine_kuid_.clear();
-            bridge_->set_page(QStringLiteral("trainzutil"));
-            return;
-        }
-        assets_->applyEngineText(text);
-        bridge_->set_page(QStringLiteral("assets"));
-    });
-    connect(trainz_, &TrainzUtilPage::engineRequested, this, [this](const QString& kuid, const QString& text, const QString&) {
-        engine_kuid_ = kuid;
-        engine_->loadCdpText(text);
-        bridge_->set_page(QStringLiteral("engine"));
-    });
-    connect(trainz_, &TrainzUtilPage::sceneRequested, this, [this](const QStringList& paths, const QStringList& labels, const QList<double>& yaws) {
-        // Switch first so Mesh Studio's load sheet (Mesh i / n) is visible while the scene builds.
-        bridge_->set_page(QStringLiteral("mesh"));
-        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-        mesh_->loadScene(paths, labels, yaws);
-    });
-    connect(trainz_, &TrainzUtilPage::packagesRequested, this, [this](const QString& folder) {
-        bridge_->set_page(QStringLiteral("assets"));
-        assets_->setPage(QStringLiteral("packages"));
-        if (!folder.isEmpty()) assets_->openPaths({folder});
-    });
-    connect(assets_, &AssetsPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
-    connect(assets_, &AssetsPage::meshRequested, this, [this](const QString& path) {
-        mesh_->loadFile(path);
-        bridge_->set_page(QStringLiteral("mesh"));
-    });
-    connect(assets_, &AssetsPage::engineRequested, this, [this](const QString& text, const QString&) {
-        engine_->loadCdpText(text);
-        bridge_->set_page(QStringLiteral("engine"));
-    });
-    boot_stage(QStringLiteral("Opening Sounds Studio (waveform, loop QC)"), 74);
-    sounds_ = new SoundsPage(this);
-    boot_stage(QStringLiteral("Opening Mesh Studio (3D viewport, PBR, lamps)"), 78);
-    connect(sounds_, &SoundsPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
-    mesh_ = new MeshStudioPage(this);
-    connect(mesh_, &MeshStudioPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
     stack_ = new QStackedWidget(this);
     stack_->addWidget(home_);
     stack_->addWidget(blank_);
-    stack_->addWidget(trainz_);
-    stack_->addWidget(engine_);
-    stack_->addWidget(assets_);
-    stack_->addWidget(sounds_);
-    stack_->addWidget(mesh_);
-    boot_stage(QStringLiteral("Assembling window layout, menus and shortcuts"), 86);
+    slot_trainz_ = new QWidget(this);
+    slot_engine_ = new QWidget(this);
+    slot_assets_ = new QWidget(this);
+    slot_sounds_ = new QWidget(this);
+    slot_mesh_ = new QWidget(this);
+    stack_->addWidget(slot_trainz_);
+    stack_->addWidget(slot_engine_);
+    stack_->addWidget(slot_assets_);
+    stack_->addWidget(slot_sounds_);
+    stack_->addWidget(slot_mesh_);
+    boot_stage(QStringLiteral("Assembling window layout, menus and shortcuts"), 94);
 
     title_->setFixedHeight(60);
     auto* layout = new QVBoxLayout(this);
@@ -380,6 +329,7 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
         const bool texmesh = page == QLatin1String("texmesh");
         const bool sounds = page == QLatin1String("sounds");
         const bool mesh = page == QLatin1String("mesh");
+        ensure_studio(page);
         if (assets || texmesh) assets_->setSuite(page);
         const int next = home ? 0 : trainz ? 2 : engine ? 3 : (assets || texmesh) ? 4 : sounds ? 5 : mesh ? 6 : 1;
         const int prev = stack_->currentIndex();
@@ -406,6 +356,15 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     });
     connect(bridge_, &ShellBridge::moveRequested, this, &ShellWindow::begin_move);
     connect(bridge_, &ShellBridge::actionRequested, this, &ShellWindow::run_action);
+    connect(bridge_, &ShellBridge::filesDropped, this, [this](const QVariantList& urls) {
+        QStringList paths;
+        for (const QVariant& value : urls) {
+            const QUrl url(value.toString());
+            const QString path = url.isLocalFile() ? url.toLocalFile() : value.toString();
+            if (!path.isEmpty()) paths << path;
+        }
+        open_paths(paths);
+    });
     connect(UiTheme::instance(), &UiTheme::changed, bridge_, &ShellBridge::changed);
     connect(UiTheme::instance(), &UiTheme::changed, this, [this] {
         const QColor clear(ui_dark() ? QStringLiteral("#12161c") : QStringLiteral("#e9edf2"));
@@ -418,11 +377,6 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
             if (view->quickWindow() && view->quickWindow()->color().alpha() == 255) view->setClearColor(clear);
         }
     });
-    for (QWidget* page : {static_cast<QWidget*>(trainz_), static_cast<QWidget*>(engine_), static_cast<QWidget*>(assets_), static_cast<QWidget*>(sounds_), static_cast<QWidget*>(mesh_)}) {
-        for (QObject* child : page->children()) {
-            if (QByteArray(child->metaObject()->className()).endsWith("Bridge")) connect(UiTheme::instance(), SIGNAL(changed()), child, SIGNAL(changed()));
-        }
-    }
     bridge_->set_dark(studio_settings().value(QStringLiteral("ui/theme")).toString() != QLatin1String("light"));
 
     // Window-wide so they fire over the QQuickWidget pages; focused QML text fields still keep their own Ctrl+Z.
@@ -440,8 +394,9 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     };
     for (const auto& key : keys) {
         auto* shortcut = new QShortcut(key.first, this);
-        shortcut->setContext(Qt::WindowShortcut);
         const QString act = key.second;
+        // Save has to reach the focused editor. Other keys stay window-wide so text fields keep Ctrl+Z.
+        shortcut->setContext(act == QLatin1String("verb:save") ? Qt::ApplicationShortcut : Qt::WindowShortcut);
         connect(shortcut, &QShortcut::activated, this, [this, act] { run_action(act); });
     }
     auto* quit = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Q")), this);
@@ -451,6 +406,107 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
         if (bridge_->page() == QLatin1String("mesh")) run_action(QStringLiteral("setpage:settings"));
     });
     boot_stage(QStringLiteral("Ready — opening window"), 100);
+}
+
+void ShellWindow::ensure_studio(const QString& page) {
+    if (page == QLatin1String("trainzutil")) studio_trainz();
+    else if (page == QLatin1String("engine")) studio_engine();
+    else if (page == QLatin1String("assets") || page == QLatin1String("texmesh")) studio_assets();
+    else if (page == QLatin1String("sounds")) studio_sounds();
+    else if (page == QLatin1String("mesh")) studio_mesh();
+}
+
+void ShellWindow::take_slot(QWidget*& slot, QWidget* page) {
+    const int index = stack_->indexOf(slot);
+    stack_->removeWidget(slot);
+    slot->deleteLater();
+    slot = nullptr;
+    stack_->insertWidget(index, page);
+    for (QObject* child : page->children()) {
+        if (QByteArray(child->metaObject()->className()).endsWith("Bridge"))
+            connect(UiTheme::instance(), SIGNAL(changed()), child, SIGNAL(changed()));
+    }
+}
+
+TrainzUtilPage* ShellWindow::studio_trainz() {
+    if (trainz_) return trainz_;
+    trainz_ = new TrainzUtilPage(this);
+    connect(trainz_, &TrainzUtilPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
+    connect(trainz_, &TrainzUtilPage::engineRequested, this, [this](const QString& kuid, const QString& text, const QString&) {
+        engine_kuid_ = kuid;
+        studio_engine()->loadCdpText(text);
+        bridge_->set_page(QStringLiteral("engine"));
+    });
+    connect(trainz_, &TrainzUtilPage::sceneRequested, this, [this](const QStringList& paths, const QStringList& labels, const QList<double>& yaws) {
+        // Switch first so Mesh Studio's load sheet (Mesh i / n) is visible while the scene builds.
+        bridge_->set_page(QStringLiteral("mesh"));
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        studio_mesh()->loadScene(paths, labels, yaws);
+    });
+    connect(trainz_, &TrainzUtilPage::packagesRequested, this, [this](const QString& folder) {
+        bridge_->set_page(QStringLiteral("assets"));
+        studio_assets()->setPage(QStringLiteral("packages"));
+        if (!folder.isEmpty()) studio_assets()->openPaths({folder});
+    });
+    take_slot(slot_trainz_, trainz_);
+    return trainz_;
+}
+
+EngineTunerPage* ShellWindow::studio_engine() {
+    if (engine_) return engine_;
+    engine_ = new EngineTunerPage(this);
+    connect(engine_, &EngineTunerPage::homeRequested, this, [this] {
+        if (!engine_kuid_.isEmpty()) {
+            engine_kuid_.clear();
+            bridge_->set_page(QStringLiteral("trainzutil"));
+            return;
+        }
+        bridge_->set_page(engine_->cdpSession() ? QStringLiteral("assets") : QStringLiteral("home"));
+    });
+    connect(engine_, &EngineTunerPage::cdpSaveRequested, this, [this](const QString& text) {
+        if (!engine_kuid_.isEmpty()) {
+            studio_trainz()->commit_enginespec(engine_kuid_, text);
+            engine_kuid_.clear();
+            bridge_->set_page(QStringLiteral("trainzutil"));
+            return;
+        }
+        studio_assets()->applyEngineText(text);
+        bridge_->set_page(QStringLiteral("assets"));
+    });
+    take_slot(slot_engine_, engine_);
+    return engine_;
+}
+
+AssetsPage* ShellWindow::studio_assets() {
+    if (assets_) return assets_;
+    assets_ = new AssetsPage(this);
+    connect(assets_, &AssetsPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
+    connect(assets_, &AssetsPage::meshRequested, this, [this](const QString& path) {
+        bridge_->set_page(QStringLiteral("mesh"));
+        studio_mesh()->loadFile(path);
+    });
+    connect(assets_, &AssetsPage::engineRequested, this, [this](const QString& text, const QString&) {
+        studio_engine()->loadCdpText(text);
+        bridge_->set_page(QStringLiteral("engine"));
+    });
+    take_slot(slot_assets_, assets_);
+    return assets_;
+}
+
+SoundsPage* ShellWindow::studio_sounds() {
+    if (sounds_) return sounds_;
+    sounds_ = new SoundsPage(this);
+    connect(sounds_, &SoundsPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
+    take_slot(slot_sounds_, sounds_);
+    return sounds_;
+}
+
+MeshStudioPage* ShellWindow::studio_mesh() {
+    if (mesh_) return mesh_;
+    mesh_ = new MeshStudioPage(this);
+    connect(mesh_, &MeshStudioPage::homeRequested, this, [this] { bridge_->set_page(QStringLiteral("home")); });
+    take_slot(slot_mesh_, mesh_);
+    return mesh_;
 }
 
 QQuickWidget* ShellWindow::load_quick(const QString& file, bool translucent) {
@@ -624,30 +680,53 @@ void ShellWindow::run_action(const QString& act_id) {
 
 void ShellWindow::open_any() {
     const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open"), {}, QStringLiteral("Trainz files (*.trainzmesh *.im *.fbx *.wav *.cdp *.zip *.txt);;All files (*)"));
-    if (path.isEmpty()) return;
-    const QString ext = QFileInfo(path).suffix().toLower();
-    if (ext == QLatin1String("trainzmesh") || ext == QLatin1String("im") || ext == QLatin1String("fbx")) {
+    if (!path.isEmpty()) open_paths({path});
+}
+
+void ShellWindow::open_paths(const QStringList& paths) {
+    QStringList meshes;
+    QStringList packs;
+    QString wav;
+    QString text;
+    for (const QString& path : paths) {
+        if (path.isEmpty()) continue;
+        const QString ext = QFileInfo(path).suffix().toLower();
+        if (ext == QLatin1String("trainzmesh") || ext == QLatin1String("im") || ext == QLatin1String("fbx")) meshes << path;
+        else if (ext == QLatin1String("cdp") || ext == QLatin1String("zip") || ext == QLatin1String("tzarc")) packs << path;
+        else if (ext == QLatin1String("wav")) {
+            if (wav.isEmpty()) wav = path;
+        } else if (text.isEmpty()) text = path;
+    }
+    if (!meshes.isEmpty()) {
         bridge_->set_page(QStringLiteral("mesh"));
-        mesh_->loadFile(path);
+        if (meshes.size() == 1) {
+            studio_mesh()->loadFile(meshes.first());
+            return;
+        }
+        QStringList labels;
+        for (const QString& path : meshes) labels << QFileInfo(path).fileName();
+        studio_mesh()->loadScene(meshes, labels, {});
         return;
     }
-    if (ext == QLatin1String("cdp") || ext == QLatin1String("zip")) {
+    if (!packs.isEmpty()) {
         bridge_->set_page(QStringLiteral("assets"));
-        assets_->openPaths({path});
+        studio_assets()->openPaths(packs);
         return;
     }
+    const QString path = !wav.isEmpty() ? wav : text;
+    if (path.isEmpty()) return;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         post_status(QStringLiteral("Could not open ") + QFileInfo(path).fileName());
         return;
     }
-    if (ext == QLatin1String("wav")) {
+    if (!wav.isEmpty()) {
         bridge_->set_page(QStringLiteral("sounds"));
-        sounds_->loadBytes(file.readAll(), path);
+        studio_sounds()->loadBytes(file.readAll(), wav);
         return;
     }
     bridge_->set_page(QStringLiteral("engine"));
-    engine_->loadText(QString::fromUtf8(file.readAll()));
+    studio_engine()->loadText(QString::fromUtf8(file.readAll()));
 }
 
 void ShellWindow::fade_out(const QPixmap& snap) {

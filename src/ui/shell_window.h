@@ -48,7 +48,7 @@ public:
     QString copy() const { return QStringLiteral("Copyright MSTN Production"); }
     QString cta() const { return QStringLiteral("Open  →"); }
     QString dropTitle() const { return QStringLiteral("Drop files"); }
-    QString dropHint() const { return QStringLiteral(".trainzmesh  ·  .fbx  ·  .wav  ·  .cdp"); }
+    QString dropHint() const { return QStringLiteral(".trainzmesh  ·  .im  ·  .fbx  ·  .wav  ·  .cdp"); }
     QString iconFont() const { return material_icon_family(); }
     QVariantList cards() const { return cards_; }
     QString windowTitle() const { return title_; }
@@ -87,6 +87,7 @@ signals:
     void zoomRequested();
     void moveRequested();
     void actionRequested(const QString& act_id);
+    void filesDropped(const QVariantList& urls);
 
 private:
     QString title_ = QStringLiteral("Trainz Studio");
@@ -137,10 +138,19 @@ private:
     void place_toast();
     void run_action(const QString& act_id);
     void open_any();
+    void open_paths(const QStringList& paths);
     void run_ve(const QString& mode);  // current · folder · fix · last
     QObject* page_bridge() const;
     QList<VeReport> ve_last_;
     QQuickWidget* load_quick(const QString& file, bool translucent);
+    // ponytail: studios compile on first open. Ceiling: that first visit still blocks the UI thread.
+    void ensure_studio(const QString& page);
+    void take_slot(QWidget*& slot, QWidget* page);
+    TrainzUtilPage* studio_trainz();
+    EngineTunerPage* studio_engine();
+    AssetsPage* studio_assets();
+    SoundsPage* studio_sounds();
+    MeshStudioPage* studio_mesh();
 
     ShellBridge* bridge_ = nullptr;
     QQuickWidget* home_ = nullptr;
@@ -157,6 +167,11 @@ private:
     AssetsPage* assets_ = nullptr;
     SoundsPage* sounds_ = nullptr;
     MeshStudioPage* mesh_ = nullptr;
+    QWidget* slot_trainz_ = nullptr;
+    QWidget* slot_engine_ = nullptr;
+    QWidget* slot_assets_ = nullptr;
+    QWidget* slot_sounds_ = nullptr;
+    QWidget* slot_mesh_ = nullptr;
     QString engine_kuid_;
     std::function<void(const QString&, int)> boot_;
     bool moving_ = false;
