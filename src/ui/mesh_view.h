@@ -15,6 +15,12 @@ class QMouseEvent;
 class QTimer;
 class QWheelEvent;
 
+struct ViewAtt {
+    float pos[3] = {};
+    float orient[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // row-major, each row is an axis
+    int file = 0;
+};
+
 struct ViewPart {
     QString name;
     std::vector<float> positions;
@@ -43,6 +49,9 @@ public:
     explicit MeshView(QWidget* parent = nullptr);
 
     void setParts(std::vector<ViewPart> parts);
+    void setAttachments(std::vector<ViewAtt> atts);
+    void setAttFileShown(int file, bool on);
+    void setAttSelected(int index);
     void setDebugMode(int mode);
     void setShade(int mode);
     void setEnvironment(int index);
@@ -69,6 +78,7 @@ public:
 
 signals:
     void partPicked(int index);  // Shift+click on a part
+    void attPicked(int index);
 
 protected:
     void initializeGL() override;
@@ -92,8 +102,10 @@ private:
     void draw_disc(const QMatrix4x4& proj, const QMatrix4x4& view, const QVector3D& eye, const QVector3D& dir, float radius, float r, float g, float b, float a, bool additive);
     void draw_guides(const QMatrix4x4& proj, const QMatrix4x4& view);
     void rebuild_guides();
+    void rebuild_atts();
     void frame_camera();
     int pick_part(const QPoint& pos) const;
+    int pick_att(const QPoint& pos) const;
     bool pick_press_ = false;
     bool fly_on_ = false;
     float fly_from_[4] = {};
@@ -191,6 +203,14 @@ private:
     unsigned gizmo_vao_ = 0;
     unsigned gizmo_vbo_ = 0;
     int guide_count_ = 0;
+    unsigned att_vao_ = 0;
+    unsigned att_vbo_ = 0;
+    int att_verts_ = 0;
+    bool atts_dirty_ = false;
+    std::vector<ViewAtt> atts_;
+    std::vector<char> att_on_;
+    int att_sel_ = -1;
+    bool att_grab_ = false;
     std::vector<uint8_t> shown_;
     struct PartMaps {
         unsigned albedo = 0;

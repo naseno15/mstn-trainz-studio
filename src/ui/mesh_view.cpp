@@ -686,6 +686,46 @@ int MeshView::pick_part(const QPoint& pos) const {
     return best;
 }
 
+int MeshView::pick_att(const QPoint& pos) const {
+    if (atts_.empty() || width() < 2 || height() < 2) return -1;
+    const float yr = qDegreesToRadians(yaw_), pr = qDegreesToRadians(pitch_);
+    const QVector3D eye(target_[0] + dist_ * std::cos(pr) * std::cos(yr), target_[1] + dist_ * std::cos(pr) * std::sin(yr), target_[2] + dist_ * std::sin(pr));
+    const float near_p = std::max(0.001f, radius_ * 0.008f);
+    const float far_p = std::max(near_p * 100.f, std::max(dist_ * 40.f, 120.f));
+    QMatrix4x4 proj, view;
+    proj.perspective(fov_, std::max(0.1f, float(width()) / float(height())), near_p, far_p);
+    view.lookAt(eye, QVector3D(target_[0], target_[1], target_[2]), QVector3D(0, 0, 1));
+    const QMatrix4x4 inv = (proj * view).inverted();
+    const float nx = 2.f * pos.x() / width() - 1.f, ny = 1.f - 2.f * pos.y() / height();
+    const QVector3D a = inv.map(QVector3D(nx, ny, -1.f)), b = inv.map(QVector3D(nx, ny, 1.f));
+    const QVector3D o = a, d = (b - a).normalized();
+    const float length = std::max(0.12f, radius_ * 0.08f);
+    const float reach = std::max(0.05f, length * 0.45f);
+    int best = -1;
+    float best_t = 1e30f;
+    for (size_t i = 0; i < atts_.size(); ++i) {
+        const ViewAtt& att = atts_[i];
+        if (att.file >= 0 && att.file < static_cast<int>(att_on_.size()) && !att_on_[static_cast<size_t>(att.file)]) continue;
+        const QVector3D origin(att.pos[0], att.pos[1], att.pos[2]);
+        QVector3D samples[4] = {origin, origin, origin, origin};
+        for (int axis = 0; axis < 3; ++axis) {
+            QVector3D dir(att.orient[axis * 3], att.orient[axis * 3 + 1], att.orient[axis * 3 + 2]);
+            if (dir.lengthSquared() < 1e-8f) continue;
+            samples[axis + 1] = origin + dir.normalized() * length * 0.65f;
+        }
+        for (const QVector3D& p : samples) {
+            const float t = QVector3D::dotProduct(p - o, d);
+            if (t <= 0.f) continue;
+            const float gap = (o + d * t - p).length();
+            if (gap < reach && t < best_t) {
+                best_t = t;
+                best = static_cast<int>(i);
+            }
+        }
+    }
+    return best;
+}
+
 void MeshView::initializeGL() {
     if (!initializeOpenGLFunctions()) {
         std::fprintf(stderr, "mesh GL 3.3 functions missing\n");
@@ -806,6 +846,14 @@ void MeshView::initializeGL() {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
     glGenVertexArrays(1, &line_vao_);
     glGenBuffers(1, &line_vbo_);
+    glGenVertexArrays(1, &att_vao_);
+    glGenBuffers(1, &att_vbo_);
+    glBindVertexArray(att_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, att_vbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
     glBindVertexArray(0);
     rebuild_guides();
     if (upload_pending_) upload();
@@ -1138,8 +1186,113 @@ void MeshView::rebuild_guides() {
     guides_dirty_ = false;
 }
 
+void MeshView::setAttachments(std::vector<ViewAtt> atts) {
+    att_sel_ = -1;
+    atts_ = std::move(atts);
+    int files = 1;
+    for (const ViewAtt& att : atts_) files = std::max(files, att.file + 1);
+    att_on_.assign(static_cast<size_t>(files), 1);
+    atts_dirty_ = true;
+    if (parts_.empty() && !atts_.empty()) {
+        float mn[3] = {atts_[0].pos[0], atts_[0].pos[1], atts_[0].pos[2]};
+        float mx[3] = {mn[0], mn[1], mn[2]};
+        for (const ViewAtt& att : atts_) {
+            for (int a = 0; a < 3; ++a) {
+                mn[a] = std::min(mn[a], att.pos[a]);
+                mx[a] = std::max(mx[a], att.pos[a]);
+            }
+        }
+        for (int a = 0; a < 3; ++a) center_[a] = (mn[a] + mx[a]) * 0.5f;
+        const float dx = mx[0] - mn[0], dy = mx[1] - mn[1], dz = mx[2] - mn[2];
+        radius_ = std::max(0.2f, 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz));
+        frame_camera();
+        rebuild_guides();
+    }
+    update();
+}
+
+void MeshView::setAttSelected(int index) {
+    att_sel_ = index >= 0 && index < static_cast<int>(atts_.size()) ? index : -1;
+    atts_dirty_ = true;
+    if (att_sel_ >= 0) {
+        const ViewAtt& att = atts_[static_cast<size_t>(att_sel_)];
+        const float length = std::max(0.12f, radius_ * 0.08f);
+        fly_from_[0] = target_[0];
+        fly_from_[1] = target_[1];
+        fly_from_[2] = target_[2];
+        fly_from_[3] = dist_;
+        fly_to_[0] = att.pos[0];
+        fly_to_[1] = att.pos[1];
+        fly_to_[2] = att.pos[2];
+        fly_to_[3] = std::clamp(length * 5.f, 0.55f, std::max(radius_, 0.55f));
+        spin_yaw_ = spin_pitch_ = zoom_v_ = elev_v_ = 0.f;
+        move_v_[0] = move_v_[1] = move_v_[2] = 0.f;
+        fly_on_ = true;
+        fly_clock_.start();
+        kick_coast();
+    }
+    update();
+}
+
+void MeshView::setAttFileShown(int file, bool on) {
+    if (file < 0) return;
+    if (file >= static_cast<int>(att_on_.size())) att_on_.resize(static_cast<size_t>(file) + 1, 1);
+    att_on_[static_cast<size_t>(file)] = on ? 1 : 0;
+    atts_dirty_ = true;
+    update();
+}
+
+void MeshView::rebuild_atts() {
+    // Same RGB line triad as the corner gizmo, placed on each attachment and spun by its matrix.
+    std::vector<float> verts;
+    auto line = [&](float x0, float y0, float z0, float x1, float y1, float z1, float r, float g, float b) {
+        verts.insert(verts.end(), {x0, y0, z0, r, g, b, x1, y1, z1, r, g, b});
+    };
+    const float length = std::max(0.12f, radius_ * 0.08f);
+    const float rgb[3][3] = {{0.95f, 0.22f, 0.18f}, {0.22f, 0.82f, 0.28f}, {0.28f, 0.48f, 0.95f}};
+    for (size_t i = 0; i < atts_.size(); ++i) {
+        const ViewAtt& att = atts_[i];
+        if (att.file >= 0 && att.file < static_cast<int>(att_on_.size()) && !att_on_[static_cast<size_t>(att.file)]) continue;
+        const bool hot = static_cast<int>(i) == att_sel_;
+        const float len = length * (hot ? 1.6f : 1.f);
+        for (int axis = 0; axis < 3; ++axis) {
+            float ax = att.orient[axis * 3], ay = att.orient[axis * 3 + 1], az = att.orient[axis * 3 + 2];
+            const float n = std::sqrt(ax * ax + ay * ay + az * az);
+            if (n < 1e-8f) continue;
+            ax /= n;
+            ay /= n;
+            az /= n;
+            float r = rgb[axis][0], g = rgb[axis][1], b = rgb[axis][2];
+            if (hot) {
+                r = std::min(1.f, r + 0.25f);
+                g = std::min(1.f, g + 0.25f);
+                b = std::min(1.f, b + 0.25f);
+            }
+            line(att.pos[0], att.pos[1], att.pos[2], att.pos[0] + ax * len, att.pos[1] + ay * len, att.pos[2] + az * len, r, g, b);
+        }
+    }
+    att_verts_ = static_cast<int>(verts.size() / 6);
+    if (!gl_ready_ || att_vbo_ == 0) return;
+    glBindVertexArray(att_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, att_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)), verts.empty() ? nullptr : verts.data(), GL_DYNAMIC_DRAW);
+    glBindVertexArray(0);
+    atts_dirty_ = false;
+}
+
 void MeshView::draw_guides(const QMatrix4x4& proj, const QMatrix4x4& view) {
     if (line_prog_ == 0) return;
+    if (atts_dirty_) rebuild_atts();
+    if (att_verts_ > 0) {
+        glEnable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glUseProgram(line_prog_);
+        const QMatrix4x4 mvp = proj * view;
+        glUniformMatrix4fv(glGetUniformLocation(line_prog_, "u_mvp"), 1, GL_FALSE, mvp.constData());
+        glBindVertexArray(att_vao_);
+        glLineWidth(2.f);
+        glDrawArrays(GL_LINES, 0, att_verts_);
+    }
     if (guides_dirty_) rebuild_guides();
     if (guide_count_ > 0) {
         glEnable(GL_DEPTH_TEST);
@@ -1563,7 +1716,15 @@ void MeshView::mousePressEvent(QMouseEvent* event) {
     last_ = event->pos();
     setFocus(Qt::MouseFocusReason);
     fly_on_ = false;
+    att_grab_ = false;
     pick_press_ = event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier);
+    if (event->button() == Qt::LeftButton && !pick_press_) {
+        const int att = pick_att(event->pos());
+        if (att >= 0) {
+            att_grab_ = true;
+            emit attPicked(att);
+        }
+    }
     if (pick_press_) {
         const int hit = pick_part(event->pos());
         if (hit >= 0) emit partPicked(hit);
@@ -1573,7 +1734,7 @@ void MeshView::mousePressEvent(QMouseEvent* event) {
 void MeshView::mouseMoveEvent(QMouseEvent* event) {
     const QPoint d = event->pos() - last_;
     last_ = event->pos();
-    if (pick_press_) return;
+    if (pick_press_ || att_grab_) return;
     if (event->buttons() & Qt::LeftButton) {
         spin_yaw_ = std::clamp(spin_yaw_ - d.x() * 0.045f, -8.f, 8.f);
         spin_pitch_ = std::clamp(spin_pitch_ + d.y() * 0.045f, -8.f, 8.f);
@@ -1593,6 +1754,7 @@ void MeshView::mouseMoveEvent(QMouseEvent* event) {
 void MeshView::mouseReleaseEvent(QMouseEvent* event) {
     Q_UNUSED(event);
     pick_press_ = false;
+    att_grab_ = false;
     kick_coast();
 }
 

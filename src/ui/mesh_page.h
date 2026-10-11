@@ -23,6 +23,7 @@ class QQuickWidget;
 struct MatEdit {
     TzMaterial block;
     bool two = false;
+    int gizmo = -1;
 };
 
 struct MeshRow {
@@ -109,7 +110,7 @@ public:
     QString iconFont() const;
     QString iconFontUrl() const;
     QString welcomeTitle() const { return QStringLiteral("Mesh Studio"); }
-    QString welcomeBody() const { return QStringLiteral("Open a .trainzmesh or .im file"); }
+    QString welcomeBody() const { return QStringLiteral("Open a .trainzmesh, .im, or .fbx file"); }
     QString openLabel() const { return QStringLiteral("Open mesh…"); }
     QString fixtureLabel() const { return QStringLiteral("Open sample mesh"); }
     QString homeLabel() const { return QStringLiteral("Home"); }
@@ -183,6 +184,7 @@ signals:
 private:
     void publish();
     void sync_highlight();
+    void focus_selection();
     void report_load(const QString& stage, int pct);
     bool welcome_ = true;
     bool editor_open_ = false;
@@ -211,6 +213,7 @@ private:
     float bmin_[3] = {};
     float bmax_[3] = {};
     int anims_ = 0;
+    int att_count_ = 0;
     bool info_open_ = true;
     bool two_sided_ = false;
     bool face_ = false;

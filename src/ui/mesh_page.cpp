@@ -6,9 +6,12 @@
 #include "shell_window.h"
 #include "status_hub.h"
 
+#include "io/fbx.h"
 #include "io/im_geom.h"
 #include "io/texture_txt.h"
 #include "io/trainzmesh.h"
+
+#include <cstring>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -372,6 +375,17 @@ void MeshBridge::attach(MeshView* view, QWidget* chrome) {
     view_->setEmissiveScale(emis_ / 100.f);
     for (int i = 0; i < 5; ++i) view_->setArrayLight(i, array_on_[i]);
     // Shift+click in the viewport: select that part's material, open the Mat tab.
+    connect(view_, &MeshView::attPicked, this, [this](int gizmo) {
+        for (int i = 0; i < static_cast<int>(mats_.size()); ++i) {
+            if (mats_[static_cast<size_t>(i)].gizmo != gizmo) continue;
+            mat_i_ = i;
+            tab_ = 1;
+            sync_highlight();
+            focus_selection();
+            publish();
+            return;
+        }
+    });
     connect(view_, &MeshView::partPicked, this, [this](int part) {
         if (part < 0 || part >= static_cast<int>(rows_.size())) return;
         const MeshRow& row = rows_[static_cast<size_t>(part)];
@@ -381,6 +395,7 @@ void MeshBridge::attach(MeshView* view, QWidget* chrome) {
             mat_i_ = i;
             tab_ = 1;
             sync_highlight();
+            focus_selection();
             publish();
             return;
         }
@@ -430,7 +445,20 @@ void MeshBridge::load_file(const QString& path) {
     sel_file_ = 0;
     bounds_set_ = false;
     anims_ = 0;
+    att_count_ = 0;
     std::vector<ViewPart> drawn;
+    std::vector<ViewAtt> gizmos;
+    auto grow = [&](const float* p) {
+        if (!bounds_set_) {
+            for (int k = 0; k < 3; ++k) bmin_[k] = bmax_[k] = p[k];
+            bounds_set_ = true;
+            return;
+        }
+        for (int k = 0; k < 3; ++k) {
+            bmin_[k] = std::min(bmin_[k], p[k]);
+            bmax_[k] = std::max(bmax_[k], p[k]);
+        }
+    };
     struct TexSlot {
         QString albedo;
         QString normal;
@@ -477,8 +505,28 @@ void MeshBridge::load_file(const QString& path) {
     report_load(QStringLiteral("Parsing mesh…"), 22);
     try {
         if (path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
-            for (const MeshPart& part : parse_im_parts(data, static_cast<size_t>(bytes.size()))) {
-                push(QString::fromStdString(part.name), {}, {}, {}, {}, {}, part.positions, part.normals, {}, part.indices);
+            const ImView view = parse_im_view(data, static_cast<size_t>(bytes.size()));
+            att_count_ = static_cast<int>(view.atts.size());
+            for (const MeshPart& part : view.parts) {
+                push(QString::fromStdString(part.name), {}, QString::fromStdString(part.albedo), QString::fromStdString(part.normal_map), {}, {}, part.positions, part.normals, part.uvs, part.indices);
+                MatEdit edit;
+                edit.block.name = part.name;
+                mats_.push_back(std::move(edit));
+            }
+            for (const ImAttachment& att : view.atts) {
+                MatEdit edit;
+                edit.block.name = att.name;
+                edit.gizmo = static_cast<int>(gizmos.size());
+                mats_.push_back(std::move(edit));
+                grow(att.pos);
+                ViewAtt gizmo;
+                std::memcpy(gizmo.pos, att.pos, sizeof(gizmo.pos));
+                std::memcpy(gizmo.orient, att.orient, sizeof(gizmo.orient));
+                gizmos.push_back(gizmo);
+            }
+        } else if (path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) {
+            for (const MeshPart& part : parse_fbx_parts(data, static_cast<size_t>(bytes.size()))) {
+                push(QString::fromStdString(part.name), {}, QString::fromStdString(part.albedo), QString::fromStdString(part.normal_map), {}, {}, part.positions, part.normals, part.uvs, part.indices);
                 MatEdit edit;
                 edit.block.name = part.name;
                 mats_.push_back(std::move(edit));
@@ -507,6 +555,8 @@ void MeshBridge::load_file(const QString& path) {
             }
         }
     } catch (const std::exception& error) {
+        att_count_ = 0;
+        if (view_) view_->setAttachments({});
         tip_ = QString::fromUtf8(error.what());
         stop();
         return;
@@ -554,7 +604,10 @@ void MeshBridge::load_file(const QString& path) {
     }
     report_load(QStringLiteral("Uploading mesh…"), 98);
     part_file_.assign(rows_.size(), 0);
-    if (view_) view_->setParts(std::move(drawn));
+    if (view_) {
+        view_->setParts(std::move(drawn));
+        view_->setAttachments(std::move(gizmos));
+    }
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     file_bytes_ = bytes;
     dirty_ = false;
@@ -587,12 +640,14 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
     mat_i_ = 0;
     bounds_set_ = false;
     anims_ = 0;
+    att_count_ = 0;
     const int total = static_cast<int>(paths.size());
 
     // 1. Read + parse every mesh on all cores; resolve each part's albedo image path.
     struct Parsed {
         std::vector<ViewPart> parts;
         QStringList albedo_path;
+        std::vector<ImAttachment> atts;
         bool ok = false;
     };
     std::vector<Parsed> parsed(static_cast<size_t>(total));
@@ -609,14 +664,28 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             QStringList albedo;
             try {
                 if (path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
-                    for (const MeshPart& part : parse_im_parts(data, static_cast<size_t>(bytes.size()))) {
+                    const ImView view = parse_im_view(data, static_cast<size_t>(bytes.size()));
+                    out.atts = view.atts;
+                    for (const MeshPart& part : view.parts) {
                         ViewPart row;
                         row.name = QString::fromStdString(part.name);
                         row.positions = part.positions;
                         row.normals = part.normals;
+                        row.uvs = part.uvs;
                         row.indices = part.indices;
                         out.parts.push_back(std::move(row));
-                        albedo << QString();
+                        albedo << QString::fromStdString(part.albedo);
+                    }
+                } else if (path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) {
+                    for (const MeshPart& part : parse_fbx_parts(data, static_cast<size_t>(bytes.size()))) {
+                        ViewPart row;
+                        row.name = QString::fromStdString(part.name);
+                        row.positions = part.positions;
+                        row.normals = part.normals;
+                        row.uvs = part.uvs;
+                        row.indices = part.indices;
+                        out.parts.push_back(std::move(row));
+                        albedo << QString::fromStdString(part.albedo);
                     }
                 } else {
                     const TrainzMesh mesh = parse_trainzmesh(data, static_cast<size_t>(bytes.size()));
@@ -639,13 +708,19 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             const double yaw = f < yaws.size() ? yaws[f] : 0.0;
             if (yaw != 0.0) {
                 const float c = static_cast<float>(std::cos(yaw)), s = static_cast<float>(std::sin(yaw));
-                for (ViewPart& part : out.parts)
+                auto spin = [&](float& x, float& y) {
+                const float nx = x * c - y * s;
+                const float ny = x * s + y * c;
+                x = nx;
+                y = ny;
+            };
+            for (ViewPart& part : out.parts)
                     for (std::vector<float>* v : {&part.positions, &part.normals})
-                        for (size_t k = 0; k + 2 < v->size(); k += 3) {
-                            const float x = (*v)[k], y = (*v)[k + 1];
-                            (*v)[k] = x * c - y * s;
-                            (*v)[k + 1] = x * s + y * c;
-                        }
+                        for (size_t k = 0; k + 2 < v->size(); k += 3) spin((*v)[k], (*v)[k + 1]);
+            for (ImAttachment& att : out.atts) {
+                spin(att.pos[0], att.pos[1]);
+                for (int axis = 0; axis < 3; ++axis) spin(att.orient[axis * 3], att.orient[axis * 3 + 1]);
+            }
             }
             for (const QString& a : albedo) out.albedo_path << resolve_texture(path, a);
             out.ok = true;
@@ -685,12 +760,34 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
 
     // 3. Put it together in file order.
     std::vector<ViewPart> drawn;
+    std::vector<ViewAtt> gizmos;
     int failed = 0;
     for (int f = 0; f < total; ++f) {
         Parsed& p = parsed[static_cast<size_t>(f)];
         if (!p.ok) {
             ++failed;
             continue;
+        }
+        att_count_ += static_cast<int>(p.atts.size());
+        for (const ImAttachment& att : p.atts) {
+            MatEdit edit;
+            edit.block.name = att.name;
+            edit.gizmo = static_cast<int>(gizmos.size());
+            mats_.push_back(std::move(edit));
+            if (!bounds_set_) {
+                for (int k = 0; k < 3; ++k) bmin_[k] = bmax_[k] = att.pos[k];
+                bounds_set_ = true;
+            } else {
+                for (int k = 0; k < 3; ++k) {
+                    bmin_[k] = std::min(bmin_[k], att.pos[k]);
+                    bmax_[k] = std::max(bmax_[k], att.pos[k]);
+                }
+            }
+            ViewAtt gizmo;
+            gizmo.file = f;
+            std::memcpy(gizmo.pos, att.pos, sizeof(gizmo.pos));
+            std::memcpy(gizmo.orient, att.orient, sizeof(gizmo.orient));
+            gizmos.push_back(gizmo);
         }
         const QString label = f < labels.size() ? labels[f] : QFileInfo(paths[f]).fileName();
         for (size_t i = 0; i < p.parts.size(); ++i) {
@@ -729,7 +826,10 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
         }
     }
     report_load(QStringLiteral("Uploading %1 parts to the GPU").arg(drawn.size()), 96);
-    if (view_) view_->setParts(std::move(drawn));
+    if (view_) {
+        view_->setParts(std::move(drawn));
+        view_->setAttachments(std::move(gizmos));
+    }
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     file_bytes_.clear();
     dirty_ = false;
@@ -881,7 +981,7 @@ void MeshBridge::publish() {
     }
     const bool loaded = !path_.isEmpty() || scene_;
     const QString file_label = scene_ ? shortcut_ : QFileInfo(path_).fileName();
-    const QString kind = path_.endsWith(QLatin1String(".im"), Qt::CaseInsensitive) ? QStringLiteral("im") : QStringLiteral("trainzmesh");
+    const QString kind = path_.endsWith(QLatin1String(".im"), Qt::CaseInsensitive) ? QStringLiteral("im") : path_.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive) ? QStringLiteral("fbx") : QStringLiteral("trainzmesh");
     QString bounds = QStringLiteral("—");
     if (bounds_set_) {
         bounds = QStringLiteral("%1 × %2 × %3")
@@ -894,7 +994,7 @@ void MeshBridge::publish() {
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Kind")}, {QStringLiteral("v"), loaded ? kind : QStringLiteral("—")}},
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Verts / Faces")}, {QStringLiteral("v"), loaded ? grouped(vert_sum) + QStringLiteral(" / ") + grouped(tri_sum) : QStringLiteral("—")}},
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Parts")}, {QStringLiteral("v"), loaded ? QString::number(rows_.size()) : QStringLiteral("—")}},
-        QJsonObject{{QStringLiteral("k"), QStringLiteral("Attachments")}, {QStringLiteral("v"), loaded ? QStringLiteral("0") : QStringLiteral("—")}},
+        QJsonObject{{QStringLiteral("k"), QStringLiteral("Attachments")}, {QStringLiteral("v"), loaded ? QString::number(att_count_) : QStringLiteral("—")}},
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Anims")}, {QStringLiteral("v"), loaded ? QString::number(anims_) : QStringLiteral("—")}},
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Albedo / Normal / Param")}, {QStringLiteral("v"), loaded ? QStringLiteral("%1 / %2 / %3").arg(albedo_n).arg(normal_n).arg(param_n) : QStringLiteral("—")}},
         QJsonObject{{QStringLiteral("k"), QStringLiteral("Bounds (m)")}, {QStringLiteral("v"), bounds}},
@@ -1007,7 +1107,7 @@ void MeshBridge::setPage(const QString& page) {
 }
 void MeshBridge::goHome() { emit homeRequested(); }
 void MeshBridge::browse() {
-    const QString path = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Open mesh"), {}, QStringLiteral("Mesh (*.trainzmesh *.im)"));
+    const QString path = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Open mesh"), {}, QStringLiteral("Mesh (*.trainzmesh *.im *.fbx)"));
     if (!path.isEmpty()) load_file(path);
 }
 QStringList MeshBridge::veContextPaths() const {
@@ -1033,11 +1133,11 @@ void MeshBridge::dropUrls(const QVariantList& urls) {
     for (const QVariant& value : urls) {
         const QUrl url(value.toString());
         const QString path = url.isLocalFile() ? url.toLocalFile() : value.toString();
-        if (path.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) ok << path;
+        if (path.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) ok << path;
         else ++skipped;
     }
     if (ok.isEmpty()) {
-        post_status(QStringLiteral("Unsupported file — Mesh Studio opens .trainzmesh and .im"));
+        post_status(QStringLiteral("Unsupported file — Mesh Studio opens .trainzmesh, .im, and .fbx"));
         return;
     }
     QStringList all = scene_paths_;
@@ -1134,7 +1234,11 @@ void MeshBridge::clickId(const QString& id) {
         editor_open_ = false;
         bounds_set_ = false;
         anims_ = 0;
-        if (view_) view_->setParts({});
+        att_count_ = 0;
+        if (view_) {
+            view_->setParts({});
+            view_->setAttachments({});
+        }
         publish();
         return;
     } else if (id == QLatin1String("save") || id == QLatin1String("saveAs")) {
@@ -1263,7 +1367,10 @@ void MeshBridge::setChecked(const QString& key, bool on) {
                 if (view_)
                     for (int i = 0; i < int(part_file_.size()); ++i)
                         if (part_file_[i] == f) view_->setShown(i, on);
-            } else file_attl_[f] = on;
+            } else {
+                file_attl_[f] = on;
+                if (view_) view_->setAttFileShown(f, on);
+            }
         }
     } else if (key == QLatin1String("fileShow")) {
         file_show_ = on;
@@ -1272,6 +1379,7 @@ void MeshBridge::setChecked(const QString& key, bool on) {
         }
     } else if (key == QLatin1String("fileAtts")) {
         file_atts_ = on;
+        if (view_) view_->setAttFileShown(0, on);
     } else if (key == QLatin1String("face")) {
         face_ = on;
         if (view_) view_->setFaceOrient(on);
@@ -1386,6 +1494,7 @@ void MeshBridge::pickList(const QString& list, int index) {
     if (list == QLatin1String("mesh") && index >= 0 && index < static_cast<int>(mats_.size())) {
         mat_i_ = index;
         sync_highlight();
+        focus_selection();
     } else if ((list == QLatin1String("scene") || list == QLatin1String("atts")) && index >= 0 && index < static_cast<int>(rows_.size())) selected_ = index;
     else return;
     publish();
@@ -1394,8 +1503,18 @@ void MeshBridge::pickMat(int index) {
     if (index < 0 || index >= static_cast<int>(mat_owner_.size())) return;
     mat_i_ = mat_owner_[static_cast<size_t>(index)];
     sync_highlight();
-    if (view_) view_->flyToHighlight();
+    focus_selection();
     publish();
+}
+void MeshBridge::focus_selection() {
+    if (!view_ || mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size())) return;
+    const int gizmo = mats_[static_cast<size_t>(mat_i_)].gizmo;
+    if (gizmo >= 0) {
+        view_->setAttSelected(gizmo);
+        return;
+    }
+    view_->setAttSelected(-1);
+    view_->flyToHighlight();
 }
 void MeshBridge::sync_highlight() {
     if (!view_ || mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size())) return;
