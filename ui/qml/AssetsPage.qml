@@ -11,7 +11,7 @@ Item {
         anchors.fill: parent
         gradient: Gradient {
             GradientStop { position: 0.0; color: bridge.dark ? "#1a2230" : "#eef1f6" }
-            GradientStop { position: 1.0; color: bridge.dark ? "#0c0e12" : "#d5dbe3" }
+            GradientStop { position: 1.0; color: bridge.dark ? "#161b24" : "#d5dbe3" }
         }
     }
 
@@ -935,9 +935,74 @@ Item {
                     }
 
                     Item {
+                        id: configPane
                         visible: bridge.page === "config"
                         width: parent.width
                         height: parent.height - 8
+                        property var configModel: {
+                            try { return JSON.parse(bridge.configRows) }
+                            catch (e) { return [] }
+                        }
+                        property var menuCell: null
+                        property string menuQuery: ""
+                        function openMenu(cell) {
+                            menuQuery = ""
+                            menuCell = cell
+                        }
+                        function menuHits() {
+                            if (!menuCell || !menuCell.options)
+                                return []
+                            var q = menuQuery.toLowerCase()
+                            var out = []
+                            for (var i = 0; i < menuCell.options.length; ++i) {
+                                var row = menuCell.options[i]
+                                var code = (row.code || "").toLowerCase()
+                                var label = (row.label || "").toLowerCase()
+                                if (q.length && code.indexOf(q) < 0 && label.indexOf(q) < 0)
+                                    continue
+                                out.push(row)
+                            }
+                            return out
+                        }
+                        function menuHas(code) {
+                            if (!menuCell)
+                                return false
+                            var parts = (menuCell.raw || "").split(";")
+                            var want = parseFloat(code)
+                            for (var i = 0; i < parts.length; ++i) {
+                                if (parts[i] === code)
+                                    return true
+                                var got = parseFloat(parts[i])
+                                if (!isNaN(want) && !isNaN(got) && Math.abs(want - got) < 0.001)
+                                    return true
+                            }
+                            return false
+                        }
+                        function menuPick(code) {
+                            if (!menuCell)
+                                return
+                            if (menuCell.multi) {
+                                var parts = []
+                                var raw = (menuCell.raw || "").split(";")
+                                var found = false
+                                for (var i = 0; i < raw.length; ++i) {
+                                    if (!raw[i].length)
+                                        continue
+                                    if (raw[i] === code)
+                                        found = true
+                                    else
+                                        parts.push(raw[i])
+                                }
+                                if (!found)
+                                    parts.push(code)
+                                var next = parts.join(";")
+                                menuCell = Object.assign({}, menuCell, { raw: next })
+                                bridge.configSet(menuCell.index, next)
+                            } else {
+                                bridge.configSet(menuCell.index, code)
+                                menuCell = null
+                            }
+                        }
                         Rectangle {
                             anchors.fill: parent
                             radius: 12
@@ -945,8 +1010,90 @@ Item {
                             border.width: 1
                             border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.12 : 0.40)
                         }
-                        TextEdit {
+                        DropArea {
                             anchors.fill: parent
+                            onDropped: function(drop) {
+                                var urls = []
+                                for (var i = 0; i < drop.urls.length; ++i)
+                                    urls.push(drop.urls[i])
+                                bridge.dropConfig(urls)
+                            }
+                        }
+                        Row {
+                            id: configBar
+                            x: 10
+                            y: 8
+                            width: parent.width - 20
+                            height: 28
+                            spacing: 8
+                            Text {
+                                width: 52
+                                height: 28
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("Back")
+                                color: bridge.configBackOn ? "#ff7a3c" : "#6a7280"
+                                font.pixelSize: 12
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: bridge.configBackOn
+                                    onClicked: bridge.configBack()
+                                }
+                            }
+                            Text {
+                                width: Math.max(40, configBar.width - 280)
+                                height: 28
+                                verticalAlignment: Text.AlignVCenter
+                                text: bridge.configCrumb || qsTr("Drop a config.txt, or open one from the library")
+                                color: bridge.dark ? "#d5dbe3" : "#1d1d1f"
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                            }
+                            Rectangle {
+                                width: 160
+                                height: 28
+                                radius: 8
+                                visible: !bridge.configSource
+                                color: Qt.rgba(0, 0, 0, bridge.dark ? 0.35 : 0.06)
+                                TextInput {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    verticalAlignment: TextInput.AlignVCenter
+                                    color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                                    font.pixelSize: 12
+                                    clip: true
+                                    selectByMouse: true
+                                    Text {
+                                        anchors.fill: parent
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: qsTr("Filter tags")
+                                        color: "#8b93a1"
+                                        font.pixelSize: 12
+                                        visible: !parent.text
+                                    }
+                                    onTextChanged: bridge.setConfigFilter(text)
+                                }
+                            }
+                            Text {
+                                width: 52
+                                height: 28
+                                verticalAlignment: Text.AlignVCenter
+                                horizontalAlignment: Text.AlignRight
+                                text: bridge.configSource ? qsTr("Tags") : qsTr("Source")
+                                color: "#ff7a3c"
+                                font.pixelSize: 12
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: bridge.setConfigSource(!bridge.configSource)
+                                }
+                            }
+                        }
+                        TextEdit {
+                            visible: bridge.configSource
+                            anchors.top: configBar.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
                             anchors.margins: 10
                             color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
                             font.family: "Consolas"
@@ -955,6 +1102,260 @@ Item {
                             selectByMouse: true
                             text: bridge.configText
                             onTextChanged: bridge.configText = text
+                        }
+                        ListView {
+                            id: configList
+                            visible: !bridge.configSource
+                            anchors.top: configBar.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: 10
+                            clip: true
+                            spacing: 8
+                            model: configPane.configModel
+                            delegate: Item {
+                                id: configLine
+                                required property var modelData
+                                width: configList.width
+                                property bool proseOpen: false
+                                readonly property bool prose: modelData.cells && modelData.cells.length === 1 && modelData.cells[0].lines > 1
+                                readonly property int rowHeight: {
+                                    if (!modelData.cells)
+                                        return 52
+                                    var h = 52
+                                    for (var i = 0; i < modelData.cells.length; ++i) {
+                                        var cell = modelData.cells[i]
+                                        if (cell.options && cell.options.length)
+                                            h = Math.max(h, 74)
+                                    }
+                                    return h
+                                }
+                                onModelDataChanged: proseOpen = false
+                                height: modelData.gap ? 28 : (prose ? (proseOpen ? proseFull : 48) : rowHeight)
+                                readonly property int proseFull: {
+                                    if (!prose)
+                                        return 48
+                                    return Math.min(320, Math.max(96, 24 + proseMeasure.implicitHeight))
+                                }
+                                Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                                clip: true
+                                Text {
+                                    id: proseMeasure
+                                    visible: false
+                                    width: configList.width - 16
+                                    wrapMode: Text.Wrap
+                                    font.pixelSize: 12
+                                    text: configLine.prose && configLine.modelData.cells[0].value ? configLine.modelData.cells[0].value : ""
+                                }
+                                Text {
+                                    visible: configLine.modelData.gap === true
+                                    anchors.left: parent.left
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: configLine.modelData.label || ""
+                                    color: bridge.dark ? "#8b93a1" : "#5c6570"
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                    font.capitalization: Font.AllUppercase
+                                }
+                                Rectangle {
+                                    visible: configLine.modelData.gap === true
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 88
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    height: 1
+                                    color: Qt.rgba(1, 1, 1, bridge.dark ? 0.10 : 0.35)
+                                }
+                                Row {
+                                    anchors.fill: parent
+                                    spacing: 10
+                                    visible: configLine.modelData.gap !== true
+                                    Repeater {
+                                        model: configLine.modelData.cells || []
+                                        delegate: ConfigField {
+                                            required property var modelData
+                                            readonly property int span: modelData.span || 1
+                                            width: {
+                                                var n = configLine.modelData.cells.length
+                                                var gaps = Math.max(0, n - 1) * 10
+                                                return (configList.width - gaps) * span / 6
+                                            }
+                                            height: configLine.prose ? configLine.height : configLine.rowHeight
+                                            expanded: configLine.proseOpen
+                                            onToggled: configLine.proseOpen = !configLine.proseOpen
+                                            cell: modelData
+                                            onCommit: function(index, text) { bridge.configSet(index, text) }
+                                            onPick: function(index) { bridge.configPick(index) }
+                                            onBrowse: function(index) { bridge.configBrowse(index) }
+                                            onOpen: function(index) { bridge.configOpen(index) }
+                                            onMenu: function(cell) { configPane.openMenu(cell) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            visible: configPane.menuCell !== null
+                            anchors.fill: parent
+                            color: Qt.rgba(0, 0, 0, 0.35)
+                            z: 20
+                            MouseArea { anchors.fill: parent; onClicked: configPane.menuCell = null }
+                        }
+                        Rectangle {
+                            id: menuCard
+                            visible: configPane.menuCell !== null
+                            z: 21
+                            width: Math.min(520, parent.width - 48)
+                            height: Math.min(520, parent.height - 48)
+                            anchors.centerIn: parent
+                            radius: 14
+                            clip: true
+                            color: bridge.dark ? "#1a2230" : "#f7f8fa"
+                            border.width: 1
+                            border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.14 : 0.5)
+                            onVisibleChanged: if (visible) menuSearch.forceActiveFocus()
+                            Column {
+                                anchors.fill: parent
+                                anchors.margins: 14
+                                spacing: 8
+                                Text {
+                                    width: parent.width
+                                    text: configPane.menuCell ? configPane.menuCell.name : ""
+                                    color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                                    font.pixelSize: 15
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                }
+                                Text {
+                                    width: parent.width
+                                    visible: configPane.menuCell && configPane.menuCell.name === "trainz-build"
+                                    text: qsTr("Writes the trainz-build number. Several game builds share one number.")
+                                    color: "#8b93a1"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+                                Rectangle {
+                                    width: parent.width
+                                    height: 34
+                                    radius: 8
+                                    color: Qt.rgba(0, 0, 0, bridge.dark ? 0.38 : 0.06)
+                                    border.width: 1
+                                    border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.3)
+                                    TextInput {
+                                        id: menuSearch
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 10
+                                        anchors.rightMargin: 10
+                                        verticalAlignment: TextInput.AlignVCenter
+                                        color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                                        font.pixelSize: 13
+                                        selectByMouse: true
+                                        text: configPane.menuQuery
+                                        onTextChanged: configPane.menuQuery = text
+                                    }
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 10
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: qsTr("Search code or name")
+                                        color: "#8b93a1"
+                                        font.pixelSize: 13
+                                        visible: configPane.menuQuery.length === 0
+                                    }
+                                }
+                                Row {
+                                    width: parent.width
+                                    height: 16
+                                    spacing: 8
+                                    Text {
+                                        width: 72
+                                        text: configPane.menuCell && configPane.menuCell.name === "trainz-build" ? qsTr("Build") : qsTr("Code")
+                                        color: "#8b93a1"
+                                        font.pixelSize: 10
+                                        font.bold: true
+                                    }
+                                    Text {
+                                        text: configPane.menuCell && configPane.menuCell.name === "trainz-build" ? qsTr("Game") : qsTr("Name")
+                                        color: "#8b93a1"
+                                        font.pixelSize: 10
+                                        font.bold: true
+                                    }
+                                }
+                                ListView {
+                                    id: menuList
+                                    width: parent.width
+                                    height: parent.height - (configPane.menuCell && configPane.menuCell.name === "trainz-build" ? 148 : 128)
+                                    clip: true
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    model: configPane.menuHits()
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        required property int index
+                                        width: menuList.width
+                                        height: 34
+                                        radius: 6
+                                        property bool hot: false
+                                        color: {
+                                            if (configPane.menuHas(modelData.code))
+                                                return Qt.rgba(1, 0.42, 0.14, bridge.dark ? 0.38 : 0.28)
+                                            if (hot)
+                                                return Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.16)
+                                            return index % 2 ? Qt.rgba(1, 1, 1, bridge.dark ? 0.05 : 0.72) : Qt.rgba(0, 0, 0, bridge.dark ? 0.28 : 0.05)
+                                        }
+                                        Row {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 8
+                                            anchors.rightMargin: 8
+                                            spacing: 8
+                                            Text {
+                                                width: 72
+                                                height: parent.height
+                                                verticalAlignment: Text.AlignVCenter
+                                                text: modelData.code === modelData.label ? "" : modelData.code
+                                                color: "#ff7a3c"
+                                                font.family: "Consolas"
+                                                font.pixelSize: 12
+                                                elide: Text.ElideRight
+                                            }
+                                            Text {
+                                                width: parent.width - 80
+                                                height: parent.height
+                                                verticalAlignment: Text.AlignVCenter
+                                                text: modelData.label
+                                                color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                                                font.pixelSize: 13
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            onEntered: parent.hot = true
+                                            onExited: parent.hot = false
+                                            onClicked: configPane.menuPick(modelData.code)
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: 88
+                                    height: 28
+                                    radius: 8
+                                    color: "#ff7a3c"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: configPane.menuCell && configPane.menuCell.multi ? qsTr("Done") : qsTr("Close")
+                                        color: "#ffffff"
+                                        font.pixelSize: 12
+                                        font.bold: true
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onClicked: configPane.menuCell = null
+                                    }
+                                }
+                            }
                         }
                     }
                     TextEdit {

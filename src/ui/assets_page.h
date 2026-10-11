@@ -38,6 +38,15 @@ struct AssetQueueItem {
     std::vector<CdpAssetEntry> assets;
 };
 
+struct FolderAssetScan {
+    std::vector<CdpAssetEntry> assets;
+    qint64 bytes = 0;
+};
+
+// One row per config.txt or config.chump. Files under that folder stay with it,
+// including subfolders. A nested config is its own asset. Dotfiles are skipped.
+FolderAssetScan scan_folder_assets(const QString& root);
+
 class AssetsBridge : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool dark READ dark NOTIFY changed)
@@ -111,6 +120,10 @@ class AssetsBridge : public QObject {
     Q_PROPERTY(bool previewRich READ previewRich NOTIFY changed)
     Q_PROPERTY(int previewPt READ previewPt NOTIFY changed)
     Q_PROPERTY(QString configText READ configText WRITE setConfigText NOTIFY changed)
+    Q_PROPERTY(QString configRows READ configRows NOTIFY configViewChanged)
+    Q_PROPERTY(QString configCrumb READ configCrumb NOTIFY configViewChanged)
+    Q_PROPERTY(bool configSource READ configSource NOTIFY configViewChanged)
+    Q_PROPERTY(bool configBackOn READ configBackOn NOTIFY configViewChanged)
     Q_PROPERTY(QString kuidIn READ kuidIn WRITE setKuidIn NOTIFY changed)
     Q_PROPERTY(QString kuidOut READ kuidOut NOTIFY changed)
     Q_PROPERTY(QString exportIn READ exportIn WRITE setExportIn NOTIFY changed)
@@ -202,6 +215,10 @@ public:
     int previewPt() const { return preview_pt_; }
     QString configText() const;
     void setConfigText(const QString& text);
+    QString configRows() const { return config_rows_; }
+    QString configCrumb() const { return config_crumb_; }
+    bool configSource() const { return config_source_; }
+    bool configBackOn() const { return !config_at_.isEmpty(); }
     QString kuidIn() const;
     void setKuidIn(const QString& text);
     QString kuidOut() const;
@@ -226,6 +243,17 @@ public:
     Q_INVOKABLE void setSideW(double width);
     Q_INVOKABLE void setDockW(double width);
     Q_INVOKABLE void runAction(const QString& action);
+    Q_INVOKABLE void dropConfig(const QVariantList& urls);
+    Q_INVOKABLE void configOpen(int index);
+    Q_INVOKABLE void configBack();
+    Q_INVOKABLE void configJump(int depth);
+    Q_INVOKABLE void configSet(int index, const QString& value);
+    Q_INVOKABLE void configPick(int index);
+    Q_INVOKABLE void configBrowse(int index);
+    Q_INVOKABLE void setConfigFilter(const QString& text);
+    Q_INVOKABLE void setConfigSource(bool on);
+    void load_config(const QString& text, const QString& path);
+    void apply_picked_kuid(int index, const QString& kuid);
     Q_INVOKABLE void dropPaths(const QStringList& paths);
     Q_INVOKABLE void dropCenter(const QStringList& paths);
     Q_INVOKABLE void pickCenter(int row);
@@ -276,6 +304,8 @@ public:
 signals:
     void changed();
     void finderChanged();
+    void configViewChanged();
+    void kuidPickRequested(int index, const QString& filter);
     void layoutChanged();
     void homeRequested();
     void meshRequested(const QString& path);
@@ -333,6 +363,13 @@ private:
     QString finder_sort_ = QStringLiteral("modified");
     bool finder_sort_ascending_ = false;
     QString config_path_;
+    QString config_rows_;
+    QString config_crumb_;
+    QString config_filter_;
+    QList<int> config_at_;
+    bool config_source_ = false;
+    void publish_config();
+    void write_config_value(int index, const QString& value);
     QString tzarc_text_;
     QString export_exe_;
     QTableWidget* queue_table_ = nullptr;
@@ -408,6 +445,8 @@ public:
     bool qmlReady() const;
     QStringList qmlErrors() const;
     void loadBytes(const QByteArray& bytes, const QString& path);
+    void loadConfig(const QString& text, const QString& path);
+    void applyPickedKuid(int index, const QString& kuid);
     void openPaths(const QStringList& paths);
     int assetCount() const;
     QString cell(int row, int column) const;
@@ -424,6 +463,7 @@ signals:
     void homeRequested();
     void meshRequested(const QString& path);
     void engineRequested(const QString& text, const QString& label);
+    void kuidPickRequested(int index, const QString& filter);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

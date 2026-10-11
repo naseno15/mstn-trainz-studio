@@ -1,13 +1,16 @@
 #undef NDEBUG
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <fstream>
+#include <string>
 #include <vector>
 
 #include <QApplication>
 #include <QDir>
 #include <QFile>
 
+#include "io/acs_tree.h"
 #include "io/cdp.h"
 #include "ui/assets_page.h"
 #include "ui/shell_window.h"
@@ -81,6 +84,69 @@ int check_real_cdp(const char* source, const char* destination) {
 
 }  // namespace
 
+void check_acs() {
+    const QString sample = QStringLiteral(
+        "kind \"traincar\"\n"
+        "interior <kuid:1:2>\n"
+        "mesh-table\n"
+        "{\n"
+        "  default\n"
+        "  {\n"
+        "    mesh \"body.lm\"\n"
+        "    mesh-asset <kuid:1:9>\n"
+        "    effects\n"
+        "    {\n"
+        "      body-albedo\n"
+        "      {\n"
+        "        kind \"texture-replacement\"\n"
+        "        texture \"body.texture\"\n"
+        "      }\n"
+        "      glow\n"
+        "      {\n"
+        "        kind \"corona\"\n"
+        "        texture-kuid <kuid:1:8>\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+        "kuid-table\n"
+        "{\n"
+        "  0 <kuid:1:7>\n"
+        "  lib <kuid:2:3>\n"
+        "}\n");
+    const AcsFile file = parse_acs(sample);
+    assert(file.ok);
+    assert(file.root.kids.size() == 4);
+    const QList<int> effect = {2, 0, 2, 0};
+    const AcsNode* node = acs_at(file.root, effect);
+    assert(node != nullptr && node->name == QLatin1String("body-albedo"));
+    const QStringList parents = acs_parents(file.root, {2, 0, 2, 0});
+    assert(parents.last() == QLatin1String("body-albedo"));
+    const AcsHint kind = acs_hint(parents, QStringLiteral("kind"), QStringLiteral("texture-replacement"), false);
+    assert(kind.editor == QLatin1String("enum"));
+    assert(kind.options.contains(QLatin1String("texture-replacement")));
+    const AcsHint mass = acs_hint({}, QStringLiteral("mass"), QStringLiteral("37300"), false);
+    assert(mass.editor == QLatin1String("number") && mass.unit == QLatin1String("kg"));
+    const AcsHint mesh = acs_hint(acs_parents(file.root, {2, 0}), QStringLiteral("mesh-asset"), QStringLiteral("<kuid:1:9>"), false);
+    assert(mesh.editor == QLatin1String("kuid") && mesh.filter.contains(QLatin1String("MESH")));
+    const AcsHint alias = acs_hint(QStringList{QStringLiteral("kuid-table")}, QStringLiteral("0"), QStringLiteral("<kuid:1:7>"), false);
+    assert(alias.editor == QLatin1String("alias"));
+    const AcsHint named = acs_hint(QStringList{QStringLiteral("kuid-table")}, QStringLiteral("lib"), QStringLiteral("<kuid:2:3>"), false);
+    assert(named.editor == QLatin1String("kuid"));
+    const AcsHint build = acs_hint({}, QStringLiteral("trainz-build"), QStringLiteral("4.6"), false);
+    assert(build.editor == QLatin1String("menu"));
+    assert(acs_menu_text(QStringLiteral("4.6"), build.options).contains(QLatin1String("TRS19 SP1")));
+    assert(acs_menu_text(QStringLiteral("5"), build.options).contains(QLatin1String("TRS19 SP5")));
+    assert(acs_format(QStringLiteral("menu"), QStringLiteral("4.6"), false) == QLatin1String("4.6"));
+    QString edited = sample;
+    const AcsNode* texture = acs_at(file.root, {2, 0, 2, 0, 1});
+    assert(texture != nullptr && texture->name == QLatin1String("texture"));
+    edited.replace(texture->begin, texture->end - texture->begin, acs_format(QStringLiteral("file"), QStringLiteral("cab.texture"), texture->quoted));
+    const AcsFile again = parse_acs(edited);
+    const AcsNode* updated = acs_at(again.root, {2, 0, 2, 0, 1});
+    assert(updated != nullptr && updated->value == QLatin1String("cab.texture"));
+}
+
 int main(int argc, char** argv) {
     if (argc == 3) return check_real_cdp(argv[1], argv[2]);
     const std::string path = std::string(FIXTURE_DIR) + "/demo.cdp";
@@ -132,6 +198,43 @@ int main(int argc, char** argv) {
                    .username == "Changed");
     }
 
+    check_acs();
+    {
+        const QString root = QDir::temp().filePath(QStringLiteral("trainz-studio-folder-scan"));
+        QDir(root).removeRecursively();
+        assert(QDir().mkpath(root + QStringLiteral("/mesh")));
+        assert(QDir().mkpath(root + QStringLiteral("/nested")));
+        auto write = [](const QString& path, const char* body) {
+            QFile file(path);
+            assert(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            assert(file.write(body) == qint64(std::char_traits<char>::length(body)));
+        };
+        write(root + QStringLiteral("/config.chump"), "chump");
+        write(root + QStringLiteral("/mesh/body.trainzmesh"), "mesh");
+        write(root + QStringLiteral("/.stamp"), "stamp");
+        write(root + QStringLiteral("/nested/config.txt"), "kuid <kuid:1:2>\n");
+        write(root + QStringLiteral("/nested/only-here.txt"), "child");
+        const FolderAssetScan scan = scan_folder_assets(root);
+        assert(scan.assets.size() == 2);
+        const CdpAssetEntry* parent = nullptr;
+        const CdpAssetEntry* child = nullptr;
+        for (const CdpAssetEntry& row : scan.assets) {
+            if (QString::fromStdString(row.kuid) == QStringLiteral("nested")) child = &row;
+            else parent = &row;
+        }
+        assert(parent != nullptr && child != nullptr);
+        auto has = [](const CdpAssetEntry& row, const char* name) {
+            return std::find(row.files.begin(), row.files.end(), std::string(name)) != row.files.end();
+        };
+        assert(has(*parent, "config.chump"));
+        assert(has(*parent, "mesh/body.trainzmesh"));
+        assert(!has(*parent, ".stamp"));
+        assert(!has(*parent, "nested/only-here.txt"));
+        assert(has(*child, "config.txt"));
+        assert(has(*child, "only-here.txt"));
+        assert(parent->files.size() == parent->sizes.size());
+        QDir(root).removeRecursively();
+    }
     prepare_qt_runtime();
     QApplication app(argc, argv);
     AssetsPage page;

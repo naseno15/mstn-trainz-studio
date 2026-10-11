@@ -1,4 +1,6 @@
 #include "assets_page.h"
+
+#include "io/acs_tree.h"
 #include "text_color.h"
 #include "res_path.h"
 #include "feedback.h"
@@ -29,6 +31,8 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHash>
+#include <QSet>
 #include <QFont>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -660,13 +664,19 @@ void AssetsBridge::runAction(const QString& action) {
         const QByteArray bytes = file.readAll();
         try {
             const ChumpFile chump = read_chump(reinterpret_cast<const uint8_t*>(bytes.constData()), static_cast<size_t>(bytes.size()));
-            config_edit_->setPlainText(QString::fromStdString(chump_to_text(chump)));
-            config_path_ = path;
-            center_tip_ = QFileInfo(path).fileName();
+            load_config(QString::fromStdString(chump_to_text(chump)), path);
         } catch (const std::exception& error) {
             center_tip_ = QString::fromUtf8(error.what());
         }
         emit changed();
+        return;
+    }
+    if (action == QLatin1String("open_txt")) {
+        const QString path = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Open config.txt"), {}, QStringLiteral("config.txt (*.txt);;All (*.*)"));
+        if (path.isEmpty()) return;
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) return;
+        load_config(QString::fromUtf8(file.readAll()), path);
         return;
     }
     if (action == QLatin1String("save_chump") || action == QLatin1String("export_txt")) {
@@ -679,6 +689,16 @@ void AssetsBridge::runAction(const QString& action) {
                 if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
                 file.write(config_edit_->toPlainText().toUtf8());
                 center_tip_ = QFileInfo(path).fileName();
+            } else if (!config_path_.endsWith(QLatin1String(".chump"), Qt::CaseInsensitive)) {
+                QString path = config_path_;
+                if (path.isEmpty()) path = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Save config.txt"), QStringLiteral("config.txt"), QStringLiteral("config.txt (*.txt)"));
+                if (path.isEmpty()) return;
+                QFile file(path);
+                if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+                file.write(config_edit_->toPlainText().toUtf8());
+                config_path_ = path;
+                center_tip_ = QStringLiteral("Saved ") + QFileInfo(path).fileName();
+                post_status(center_tip_);
             } else {
                 const ChumpFile chump = text_to_chump(config_edit_->toPlainText().toStdString());
                 const auto bytes = encode_chump(chump);
@@ -1272,7 +1292,7 @@ void AssetsBridge::runDock(const QString& id) {
 QString AssetsBridge::brand() const { return suite_ == QLatin1String("texmesh") ? QStringLiteral("Texture & Mesh Lods") : QStringLiteral("Assets Tools"); }
 QString AssetsBridge::blurb() const {
     if (suite_ == QLatin1String("texmesh") && tex_) return tex_->blurb();
-    if (page_ == QLatin1String("config")) return QStringLiteral("Edit config.chump as text, then save the binary or export config.txt.");
+    if (page_ == QLatin1String("config")) return QStringLiteral("Open a config.txt, or pick an asset in the TrainzUtil library. Tags open as rows. Mesh effects stay inside their mesh.");
     if (page_ == QLatin1String("kuid")) return QStringLiteral("Paste CM text. Normalize writes the KUID, hex, and hash-XX folder.");
     if (page_ == QLatin1String("export")) return QStringLiteral("Paste KUIDs. Export each writes one CDP. Export one puts the checked rows in a single CDP.");
     return QStringLiteral("Left: drop CDP or a folder. Center: Finder. Right: preview.");
@@ -1284,7 +1304,8 @@ QString AssetsBridge::actionsJson() const {
     };
     QJsonArray rows;
     if (page_ == QLatin1String("config")) {
-        rows = {row("open_chump", "Open config.chump", false), row("save_chump", "Save config.chump", true), row("export_txt", "Export config.txt", false)};
+        const bool chump_file = config_path_.endsWith(QLatin1String(".chump"), Qt::CaseInsensitive);
+        rows = {row("open_txt", "Open config.txt", false), row("open_chump", "Open config.chump", false), row("save_chump", chump_file ? "Save config.chump" : "Save config.txt", true), row("export_txt", "Export config.txt", false)};
     } else if (page_ == QLatin1String("kuid")) {
         rows = {row("normalize", "Normalize list", true), row("copy_kuid", "Copy output", false)};
     } else if (page_ == QLatin1String("export")) {
@@ -1324,6 +1345,224 @@ QString AssetsBridge::configText() const { return config_edit_ == nullptr ? QStr
 void AssetsBridge::setConfigText(const QString& text) {
     if (config_edit_ == nullptr || config_edit_->toPlainText() == text) return;
     config_edit_->setPlainText(text);
+}
+
+void AssetsBridge::load_config(const QString& text, const QString& path) {
+    if (config_edit_ == nullptr) return;
+    config_edit_->setPlainText(text);
+    config_path_ = path;
+    config_at_.clear();
+    config_filter_.clear();
+    config_source_ = false;
+    const AcsFile file = parse_acs(text);
+    center_tip_ = path.isEmpty() ? QStringLiteral("Config") : QFileInfo(path).fileName();
+    if (!file.ok) center_tip_ += QStringLiteral(" — ") + file.error;
+    publish_config();
+    emit changed();
+}
+
+void AssetsBridge::publish_config() {
+    const QString text = configText();
+    const AcsFile file = parse_acs(text);
+    const AcsNode* node = acs_at(file.root, config_at_);
+    if (node == nullptr || !node->box) {
+        config_at_.clear();
+        node = &file.root;
+    }
+    const QStringList parents = acs_parents(file.root, config_at_);
+    QStringList crumb_names;
+    crumb_names << QStringLiteral("config");
+    for (const QString& name : parents) crumb_names << name;
+    config_crumb_ = crumb_names.join(QStringLiteral("  /  "));
+    const QString needle = config_filter_.trimmed();
+    QJsonArray lines;
+    QJsonArray bucket;
+    int used = 0;
+    QString band;
+    auto flush_bucket = [&]() {
+        if (bucket.isEmpty()) return;
+        lines.append(QJsonObject{{QStringLiteral("cells"), bucket}});
+        bucket = QJsonArray();
+        used = 0;
+    };
+    for (int index = 0; index < node->kids.size(); ++index) {
+        const AcsNode& kid = node->kids[index];
+        QString preview = kid.value;
+        if (kid.box) {
+            for (const AcsNode& inner : kid.kids) {
+                if (inner.name == QLatin1String("kind") || inner.name == QLatin1String("mesh") || inner.name == QLatin1String("texture") || inner.name == QLatin1String("bogey")) {
+                    preview = inner.value;
+                    break;
+                }
+            }
+        }
+        if (!needle.isEmpty() && !kid.name.contains(needle, Qt::CaseInsensitive) && !preview.contains(needle, Qt::CaseInsensitive)) continue;
+        const AcsHint hint = acs_hint(parents, kid.name, kid.value, kid.box);
+        QJsonArray options;
+        if (hint.editor == QLatin1String("menu")) {
+            for (const QString& row : hint.options) {
+                const int bar = row.indexOf(QLatin1Char('|'));
+                options.append(QJsonObject{{QStringLiteral("code"), bar < 0 ? row : row.left(bar)}, {QStringLiteral("label"), bar < 0 ? row : row.mid(bar + 1)}});
+            }
+        } else {
+            for (const QString& option : hint.options) options.append(option);
+        }
+        const bool named = kid.name.startsWith(QLatin1String("username")) || kid.name.startsWith(QLatin1String("description"));
+        const bool wide_value = preview.size() > 42 || kid.name.size() > 32;
+        int span = 1;
+        if (named || kid.name == QLatin1String("license") || wide_value) span = 6;
+        else if ((hint.editor == QLatin1String("menu") && hint.multi) || kid.name == QLatin1String("trainz-build")) span = 3;
+        else if (hint.editor == QLatin1String("menu") || kid.box || hint.editor == QLatin1String("kuid") || hint.editor == QLatin1String("file") || hint.editor == QLatin1String("enum") || hint.editor == QLatin1String("alias") || preview.size() > 24) span = 2;
+        int lines_high = kid.name.startsWith(QLatin1String("description")) ? 4 : 1;
+        if (parents.isEmpty()) {
+            QString next = QStringLiteral("Asset");
+            if (kid.box) next = QStringLiteral("Containers");
+            else if (kid.name.startsWith(QLatin1String("username")) || kid.name == QLatin1String("kind") || kid.name == QLatin1String("kuid") || kid.name == QLatin1String("trainz-build")) next = QStringLiteral("Identity");
+            else if (kid.name.startsWith(QLatin1String("description")) || kid.name == QLatin1String("license")) next = QStringLiteral("Description");
+            else if (kid.name.startsWith(QLatin1String("category"))) next = QStringLiteral("Category");
+            else if (kid.name == QLatin1String("author") || kid.name == QLatin1String("organisation") || kid.name.startsWith(QLatin1String("contact"))) next = QStringLiteral("Credits");
+            else if (kid.name == QLatin1String("script") || kid.name == QLatin1String("class")) next = QStringLiteral("Script");
+            if (next != band) {
+                flush_bucket();
+                band = next;
+                lines.append(QJsonObject{{QStringLiteral("gap"), true}, {QStringLiteral("label"), band}});
+            }
+        }
+        if (used + span > 6) flush_bucket();
+        const QString menu_label = hint.editor == QLatin1String("menu") ? acs_menu_text(preview, hint.options) : QString();
+        const QString shown = hint.editor == QLatin1String("bool") ? (kid.value == QLatin1String("1") ? QStringLiteral("On") : QStringLiteral("Off"))
+            : kid.name == QLatin1String("trainz-build") ? (menu_label == preview ? preview : preview + QStringLiteral("  ") + menu_label)
+            : hint.editor == QLatin1String("menu") ? menu_label : preview;
+        bucket.append(QJsonObject{
+            {QStringLiteral("index"), index},
+            {QStringLiteral("name"), kid.name},
+            {QStringLiteral("value"), shown},
+            {QStringLiteral("raw"), preview},
+            {QStringLiteral("editor"), hint.editor},
+            {QStringLiteral("multi"), hint.multi},
+            {QStringLiteral("filter"), hint.filter},
+            {QStringLiteral("unit"), hint.unit},
+            {QStringLiteral("options"), options},
+            {QStringLiteral("box"), kid.box},
+            {QStringLiteral("span"), span},
+            {QStringLiteral("lines"), lines_high},
+        });
+        used += span;
+    }
+    flush_bucket();
+    config_rows_ = QString::fromUtf8(QJsonDocument(lines).toJson(QJsonDocument::Compact));
+    emit configViewChanged();
+}
+
+void AssetsBridge::write_config_value(int index, const QString& value) {
+    QString text = configText();
+    const AcsFile file = parse_acs(text);
+    const AcsNode* node = acs_at(file.root, config_at_);
+    if (node == nullptr || index < 0 || index >= node->kids.size()) return;
+    const AcsNode& kid = node->kids[index];
+    if (kid.box) return;
+    const AcsHint hint = acs_hint(acs_parents(file.root, config_at_), kid.name, kid.value, false);
+    const QString next = acs_format(hint.editor, value, kid.quoted);
+    if (kid.begin < 0 || kid.end < kid.begin || kid.end > text.size()) return;
+    text.replace(kid.begin, kid.end - kid.begin, next);
+    config_edit_->setPlainText(text);
+    publish_config();
+    emit changed();
+}
+
+void AssetsBridge::dropConfig(const QVariantList& urls) {
+    for (const QVariant& url : urls) {
+        const QString path = QUrl(url.toString()).toLocalFile();
+        if (path.isEmpty()) continue;
+        const QString suffix = QFileInfo(path).suffix().toLower();
+        if (suffix == QLatin1String("chump")) {
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly)) continue;
+            try {
+                const QByteArray bytes = file.readAll();
+                const ChumpFile chump = read_chump(reinterpret_cast<const uint8_t*>(bytes.constData()), static_cast<size_t>(bytes.size()));
+                load_config(QString::fromStdString(chump_to_text(chump)), path);
+            } catch (const std::exception& error) {
+                center_tip_ = QString::fromUtf8(error.what());
+                emit changed();
+            }
+            return;
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) continue;
+        load_config(QString::fromUtf8(file.readAll()), path);
+        return;
+    }
+}
+
+void AssetsBridge::configOpen(int index) {
+    const AcsFile file = parse_acs(configText());
+    const AcsNode* node = acs_at(file.root, config_at_);
+    if (node == nullptr || index < 0 || index >= node->kids.size() || !node->kids[index].box) return;
+    config_at_.append(index);
+    config_filter_.clear();
+    publish_config();
+}
+
+void AssetsBridge::configBack() {
+    if (config_at_.isEmpty()) return;
+    config_at_.removeLast();
+    config_filter_.clear();
+    publish_config();
+}
+
+void AssetsBridge::configJump(int depth) {
+    if (depth < 0) depth = 0;
+    while (config_at_.size() > depth) config_at_.removeLast();
+    config_filter_.clear();
+    publish_config();
+}
+
+void AssetsBridge::configSet(int index, const QString& value) { write_config_value(index, value); }
+
+void AssetsBridge::configPick(int index) {
+    const AcsFile file = parse_acs(configText());
+    const AcsNode* node = acs_at(file.root, config_at_);
+    if (node == nullptr || index < 0 || index >= node->kids.size()) return;
+    const AcsNode& kid = node->kids[index];
+    const AcsHint hint = acs_hint(acs_parents(file.root, config_at_), kid.name, kid.value, kid.box);
+    if (hint.editor != QLatin1String("kuid")) return;
+    emit kuidPickRequested(index, hint.filter);
+}
+
+void AssetsBridge::apply_picked_kuid(int index, const QString& kuid) {
+    if (kuid.isEmpty()) return;
+    write_config_value(index, kuid);
+}
+
+void AssetsBridge::configBrowse(int index) {
+    const AcsFile file = parse_acs(configText());
+    const AcsNode* node = acs_at(file.root, config_at_);
+    if (node == nullptr || index < 0 || index >= node->kids.size()) return;
+    const QString dir = config_path_.isEmpty() ? QString() : QFileInfo(config_path_).absolutePath();
+    const QString name = node->kids[index].name;
+    QString filter = QStringLiteral("All (*.*)");
+    if (name == QLatin1String("mesh") || name == QLatin1String("collision-mesh")) filter = QStringLiteral("Mesh (*.lm *.im *.trainzmesh *.pm)");
+    else if (name == QLatin1String("anim")) filter = QStringLiteral("Animation (*.kin)");
+    else if (name.contains(QLatin1String("texture"))) filter = QStringLiteral("Texture (*.texture *.texture.txt *.tga *.png)");
+    else if (name == QLatin1String("script")) filter = QStringLiteral("Script (*.gs)");
+    else if (name == QLatin1String("image")) filter = QStringLiteral("Image (*.png *.jpg *.tga *.bmp)");
+    const QString path = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Choose file"), dir, filter);
+    if (path.isEmpty()) return;
+    const QString rel = dir.isEmpty() ? path : QDir(dir).relativeFilePath(path);
+    write_config_value(index, rel);
+}
+
+void AssetsBridge::setConfigFilter(const QString& text) {
+    if (config_filter_ == text) return;
+    config_filter_ = text;
+    publish_config();
+}
+
+void AssetsBridge::setConfigSource(bool on) {
+    config_source_ = on;
+    if (!on) publish_config();
+    else emit configViewChanged();
 }
 QString AssetsBridge::kuidIn() const { return kuid_in_ == nullptr ? QString() : kuid_in_->toPlainText(); }
 void AssetsBridge::setKuidIn(const QString& text) {
@@ -1600,6 +1839,61 @@ void AssetsBridge::sync_pages() {
     else if (page_ == QLatin1String("export")) center_tip_ = QStringLiteral("Paste a KUID list. TrainzUtil createCDP writes the CDP.");
 }
 
+FolderAssetScan scan_folder_assets(const QString& root) {
+    FolderAssetScan out;
+    const QString base = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
+    if (!QFileInfo(base).isDir()) return out;
+    QSet<QString> text_roots;
+    QSet<QString> chump_roots;
+    QDirIterator listing(base, QDir::Files, QDirIterator::Subdirectories);
+    while (listing.hasNext()) {
+        listing.next();
+        if (listing.fileName().startsWith(QLatin1Char('.'))) continue;
+        out.bytes += listing.fileInfo().size();
+        const QString dir = QDir::cleanPath(listing.fileInfo().dir().absolutePath());
+        if (listing.fileName().compare(QLatin1String("config.txt"), Qt::CaseInsensitive) == 0) text_roots.insert(dir);
+        else if (listing.fileName().compare(QLatin1String("config.chump"), Qt::CaseInsensitive) == 0) chump_roots.insert(dir);
+    }
+    QSet<QString> roots = text_roots;
+    for (const QString& dir : chump_roots)
+        if (!text_roots.contains(dir)) roots.insert(dir);
+    if (roots.isEmpty()) roots.insert(base);
+    QStringList longest = roots.values();
+    std::sort(longest.begin(), longest.end(), [](const QString& a, const QString& b) { return a.size() > b.size(); });
+    QHash<QString, CdpAssetEntry> rows;
+    for (const QString& dir : roots) {
+        CdpAssetEntry row;
+        row.username = dir.toStdString();
+        row.kuid = QFileInfo(dir).fileName().toStdString();
+        row.kind = "folder";
+        rows.insert(dir, std::move(row));
+    }
+    QDirIterator files(base, QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        files.next();
+        if (files.fileName().startsWith(QLatin1Char('.'))) continue;
+        const QString dir = QDir::cleanPath(files.fileInfo().dir().absolutePath());
+        QString owner;
+        for (const QString& candidate : longest) {
+            if (dir == candidate || dir.startsWith(candidate + QLatin1Char('/'))) {
+                owner = candidate;
+                break;
+            }
+        }
+        if (owner.isEmpty()) continue;
+        QString rel = QDir(owner).relativeFilePath(files.fileInfo().absoluteFilePath());
+        rel.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (rel.isEmpty() || rel.startsWith(QLatin1String("../")) || rel.contains(QLatin1String("/../"))) continue;
+        CdpAssetEntry& row = rows[owner];
+        row.files.push_back(rel.toStdString());
+        row.sizes.push_back(static_cast<uint64_t>(std::max<qint64>(0, files.fileInfo().size())));
+    }
+    QStringList ordered = roots.values();
+    std::sort(ordered.begin(), ordered.end());
+    for (const QString& dir : ordered) out.assets.push_back(std::move(rows[dir]));
+    return out;
+}
+
 void AssetsBridge::add_paths(const QStringList& paths) {
     bool queued_folder = false;
     BusyToast busy(paths, QStringLiteral("Adding assets…"));
@@ -1607,27 +1901,18 @@ void AssetsBridge::add_paths(const QStringList& paths) {
     for (const QString& raw : paths) {
         QFileInfo info(raw);
         busy.step(QStringLiteral("Reading ") + info.fileName() + QStringLiteral("…"), done++);
-        if (info.isFile() && info.fileName().compare(QLatin1String("config.txt"), Qt::CaseInsensitive) == 0) info.setFile(info.dir().absolutePath());
+        const bool config_file = info.isFile() &&
+            (info.fileName().compare(QLatin1String("config.txt"), Qt::CaseInsensitive) == 0 ||
+             info.fileName().compare(QLatin1String("config.chump"), Qt::CaseInsensitive) == 0);
+        if (config_file) info.setFile(info.dir().absolutePath());
         if (info.isDir()) {
             AssetQueueItem item;
             item.path = info.absoluteFilePath();
             item.kind = QStringLiteral("Folder");
-            qint64 bytes = 0;
-            QDirIterator it(item.path, QDir::Files, QDirIterator::Subdirectories);
-            while (it.hasNext()) {
-                it.next();
-                bytes += it.fileInfo().size();
-                if (it.fileName().compare(QLatin1String("config.txt"), Qt::CaseInsensitive) != 0) continue;
-                CdpAssetEntry row;
-                const QString dir = it.fileInfo().dir().absolutePath();
-                row.username = dir.toStdString();
-                row.kuid = it.fileInfo().dir().dirName().toStdString();
-                row.kind = "folder";
-                for (const QFileInfo& file : QDir(dir).entryInfoList(QDir::Files)) row.files.push_back(file.fileName().toStdString());
-                item.assets.push_back(std::move(row));
-            }
-            item.size = bytes_label(bytes);
-            item.info = QString::number(item.assets.size()) + QStringLiteral(" config.txt");
+            const FolderAssetScan scan = scan_folder_assets(item.path);
+            item.assets = scan.assets;
+            item.size = bytes_label(scan.bytes);
+            item.info = QString::number(item.assets.size()) + (item.assets.size() == 1 ? QStringLiteral(" asset") : QStringLiteral(" assets"));
             queue_.push_back(std::move(item));
             queued_folder = true;
             continue;
@@ -1641,6 +1926,10 @@ void AssetsBridge::add_paths(const QStringList& paths) {
     if (!queued_folder) return;
     refresh_queue();
     select_queue(static_cast<int>(queue_.size()) - 1);
+    if (!queue_.empty() && queue_.back().kind == QLatin1String("Folder") && queue_.back().assets.size() == 1) {
+        finder_asset_ = 0;
+        refresh_finder();
+    }
     emit changed();
 }
 
@@ -1755,14 +2044,21 @@ void AssetsBridge::refresh_finder() {
         QString uname = QString::fromStdString(asset.username);
         if (uname.isEmpty()) uname = QString::fromStdString(asset.kuid);
         const QString prefix = finder_parts_.isEmpty() ? QString() : finder_parts_.join(QLatin1Char('/')) + QLatin1Char('/');
+        bool show_config = false;
         if (!finder_fbx_ && finder_parts_.isEmpty()) {
             QString cfg;
+            show_config = item.kind != QLatin1String("Folder");
             if (item.kind == QLatin1String("Folder")) {
-                QFile config(QDir(QString::fromStdString(asset.username)).filePath(QStringLiteral("config.txt")));
-                if (config.open(QIODevice::ReadOnly)) cfg = QString::fromUtf8(config.readAll());
+                const QString config_path = QDir(QString::fromStdString(asset.username)).filePath(QStringLiteral("config.txt"));
+                QFile config(config_path);
+                if (config.open(QIODevice::ReadOnly)) {
+                    cfg = QString::fromUtf8(config.readAll());
+                    show_config = true;
+                }
             } else if (!bytes_.empty()) {
                 cfg = QString::fromStdString(asset_config_text(bytes_.data(), bytes_.size(), asset.kuid));
             }
+            if (show_config) {
             FinderShown row;
             row.kind = QStringLiteral("file");
             row.index = -1;
@@ -1774,11 +2070,13 @@ void AssetsBridge::refresh_finder() {
                 row.modified = QFileInfo(QDir(QString::fromStdString(asset.username)).filePath(QStringLiteral("config.txt"))).lastModified();
             total += row.bytes;
             push(std::move(row));
+            }
         }
         QMap<QString, qint64> folders;
         for (int i = 0; i < static_cast<int>(asset.files.size()); ++i) {
             QString rel = QString::fromStdString(asset.files[static_cast<size_t>(i)]);
             rel.replace(QLatin1Char('\\'), QLatin1Char('/'));
+            if (show_config && prefix.isEmpty() && rel.compare(QLatin1String("config.txt"), Qt::CaseInsensitive) == 0) continue;
             if (finder_fbx_) {
                 if (!rel.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) continue;
             } else {
@@ -2205,6 +2503,7 @@ AssetsPage::AssetsPage(QWidget* parent) : QWidget(parent) {
     connect(bridge_, &AssetsBridge::homeRequested, this, &AssetsPage::homeRequested);
     connect(bridge_, &AssetsBridge::meshRequested, this, &AssetsPage::meshRequested);
     connect(bridge_, &AssetsBridge::engineRequested, this, &AssetsPage::engineRequested);
+    connect(bridge_, &AssetsBridge::kuidPickRequested, this, &AssetsPage::kuidPickRequested);
     view_ = new QQuickWidget(this);
     view_->setResizeMode(QQuickWidget::SizeRootObjectToView);
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
@@ -2241,6 +2540,11 @@ QString AssetsPage::pageName() const { return bridge_->page(); }
 bool AssetsPage::formOn() const { return bridge_->formOn(); }
 QString AssetsPage::centerList() const { return bridge_->centerList(); }
 void AssetsPage::setPage(const QString& page) { bridge_->setPage(page); }
+void AssetsPage::loadConfig(const QString& text, const QString& path) {
+    bridge_->setPage(QStringLiteral("config"));
+    bridge_->load_config(text, path);
+}
+void AssetsPage::applyPickedKuid(int index, const QString& kuid) { bridge_->apply_picked_kuid(index, kuid); }
 void AssetsPage::openPaths(const QStringList& paths) { bridge_->dropPaths(paths); }
 void AssetsPage::setSuite(const QString& suite) { bridge_->set_suite(suite); }
 void AssetsPage::applyEngineText(const QString& text) {
