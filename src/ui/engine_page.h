@@ -20,7 +20,7 @@ class QQuickWidget;
 class EngineBridge : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool dark READ dark NOTIFY changed)
-    Q_PROPERTY(int sideW READ sideW NOTIFY changed)
+    Q_PROPERTY(int sideW READ sideW NOTIFY layoutChanged)
     Q_PROPERTY(bool autoOn READ autoOn NOTIFY changed)
     Q_PROPERTY(bool sideLocked READ sideLocked NOTIFY changed)
     Q_PROPERTY(QString iconFontUrl READ iconFontUrl NOTIFY changed)
@@ -133,6 +133,7 @@ public:
 
 signals:
     void changed();
+    void layoutChanged();
     void homeRequested();
     void cdpSaveRequested(const QString& text);
 

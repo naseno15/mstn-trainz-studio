@@ -8,6 +8,8 @@ Item {
     readonly property color ink: bridge.dark ? "#f2f4f8" : "#1d1d1f"
     readonly property color mute: bridge.dark ? "#8b93a1" : "#5c6570"
     property real padTop: 16 + headCol.height + 8
+    property bool quiet: false
+    property bool freeze: false
 
     function blocks() {
         try { return JSON.parse(bridge.formBlocks) }
@@ -22,6 +24,8 @@ Item {
         anchors.fill: parent
         visible: dock.width > 40
         dark: bridge.dark
+        quiet: dock.quiet
+        freeze: dock.freeze
         plateRadius: 16
         foot: 8
 

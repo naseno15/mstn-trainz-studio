@@ -10,13 +10,26 @@ Item {
     property bool lit: false
     property bool sunk: false
     property bool matte: false
+    property bool quiet: false
+    property bool freeze: false
     property real veil: 1
+    readonly property real insetL: (sunk ? 0 : 2) + (sunk ? 10 : 14)
+    readonly property real insetR: (sunk ? 0 : 2) + (sunk ? 10 : 14)
+    readonly property real insetT: (sunk ? 2 : 1) + (sunk ? 10 : 14)
+    readonly property real insetB: (sunk ? 1 : foot) + (sunk ? 10 : 14)
+    readonly property real liveW: Math.max(0, width - insetL - insetR)
+    readonly property real liveH: Math.max(0, height - insetT - insetB)
+    property real freezeW: 0
+    property real freezeH: 0
+    onLiveWChanged: if (!freeze) freezeW = liveW
+    onLiveHChanged: if (!freeze) freezeH = liveH
+    clip: freeze
     property real plateRadius: 22
     property real foot: 12
     default property alias content: body.data
 
     Repeater {
-        model: plate.sunk ? 2 : 5
+        model: plate.quiet ? 0 : (plate.sunk ? 2 : 5)
         delegate: Rectangle {
             required property int index
             property real t: (index + 1) / (plate.sunk ? 2 : 5)
@@ -32,7 +45,22 @@ Item {
     }
 
     Rectangle {
+        id: faceFlat
+        visible: plate.quiet
+        anchors.fill: parent
+        anchors.leftMargin: plate.sunk ? 0 : 2
+        anchors.rightMargin: plate.sunk ? 0 : 2
+        anchors.topMargin: plate.sunk ? 2 : 1
+        anchors.bottomMargin: plate.sunk ? 1 : plate.foot
+        radius: plate.plateRadius
+        color: plate.dark ? "#1e2430" : "#e7ebf1"
+        border.width: 1
+        border.color: Qt.rgba(1, 1, 1, plate.dark ? 0.08 : 0.40)
+    }
+
+    Rectangle {
         id: face
+        visible: !plate.quiet
         anchors.fill: parent
         anchors.leftMargin: plate.sunk ? 0 : 2
         anchors.rightMargin: plate.sunk ? 0 : 2
@@ -72,6 +100,7 @@ Item {
 
         // Short matte wash. No hard specular line.
         Rectangle {
+            visible: !plate.quiet
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
@@ -87,7 +116,10 @@ Item {
 
     Item {
         id: body
-        anchors.fill: face
-        anchors.margins: plate.sunk ? 10 : 14
+        x: plate.insetL
+        y: plate.insetT
+        // ponytail: while freeze is on, ignore the plate's live size so a splitter drag does not reflow the contents
+        width: plate.freeze ? plate.freezeW : plate.liveW
+        height: plate.freeze ? plate.freezeH : plate.liveH
     }
 }

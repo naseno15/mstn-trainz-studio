@@ -17,6 +17,8 @@ Item {
     readonly property color mute: bridge.dark ? "#8b93a1" : "#5c6570"
     property real padTop: 22 + head.height + hint.height
     property real padBottom: foot.height + 28
+    property bool quiet: false
+    property bool freeze: false
 
     FontLoader {
         id: mi
@@ -27,6 +29,8 @@ Item {
         anchors.fill: parent
         visible: viewer.width > 40
         dark: bridge.dark
+        quiet: viewer.quiet
+        freeze: viewer.freeze
         plateRadius: 16
         foot: 8
 

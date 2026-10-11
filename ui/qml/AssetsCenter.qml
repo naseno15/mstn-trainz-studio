@@ -16,6 +16,8 @@ Item {
     property real padTop: 22 + headCol.height + 8
     property real padSide: 16
     property real padBottom: 24
+    property bool quiet: false
+    property bool freeze: false
 
     function pageRoot() {
         var item = center
@@ -48,6 +50,8 @@ Item {
     GlassPlate {
         anchors.fill: parent
         dark: bridge.dark
+        quiet: center.quiet
+        freeze: center.freeze
         plateRadius: 16
         foot: 8
 

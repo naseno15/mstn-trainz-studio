@@ -154,8 +154,10 @@ void EngineBridge::toggleAuto() {
     emit changed();
 }
 void EngineBridge::setSideW(double width) {
-    side_w_ = std::max(280, std::min(520, static_cast<int>(width)));
-    emit changed();
+    const int next = std::max(280, std::min(520, static_cast<int>(width)));
+    if (next == side_w_) return;
+    side_w_ = next;
+    emit layoutChanged();
 }
 void EngineBridge::setCloneFrom(int notch) {
     clone_from_ = std::max(0, std::min(8, notch));

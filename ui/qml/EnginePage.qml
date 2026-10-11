@@ -16,6 +16,7 @@ Item {
 
     Item {
         id: stage
+        property bool layoutDrag: false
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
@@ -27,6 +28,7 @@ Item {
 
         EngineSide {
             id: side
+            quiet: stage.layoutDrag
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.bottom: parent.bottom
@@ -41,6 +43,7 @@ Item {
 
         EngineAuto {
             id: autoDock
+            quiet: stage.layoutDrag
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: parent.bottom
@@ -78,7 +81,10 @@ Item {
             height: parent.height
             cursorShape: Qt.SplitHCursor
             property real lastX: 0
-            onPressed: lastX = mapToItem(stage, mouseX, 0).x
+            onPressed: {
+                stage.layoutDrag = true
+                lastX = mapToItem(stage, mouseX, 0).x
+            }
             onPositionChanged: {
                 if (!pressed)
                     return
@@ -86,6 +92,8 @@ Item {
                 bridge.setSideW(side.width + (now - lastX))
                 lastX = now
             }
+            onReleased: stage.layoutDrag = false
+            onCanceled: stage.layoutDrag = false
         }
     }
 
@@ -109,6 +117,7 @@ Item {
         GlassPlate {
             anchors.fill: parent
             dark: bridge.dark
+            quiet: stage.layoutDrag
             plateRadius: 28
             foot: 10
         }
