@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QHash>
 #include <QList>
 #include <QPointer>
 #include <QString>
@@ -42,9 +43,9 @@ class AssetsBridge : public QObject {
     Q_PROPERTY(bool dark READ dark NOTIFY changed)
     Q_PROPERTY(QString suite READ suite NOTIFY changed)
     Q_PROPERTY(QString page READ page NOTIFY changed)
-    Q_PROPERTY(int sideW READ sideW NOTIFY changed)
+    Q_PROPERTY(int sideW READ sideW NOTIFY layoutChanged)
     Q_PROPERTY(bool dockOn READ dockOn NOTIFY changed)
-    Q_PROPERTY(int dockW READ dockW NOTIFY changed)
+    Q_PROPERTY(int dockW READ dockW NOTIFY layoutChanged)
     Q_PROPERTY(bool navTall READ navTall NOTIFY changed)
     Q_PROPERTY(bool showQueue READ showQueue NOTIFY changed)
     Q_PROPERTY(QString brand READ brand NOTIFY changed)
@@ -100,6 +101,8 @@ class AssetsBridge : public QObject {
     Q_PROPERTY(QString crumbsJson READ crumbsJson NOTIFY changed)
     Q_PROPERTY(bool finderFbx READ finderFbx NOTIFY changed)
     Q_PROPERTY(bool finderUpOn READ finderUpOn NOTIFY changed)
+    Q_PROPERTY(QString finderSort READ finderSort NOTIFY changed)
+    Q_PROPERTY(bool finderSortAsc READ finderSortAsc NOTIFY changed)
     Q_PROPERTY(QString previewBody READ previewBody NOTIFY changed)
     Q_PROPERTY(QString previewPlain READ previewPlain NOTIFY changed)
     Q_PROPERTY(QString previewImage READ previewImage NOTIFY changed)
@@ -188,6 +191,8 @@ public:
     QString crumbsJson() const { return crumbs_json_; }
     bool finderFbx() const { return finder_fbx_; }
     bool finderUpOn() const { return finder_asset_ >= 0 || finder_fbx_; }
+    QString finderSort() const { return finder_sort_; }
+    bool finderSortAsc() const { return finder_sort_ascending_; }
     QString previewBody() const { return preview_body_; }
     QString previewPlain() const { return preview_plain_; }
     QString previewImage() const { return preview_image_url_; }
@@ -268,6 +273,8 @@ public:
 
 signals:
     void changed();
+    void finderChanged();
+    void layoutChanged();
     void homeRequested();
     void meshRequested(const QString& path);
     void engineRequested(const QString& text, const QString& label);
@@ -284,6 +291,8 @@ private:
     void refresh_finder();
     void enter_finder(int row);
     void preview_file(int row);
+    QString edit_key(int asset_index, const QString& rel) const;
+    void note_edit(const QString& text);
     void apply_edited_bytes(std::vector<uint8_t> bytes);
     void clear_preview();
     void sync_mesh_view();
@@ -319,8 +328,8 @@ private:
         qint64 bytes = -1;
     };
     std::vector<FinderShown> shown_;
-    QString finder_sort_ = QStringLiteral("name");
-    bool finder_sort_ascending_ = true;
+    QString finder_sort_ = QStringLiteral("modified");
+    bool finder_sort_ascending_ = false;
     QString config_path_;
     QString tzarc_text_;
     QString export_exe_;
@@ -347,9 +356,9 @@ private:
     QList<QStringList> export_kuids_;
     QList<int> export_rows_;
     int export_at_ = 0;
-    int queue_at_[4] = {};
-    int center_at_[4] = {};
-    int preview_at_[4] = {};
+    int queue_at_[4] = {-1, -1, -1, -1};
+    int center_at_[4] = {-1, -1, -1, -1};
+    int preview_at_[4] = {-1, -1, -1, -1};
     QString path_;
     QString suite_ = QStringLiteral("assets");
     QString page_ = QStringLiteral("packages");
@@ -381,6 +390,10 @@ private:
     bool viewer_expanded_ = false;
     bool cdp_dirty_ = false;
     bool last_edit_committed_ = true;
+    bool saving_ = false;
+    QString current_edit_key_;
+    QHash<QString, QString> saved_baseline_;
+    QHash<QString, QString> dirty_text_;
     Texmesh* tex_ = nullptr;
 };
 

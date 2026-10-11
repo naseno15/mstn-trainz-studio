@@ -9,6 +9,7 @@
 #include <QQuickWidget>
 #include <QThread>
 
+#include "ui/assets_page.h"
 #include "ui/crash_report.h"
 #include "ui/i18n.h"
 #include "ui/shell_window.h"
@@ -57,6 +58,12 @@ int main(int argc, char** argv) {
     window.triggerItem(QStringLiteral("mesh"));
     assert(alive(QStringLiteral("file"), QStringLiteral("Save")) && alive(QStringLiteral("view"), QStringLiteral("Reset camera")));
     window.triggerItem(QStringLiteral("home"));
+    if (auto* assets = window.findChild<AssetsPage*>()) {
+        if (!assets->qmlReady()) {
+            for (const QString& line : assets->qmlErrors()) std::fprintf(stderr, "%s\n", line.toUtf8().constData());
+        }
+        assert(assets->qmlReady());
+    }
     assert(!alive(QStringLiteral("edit"), QStringLiteral("Undo")));
     const bool was_dark = alive(QStringLiteral("theme"), QStringLiteral("Dark")) && window.menuRows(QStringLiteral("theme")).first().toMap().value(QStringLiteral("checked")).toBool();
     window.triggerItem(QStringLiteral("theme:toggle"));

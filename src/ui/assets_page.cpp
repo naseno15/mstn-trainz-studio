@@ -12,6 +12,7 @@
 
 #include "io/chump.h"
 #include "io/enginespec.h"
+#include "io/fbx.h"
 #include "io/kuid.h"
 #include "io/im_geom.h"
 #include "io/trainzmesh.h"
@@ -36,6 +37,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QListWidget>
 #include <QMap>
 #include <QMimeData>
@@ -127,18 +129,6 @@ QString bytes_label(qint64 size) {
 
 void prep_table(QTableWidget* table, const QStringList& headers);
 
-// No FBX parser exists; an .fbx previews through its sibling .trainzmesh/.im (same stem, same folder).
-QString viewable_mesh_rel(const CdpAssetEntry& asset, const QString& rel) {
-    if (!rel.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) return rel;
-    const QString stem = rel.left(rel.size() - 4);
-    for (const char* ext : {".trainzmesh", ".im"})
-        for (const std::string& file : asset.files) {
-            QString other = QString::fromStdString(file);
-            other.replace(QLatin1Char('\\'), QLatin1Char('/'));
-            if (other.compare(stem + QLatin1String(ext), Qt::CaseInsensitive) == 0) return other;
-        }
-    return {};
-}
 
 struct RemoveRow {
     QString name;
@@ -592,12 +582,16 @@ void AssetsBridge::setPage(const QString& page) {
 
 void AssetsBridge::goHome() { emit homeRequested(); }
 void AssetsBridge::setSideW(double width) {
-    side_w_ = std::max(320, std::min(560, static_cast<int>(width)));
-    emit changed();
+    const int next = std::max(320, std::min(560, static_cast<int>(width)));
+    if (next == side_w_) return;
+    side_w_ = next;
+    emit layoutChanged();
 }
 void AssetsBridge::setDockW(double width) {
-    dock_w_ = std::max(280, std::min(720, static_cast<int>(width)));
-    emit changed();
+    const int next = std::max(280, std::min(720, static_cast<int>(width)));
+    if (next == dock_w_) return;
+    dock_w_ = next;
+    emit layoutChanged();
 }
 
 void AssetsBridge::runAction(const QString& action) {
@@ -750,37 +744,39 @@ void AssetsBridge::placeQueue(double x, double y, double w, double h) {
         return;
     }
     if (tex_) tex_->place_queue(0, 0, 0, 0);
-    queue_at_[0] = static_cast<int>(x);
-    queue_at_[1] = static_cast<int>(y);
-    queue_at_[2] = static_cast<int>(w);
-    queue_at_[3] = static_cast<int>(h);
+    const int next[4] = {static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h)};
+    if (next[0] == queue_at_[0] && next[1] == queue_at_[1] && next[2] == queue_at_[2] && next[3] == queue_at_[3]) return;
+    queue_at_[0] = next[0];
+    queue_at_[1] = next[1];
+    queue_at_[2] = next[2];
+    queue_at_[3] = next[3];
     place_widget(queue_table_, 0, 0, 0, 0, false);
 }
 void AssetsBridge::placeCenter(double x, double y, double w, double h) {
     const bool assets = suite_ != QLatin1String("texmesh");
-    center_at_[0] = static_cast<int>(x);
-    center_at_[1] = static_cast<int>(y);
-    center_at_[2] = static_cast<int>(w);
-    center_at_[3] = static_cast<int>(h);
-    const int ix = center_at_[0];
-    const int iy = center_at_[1];
-    const int iw = center_at_[2];
-    const int ih = center_at_[3];
+    const int next[4] = {static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h)};
+    if (next[0] == center_at_[0] && next[1] == center_at_[1] && next[2] == center_at_[2] && next[3] == center_at_[3]) return;
+    center_at_[0] = next[0];
+    center_at_[1] = next[1];
+    center_at_[2] = next[2];
+    center_at_[3] = next[3];
     place_widget(finder_page_, 0, 0, 0, 0, false);
     place_widget(config_edit_, 0, 0, 0, 0, false);
     place_widget(kuid_page_, 0, 0, 0, 0, false);
     place_widget(export_page_, 0, 0, 0, 0, false);
     Q_UNUSED(assets);
-    emit placeCenterRequested(ix, iy, iw, ih);
+    emit placeCenterRequested(next[0], next[1], next[2], next[3]);
 }
 void AssetsBridge::placePreview(double x, double y, double w, double h) {
-    preview_at_[0] = static_cast<int>(x);
-    preview_at_[1] = static_cast<int>(y);
-    preview_at_[2] = static_cast<int>(w);
-    preview_at_[3] = static_cast<int>(h);
+    const int next[4] = {static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h)};
+    if (next[0] == preview_at_[0] && next[1] == preview_at_[1] && next[2] == preview_at_[2] && next[3] == preview_at_[3]) return;
+    preview_at_[0] = next[0];
+    preview_at_[1] = next[1];
+    preview_at_[2] = next[2];
+    preview_at_[3] = next[3];
     place_widget(preview_, 0, 0, 0, 0, false);
     sync_mesh_view();
-    emit placePreviewRequested(static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h));
+    emit placePreviewRequested(next[0], next[1], next[2], next[3]);
 }
 void AssetsBridge::placeDock(double, double, double, double) {}
 void AssetsBridge::placeFormTool(double x, double y, double w, double h) {
@@ -815,11 +811,22 @@ bool AssetsBridge::show_mesh_inline(const QString& path) {
     std::vector<ViewPart> parts;
     try {
         if (path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
-            for (const MeshPart& part : parse_im_parts(data, static_cast<size_t>(bytes.size()))) {
+            for (const MeshPart& part : parse_im_view(data, static_cast<size_t>(bytes.size())).parts) {
                 ViewPart row;
                 row.name = QString::fromStdString(part.name);
                 row.positions = part.positions;
                 row.normals = part.normals;
+                row.uvs = part.uvs;
+                row.indices = part.indices;
+                parts.push_back(std::move(row));
+            }
+        } else if (path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) {
+            for (const MeshPart& part : parse_fbx_parts(data, static_cast<size_t>(bytes.size()))) {
+                ViewPart row;
+                row.name = QString::fromStdString(part.name);
+                row.positions = part.positions;
+                row.normals = part.normals;
+                row.uvs = part.uvs;
                 row.indices = part.indices;
                 parts.push_back(std::move(row));
             }
@@ -870,7 +877,7 @@ QString AssetsBridge::stage_selected_asset() {
     const AssetQueueItem& item = queue_[static_cast<size_t>(queue_row_)];
     if (finder_asset_ >= static_cast<int>(item.assets.size())) return {};
     const CdpAssetEntry& asset = item.assets[static_cast<size_t>(finder_asset_)];
-    const QString rel = viewable_mesh_rel(asset, entry.rel);
+    const QString rel = entry.rel;
     if (rel.isEmpty()) return {};
     if (item.kind == QLatin1String("Folder"))
         return QDir(QString::fromStdString(asset.username)).filePath(rel);
@@ -919,6 +926,30 @@ void AssetsBridge::setPreviewText(const QString& text) {
     preview_plain_ = text;
     preview_body_ = text;
     last_edit_committed_ = false;
+    note_edit(text);
+}
+QString AssetsBridge::edit_key(int asset_index, const QString& rel) const {
+    if (queue_row_ < 0 || queue_row_ >= static_cast<int>(queue_.size())) return {};
+    if (asset_index < 0 || asset_index >= static_cast<int>(queue_[static_cast<size_t>(queue_row_)].assets.size())) return {};
+    const AssetQueueItem& item = queue_[static_cast<size_t>(queue_row_)];
+    const QString name = rel == QLatin1String("__config__") ? QStringLiteral("config.txt") : rel;
+    return item.path + QLatin1Char('|') + QString::fromStdString(item.assets[static_cast<size_t>(asset_index)].kuid) + QLatin1Char('|') + name;
+}
+void AssetsBridge::note_edit(const QString& text) {
+    if (current_edit_key_.isEmpty()) return;
+    auto same = [](QString left, QString right) {
+        if (left.endsWith(QLatin1Char('\n'))) left.chop(1);
+        if (right.endsWith(QLatin1Char('\n'))) right.chop(1);
+        if (left.endsWith(QLatin1Char('\r'))) left.chop(1);
+        if (right.endsWith(QLatin1Char('\r'))) right.chop(1);
+        return left == right;
+    };
+    const bool was = dirty_text_.contains(current_edit_key_);
+    if (same(text, saved_baseline_.value(current_edit_key_))) dirty_text_.remove(current_edit_key_);
+    else dirty_text_.insert(current_edit_key_, text);
+    if (was == dirty_text_.contains(current_edit_key_)) return;
+    refresh_finder();
+    emit finderChanged();
 }
 void AssetsBridge::attachEditor(QObject* quickDocument) {
     auto* document = qobject_cast<QQuickTextDocument*>(quickDocument);
@@ -954,6 +985,12 @@ void AssetsBridge::viewerExpand() {
     emit changed();
 }
 void AssetsBridge::viewerSave() {
+    if (saving_) return;
+    struct Guard {
+        bool& flag;
+        explicit Guard(bool& flag) : flag(flag) { flag = true; }
+        ~Guard() { flag = false; }
+    } guard(saving_);
     last_edit_committed_ = false;
     if (!view_editor_ || finder_sel_ < 0 || finder_sel_ >= static_cast<int>(shown_.size())) return;
     if (queue_row_ < 0 || queue_row_ >= static_cast<int>(queue_.size())) return;
@@ -994,7 +1031,12 @@ void AssetsBridge::viewerSave() {
         ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Save"), QString::fromUtf8(error.what()));
         return;
     }
+    const QString key = edit_key(finder_asset_, entry.rel);
+    current_edit_key_ = key;
+    saved_baseline_.insert(key, preview_plain_);
+    dirty_text_.remove(key);
     last_edit_committed_ = true;
+    refresh_finder();
     emit changed();
 }
 void AssetsBridge::viewerEngine() {
@@ -1017,7 +1059,7 @@ void AssetsBridge::viewerFast() {
     const QString path = stage_selected_asset();
     if (path.isEmpty() || !QFileInfo::exists(path)) {
         ui_box(QMessageBox::Warning, nullptr, QStringLiteral("Fast Preview"),
-               QStringLiteral("Nothing to preview: .fbx needs a same-name .trainzmesh or .im in the asset."));
+               QStringLiteral("The selected mesh could not be staged."));
         return;
     }
     if (!show_mesh_inline(path))
@@ -1359,7 +1401,7 @@ void AssetsBridge::setFinderSort(const QString& column) {
     if (finder_sort_ == column) finder_sort_ascending_ = !finder_sort_ascending_;
     else {
         finder_sort_ = column;
-        finder_sort_ascending_ = true;
+        finder_sort_ascending_ = column != QLatin1String("modified");
     }
     refresh_finder();
     emit changed();
@@ -1649,7 +1691,9 @@ void AssetsBridge::refresh_finder() {
             ? (row.detail.section(QStringLiteral(" · "), 0, 0).isEmpty() ? QStringLiteral("Asset") : row.detail.section(QStringLiteral(" · "), 0, 0))
             : (row.kind == QLatin1String("dir") ? QStringLiteral("Folder") : row.detail);
         if (!row.modified.isValid()) row.modified = package_modified;
-        row.modified_label = row.modified.isValid() ? row.modified.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")) : QStringLiteral("—");
+        row.modified_label = row.modified.isValid()
+            ? QLocale().toString(row.modified.toLocalTime(), QStringLiteral("d MMM yyyy, HH:mm"))
+            : QStringLiteral("—");
         if (row.size_label.isEmpty()) row.size_label = bytes_label(row.bytes);
         shown_.push_back(std::move(row));
     };
@@ -1737,7 +1781,7 @@ void AssetsBridge::refresh_finder() {
         for (auto it = folders.cbegin(); it != folders.cend(); ++it) {
             FinderShown row;
             row.kind = QStringLiteral("dir");
-            row.name = it.key() + QLatin1Char('/');
+            row.name = it.key();
             row.rel = prefix + it.key();
             row.bytes = it.value();
             row.detail = QStringLiteral("Folder");
@@ -1762,6 +1806,12 @@ void AssetsBridge::refresh_finder() {
         crumbs_json_ = QString::fromUtf8(QJsonDocument(crumbs).toJson(QJsonDocument::Compact));
     }
     std::stable_sort(shown_.begin(), shown_.end(), [this](const FinderShown& a, const FinderShown& b) {
+        const auto folder = [](const FinderShown& row) {
+            return row.kind == QLatin1String("dir") || row.kind == QLatin1String("asset");
+        };
+        const bool af = folder(a);
+        const bool bf = folder(b);
+        if (af != bf) return af;
         int order = 0;
         if (finder_sort_ == QLatin1String("size")) order = a.bytes < b.bytes ? -1 : (a.bytes > b.bytes ? 1 : 0);
         else if (finder_sort_ == QLatin1String("modified")) order = a.modified < b.modified ? -1 : (a.modified > b.modified ? 1 : 0);
@@ -1782,6 +1832,14 @@ void AssetsBridge::refresh_finder() {
         }
     }
     if (finder_sel_ >= static_cast<int>(shown_.size())) finder_sel_ = -1;
+    bool any_folder = false;
+    bool any_file = false;
+    for (const FinderShown& row : shown_) {
+        const bool folder = row.kind == QLatin1String("dir") || row.kind == QLatin1String("asset");
+        any_folder = any_folder || folder;
+        any_file = any_file || !folder;
+    }
+    const bool split_groups = any_folder && any_file;
     QJsonArray found;
     finder_table_->blockSignals(true);
     finder_table_->setRowCount(0);
@@ -1798,6 +1856,12 @@ void AssetsBridge::refresh_finder() {
             {QStringLiteral("badge"), row.badge},
             {QStringLiteral("color"), row.color},
             {QStringLiteral("on"), i == finder_sel_},
+            {QStringLiteral("dirty"), row.kind == QLatin1String("file") && dirty_text_.contains(edit_key(finder_asset_, row.rel))},
+            {QStringLiteral("group"), split_groups
+                ? ((row.kind == QLatin1String("dir") || row.kind == QLatin1String("asset"))
+                    ? QStringLiteral("Folders")
+                    : QStringLiteral("Files"))
+                : QString()},
         });
         finder_table_->insertRow(i);
         auto* cell = new QTableWidgetItem(row.name);
@@ -1961,7 +2025,10 @@ void AssetsBridge::preview_file(int row) {
         emit changed();
         return;
     }
-    const QString plain = QString::fromUtf8(data);
+    current_edit_key_ = edit_key(finder_asset_, entry.rel);
+    QString plain = QString::fromUtf8(data);
+    if (dirty_text_.contains(current_edit_key_)) plain = dirty_text_.value(current_edit_key_);
+    else saved_baseline_.insert(current_edit_key_, plain);
     preview_plain_ = plain;
     view_editor_ = true;
     preview_on_ = true;

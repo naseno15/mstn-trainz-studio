@@ -17,7 +17,52 @@ Item {
 
     Item {
         id: stage
-        property bool dockDrag: false
+        property bool layoutDrag: false
+        property real sideLive: 380
+        property real dockLive: 560
+        property real holdCenter: 0
+        property real holdDock: 0
+        property real footHold: 0
+        function sideFoot() {
+            if (layoutDrag)
+                return footHold
+            var o = side.mapToItem(root, 0, 0)
+            if (o.x + side.width <= nav.x + 8 || o.x >= nav.x + nav.width - 8)
+                return 0
+            return chrome.contentInset(nav.height)
+        }
+        function beginDrag() {
+            holdCenter = centerSlot.width
+            holdDock = dockSlot.width
+            footHold = side.footPad
+            layoutDrag = true
+        }
+        function endDrag() {
+            layoutDrag = false
+            bridge.setSideW(sideLive)
+            bridge.setDockW(dockLive)
+            sideLive = bridge.sideW
+            dockLive = bridge.dockW
+            queueSlot.sync()
+            dockSlot.sync()
+            previewSlot.sync()
+            formToolSlot.sync()
+            centerBody.sync()
+            centerChrome.syncWells()
+        }
+        Component.onCompleted: {
+            sideLive = bridge.sideW
+            dockLive = bridge.dockW
+        }
+        Connections {
+            target: bridge
+            function onLayoutChanged() {
+                if (stage.layoutDrag)
+                    return
+                stage.sideLive = bridge.sideW
+                stage.dockLive = bridge.dockW
+            }
+        }
         anchors.fill: parent
         anchors.leftMargin: 10
         anchors.rightMargin: 10
@@ -26,16 +71,13 @@ Item {
 
         AssetsSide {
             id: side
+            quiet: stage.layoutDrag || dockEase.running
+            freeze: stage.layoutDrag
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            width: bridge.sideW
-            footPad: {
-                var o = mapToItem(root, 0, 0)
-                if (o.x + width <= nav.x + 8 || o.x >= nav.x + nav.width - 8)
-                    return 0
-                return chrome.contentInset(nav.height)
-            }
+            width: stage.sideLive
+            footPad: stage.sideFoot()
         }
 
         Item {
@@ -51,6 +93,8 @@ Item {
             visible: bridge.showQueue
 
             function sync() {
+                if (stage.layoutDrag)
+                    return
                 if (!bridge.showQueue || width < 8 || height < 8) {
                     bridge.placeQueue(0, 0, 0, 0)
                     return
@@ -70,40 +114,60 @@ Item {
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            width: bridge.dockOn ? (bridge.viewerExpanded ? parent.width - side.width - 8 : bridge.dockW) : 0
+            width: bridge.dockOn ? (bridge.viewerExpanded ? parent.width - stage.sideLive - 8 : stage.dockLive) : 0
+            readonly property real contentW: stage.layoutDrag ? stage.holdDock : width
+            clip: true
             property bool widthReady: false
             Behavior on width {
-                enabled: dockSlot.widthReady && !stage.dockDrag
-                NumberAnimation { duration: 280; easing.type: Easing.OutCubic }
+                id: dockEase
+                enabled: dockSlot.widthReady && !stage.layoutDrag
+                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
             }
 
             AssetsViewer {
                 id: viewerChrome
-                anchors.fill: parent
+                quiet: stage.layoutDrag || dockEase.running
+                freeze: stage.layoutDrag
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: dockSlot.contentW
                 visible: bridge.viewerOn && dockSlot.width > 40
             }
 
             AssetsDock {
                 id: formChrome
-                anchors.fill: parent
+                quiet: stage.layoutDrag || dockEase.running
+                freeze: stage.layoutDrag
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: dockSlot.contentW
                 visible: bridge.formOn && dockSlot.width > 40
             }
 
             GlassPlate {
-                anchors.fill: parent
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: dockSlot.contentW
                 visible: !bridge.viewerOn && !bridge.formOn && dockSlot.width > 40
                 dark: bridge.dark
+                quiet: stage.layoutDrag || dockEase.running
+                freeze: stage.layoutDrag
                 plateRadius: 16
                 foot: 8
             }
 
             Item {
                 id: previewSlot
-                anchors.fill: parent
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
                 anchors.leftMargin: 16
-                anchors.rightMargin: 16
                 anchors.topMargin: viewerChrome.padTop
                 anchors.bottomMargin: viewerChrome.padBottom
+                width: Math.max(0, dockSlot.contentW - 32)
                 visible: bridge.viewerOn && dockSlot.width > 40
 
                 Rectangle {
@@ -143,7 +207,7 @@ Item {
                     clip: true
                     TextEdit {
                         id: viewerText
-                        width: Math.max(previewSlot.width, implicitWidth)
+                        width: Math.max(implicitWidth, 40)
                         readOnly: true
                         selectByMouse: true
                         wrapMode: TextEdit.NoWrap
@@ -212,7 +276,7 @@ Item {
                     clip: true
                     TextEdit {
                         id: editorText
-                        width: Math.max(previewSlot.width, implicitWidth)
+                        width: Math.max(implicitWidth, 40)
                         readOnly: bridge.viewPane === 0 // Viewer = same render as Editor, just locked
                         selectByMouse: true
                         wrapMode: TextEdit.NoWrap
@@ -223,6 +287,12 @@ Item {
                         font.pixelSize: bridge.previewPt + 2
                         text: bridge.previewPlain
                         onTextChanged: if (bridge.viewPane === 1) bridge.setPreviewText(text)
+                        Keys.onPressed: function (event) {
+                            if (event.key === Qt.Key_S && (event.modifiers & Qt.ControlModifier) && !(event.modifiers & Qt.ShiftModifier)) {
+                                bridge.viewerSave()
+                                event.accepted = true
+                            }
+                        }
                         Component.onCompleted: bridge.attachEditor(textDocument)
                     }
                 }
@@ -254,19 +324,26 @@ Item {
                             color: bridge.dark ? "#303640" : "#aeb5c0"
                         }
                     }
-                    Column {
-                        x: 0
-                        y: 10 - editorFlick.contentY
-                        width: parent.width - 7
+                    // ponytail: only the lines in view. A full-file column reflows every splitter pixel.
+                    Item {
+                        id: gutterLines
+                        anchors.fill: parent
+                        property real lineH: Math.max(1, editorMetrics.lineSpacing)
+                        property int firstLine: Math.max(0, Math.floor(Math.max(0, editorFlick.contentY - 10) / lineH))
+                        property int shownLines: Math.min(
+                            Math.max(0, editorText.lineCount - firstLine),
+                            Math.ceil(height / lineH) + 2)
                         Repeater {
-                            model: Math.max(1, editorText.lineCount)
+                            model: gutterLines.shownLines
                             Text {
                                 required property int index
-                                width: parent.width
-                                height: editorMetrics.lineSpacing
+                                x: 0
+                                y: 10 + (gutterLines.firstLine + index) * gutterLines.lineH - editorFlick.contentY
+                                width: editorGutter.width - 7
+                                height: gutterLines.lineH
                                 horizontalAlignment: Text.AlignRight
                                 verticalAlignment: Text.AlignVCenter
-                                text: index + 1
+                                text: editorGutter.firstLine + index + 1
                                 color: "#858585"
                                 font.family: "Consolas"
                                 font.pixelSize: bridge.previewPt
@@ -276,6 +353,8 @@ Item {
                 }
 
                 function sync() {
+                    if (stage.layoutDrag)
+                        return
                     if (!visible || width < 8 || height < 8) {
                         bridge.placePreview(0, 0, 0, 0)
                         return
@@ -293,16 +372,17 @@ Item {
             Item {
                 id: formToolSlot
                 anchors.left: parent.left
-                anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.top: parent.top
                 anchors.leftMargin: 16
-                anchors.rightMargin: 16
                 anchors.bottomMargin: 16
                 anchors.topMargin: formChrome.padTop
+                width: Math.max(0, dockSlot.contentW - 32)
                 visible: bridge.formTool && dockSlot.width > 40
 
                 function sync() {
+                    if (stage.layoutDrag)
+                        return
                     if (!visible || width < 8 || height < 8) {
                         bridge.placeFormTool(0, 0, 0, 0)
                         return
@@ -327,6 +407,8 @@ Item {
             }
 
             function sync() {
+                if (stage.layoutDrag)
+                    return
                 var p = mapToItem(root, 0, 0)
                 bridge.placeDock(p.x, p.y, width, contentH())
             }
@@ -350,20 +432,29 @@ Item {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.bottomMargin: chrome.contentInset(nav.height)
+            readonly property real contentW: stage.layoutDrag ? stage.holdCenter : width
+            clip: true
 
             AssetsCenter {
                 id: centerChrome
-                anchors.fill: parent
+                quiet: stage.layoutDrag || dockEase.running
+                freeze: stage.layoutDrag
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: centerSlot.contentW
             }
 
             Item {
                 id: centerBody
                 visible: bridge.centerKind === "page"
-                anchors.fill: parent
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
                 anchors.leftMargin: centerChrome.padSide
-                anchors.rightMargin: centerChrome.padSide
                 anchors.topMargin: centerChrome.padTop
                 anchors.bottomMargin: centerChrome.padBottom
+                width: Math.max(40, centerSlot.contentW - centerChrome.padSide * 2)
 
                 property var finderRows: []
                 property var crumbRows: []
@@ -383,6 +474,9 @@ Item {
                     function onChanged() {
                         centerBody.finderRows = centerBody.parseFinder()
                         centerBody.crumbRows = centerBody.parseCrumbs()
+                    }
+                    function onFinderChanged() {
+                        centerBody.finderRows = centerBody.parseFinder()
                     }
                 }
                 Component.onCompleted: {
@@ -573,7 +667,12 @@ Item {
                                                 anchors.rightMargin: 6
                                                 verticalAlignment: Text.AlignVCenter
                                                 horizontalAlignment: modelData.key === "size" ? Text.AlignRight : Text.AlignLeft
-                                                text: (typeof modelData.title === "string" ? qsTr(modelData.title) : modelData.title)
+                                                text: {
+                                                    var title = (typeof modelData.title === "string" ? qsTr(modelData.title) : modelData.title)
+                                                    if (bridge.finderSort !== modelData.key)
+                                                        return title
+                                                    return title + (bridge.finderSortAsc ? "  \u2191" : "  \u2193")
+                                                }
                                                 color: bridge.dark ? "#b8bec8" : "#4d5662"
                                                 font.pixelSize: 10
                                                 font.bold: true
@@ -626,71 +725,53 @@ Item {
                                 anchors.bottom: openFolderBtn.top
                                 anchors.bottomMargin: 8
                                 clip: true
-                                spacing: 2
+                                spacing: 0
+                                reuseItems: true
                                 boundsBehavior: Flickable.StopAtBounds
                                 model: centerBody.finderRows
+                                section.property: "group"
+                                section.criteria: ViewSection.FullString
+                                section.delegate: Item {
+                                    required property string section
+                                    width: finderList.width
+                                    height: section.length === 0 ? 0 : 22
+                                    visible: section.length > 0
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 8
+                                        anchors.bottom: parent.bottom
+                                        anchors.bottomMargin: 2
+                                        text: (typeof section === "string" ? qsTr(section) : section)
+                                        color: bridge.dark ? "#8b93a1" : "#5c6570"
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                    }
+                                }
                                 delegate: Item {
                                     required property var modelData
                                     width: finderList.width
-                                    height: 52
+                                    height: 32
                                     HoverHandler { id: rowHover }
 
-                                    Item {
+                                    Rectangle {
                                         anchors.fill: parent
-                                        anchors.leftMargin: 6
-                                        anchors.rightMargin: 6
-                                        anchors.topMargin: 3
-                                        anchors.bottomMargin: 3
-                                        visible: modelData.on
-
-                                        Repeater {
-                                            model: 3
-                                            delegate: Rectangle {
-                                                required property int index
-                                                property real t: (index + 1) / 3
-                                                anchors.fill: parent
-                                                anchors.leftMargin: 1 - t * 2
-                                                anchors.rightMargin: 1 - t * 2
-                                                anchors.topMargin: 1 + index
-                                                anchors.bottomMargin: -t * 2
-                                                radius: 12
-                                                color: Qt.rgba(0, 0, 0, 0.28 * (1.05 - t))
-                                            }
-                                        }
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            anchors.bottomMargin: 2
-                                            radius: 12
-                                            gradient: Gradient {
-                                                GradientStop { position: 0.0; color: "#ff7a45" }
-                                                GradientStop { position: 0.42; color: "#ff5a1f" }
-                                                GradientStop { position: 1.0; color: "#c43a10" }
-                                            }
-                                            border.width: 1
-                                            border.color: Qt.rgba(1, 0.84, 0.70, 0.60)
-                                            Rectangle {
-                                                anchors.left: parent.left
-                                                anchors.right: parent.right
-                                                anchors.top: parent.top
-                                                anchors.leftMargin: 14
-                                                anchors.rightMargin: 14
-                                                anchors.topMargin: 1
-                                                height: 1
-                                                color: Qt.rgba(1, 1, 1, 0.55)
-                                            }
-                                        }
+                                        anchors.leftMargin: 4
+                                        anchors.rightMargin: 4
+                                        anchors.topMargin: 1
+                                        anchors.bottomMargin: 1
+                                        radius: 6
+                                        visible: modelData.dirty && !modelData.on
+                                        color: Qt.rgba(1, 0.62, 0.04, bridge.dark ? 0.22 : 0.38)
                                     }
                                     Rectangle {
                                         anchors.fill: parent
-                                        anchors.leftMargin: 6
-                                        anchors.rightMargin: 6
-                                        anchors.topMargin: 3
-                                        anchors.bottomMargin: 3
-                                        radius: 12
-                                        visible: !modelData.on && rowHover.hovered
-                                        color: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.35)
-                                        border.width: 1
-                                        border.color: Qt.rgba(1, 1, 1, bridge.dark ? 0.10 : 0.40)
+                                        anchors.leftMargin: 4
+                                        anchors.rightMargin: 4
+                                        anchors.topMargin: 1
+                                        anchors.bottomMargin: 1
+                                        radius: 6
+                                        visible: modelData.on || rowHover.hovered
+                                        color: modelData.on ? "#0a84ff" : Qt.rgba(1, 1, 1, bridge.dark ? 0.06 : 0.45)
                                     }
                                     Row {
                                         z: 2
@@ -698,30 +779,77 @@ Item {
                                         Item {
                                             width: finderHeader.nameWidth
                                             height: parent.height
-                                            Rectangle {
-                                                x: 14
-                                                width: 28
-                                                height: 28
-                                                radius: 8
+                                            Item {
+                                                x: 10
+                                                width: 26
+                                                height: 22
                                                 anchors.verticalCenter: parent.verticalCenter
-                                                property color badgeColor: modelData.color || "#8e8e93"
-                                                color: modelData.on ? Qt.rgba(0, 0, 0, 0.22) : Qt.rgba(badgeColor.r, badgeColor.g, badgeColor.b, 0.22)
-                                                Text {
-                                                    anchors.centerIn: parent
-                                                    text: modelData.badge || qsTr("\u00b7")
-                                                    color: modelData.on ? "#ffffff" : modelData.color
-                                                    font.pixelSize: 12
-                                                    font.bold: true
+                                                visible: modelData.kind === "dir" || modelData.kind === "asset"
+                                                Rectangle {
+                                                    x: 1
+                                                    y: 1
+                                                    width: 12
+                                                    height: 6
+                                                    radius: 2
+                                                    color: modelData.on ? "#d6ebff" : "#8ec8ff"
+                                                }
+                                                Rectangle {
+                                                    x: 0
+                                                    y: 5
+                                                    width: 26
+                                                    height: 16
+                                                    radius: 3
+                                                    color: modelData.on ? "#f4f8ff" : "#3b9dff"
+                                                    Rectangle {
+                                                        anchors.left: parent.left
+                                                        anchors.right: parent.right
+                                                        anchors.top: parent.top
+                                                        anchors.margins: 1
+                                                        height: 5
+                                                        radius: 2
+                                                        color: Qt.rgba(1, 1, 1, modelData.on ? 0.55 : 0.28)
+                                                    }
+                                                }
+                                            }
+                                            Item {
+                                                x: 10
+                                                width: 26
+                                                height: 22
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                visible: modelData.kind !== "dir" && modelData.kind !== "asset"
+                                                Rectangle {
+                                                    x: 6
+                                                    y: 0
+                                                    width: 16
+                                                    height: 21
+                                                    radius: 2
+                                                    color: modelData.on ? "#ffffff" : (bridge.dark ? "#e8eaed" : "#ffffff")
+                                                    border.width: 1
+                                                    border.color: modelData.on ? Qt.rgba(1, 1, 1, 0.65) : "#c5c9d1"
+                                                }
+                                                Rectangle {
+                                                    x: 15
+                                                    y: 0
+                                                    width: 7
+                                                    height: 7
+                                                    color: modelData.color || "#8e8e93"
+                                                }
+                                                Rectangle {
+                                                    x: 9
+                                                    y: 12
+                                                    width: 10
+                                                    height: 2
+                                                    radius: 1
+                                                    color: modelData.on ? "#0a84ff" : (modelData.color || "#8e8e93")
                                                 }
                                             }
                                             Text {
-                                                x: 52
-                                                width: parent.width - 62
+                                                x: 42
+                                                width: parent.width - 50
                                                 anchors.verticalCenter: parent.verticalCenter
-                                                text: (typeof modelData.name === "string" ? qsTr(modelData.name) : modelData.name)
-                                                color: modelData.on ? "#ffffff" : (bridge.dark ? "#f2f4f8" : "#1d1d1f")
+                                                text: (typeof modelData.name === "string" ? qsTr(modelData.name) : modelData.name) + (modelData.dirty ? " *" : "")
+                                                color: modelData.on ? "#ffffff" : (modelData.dirty ? "#ff9f0a" : (bridge.dark ? "#f2f4f8" : "#1d1d1f"))
                                                 font.pixelSize: 12
-                                                font.bold: true
                                                 elide: Text.ElideRight
                                             }
                                         }
@@ -875,6 +1003,8 @@ Item {
                 }
 
                 function sync() {
+                    if (stage.layoutDrag)
+                        return
                     if (!visible || width < 8 || height < 8) {
                         bridge.placeCenter(0, 0, 0, 0)
                         return
@@ -896,15 +1026,21 @@ Item {
             width: 10
             height: parent.height
             cursorShape: Qt.SplitHCursor
-            property real lastX: 0
-            onPressed: lastX = mapToItem(stage, mouseX, 0).x
+            property real pressX: 0
+            property real grabW: 0
+            onPressed: {
+                pressX = mapToItem(stage, mouseX, 0).x
+                grabW = stage.sideLive
+                stage.beginDrag()
+            }
             onPositionChanged: {
                 if (!pressed)
                     return
                 var now = mapToItem(stage, mouseX, 0).x
-                bridge.setSideW(side.width + (now - lastX))
-                lastX = now
+                stage.sideLive = Math.max(320, Math.min(560, Math.round(grabW + (now - pressX))))
             }
+            onReleased: stage.endDrag()
+            onCanceled: stage.endDrag()
         }
 
         MouseArea {
@@ -916,21 +1052,21 @@ Item {
             height: parent.height
             cursorShape: Qt.SplitHCursor
             preventStealing: true
-            property real lastX: 0
+            property real pressX: 0
             property real grabW: 0
             onPressed: {
-                stage.dockDrag = true
-                lastX = mapToItem(stage, mouseX, 0).x
-                grabW = bridge.dockW
+                pressX = mapToItem(stage, mouseX, 0).x
+                grabW = stage.dockLive
+                stage.beginDrag()
             }
             onPositionChanged: {
                 if (!pressed)
                     return
                 var now = mapToItem(stage, mouseX, 0).x
-                bridge.setDockW(grabW - (now - lastX))
+                stage.dockLive = Math.max(280, Math.min(720, Math.round(grabW - (now - pressX))))
             }
-            onReleased: stage.dockDrag = false
-            onCanceled: stage.dockDrag = false
+            onReleased: stage.endDrag()
+            onCanceled: stage.endDrag()
         }
     }
 
@@ -962,6 +1098,7 @@ Item {
         GlassPlate {
             anchors.fill: parent
             dark: bridge.dark
+            quiet: stage.layoutDrag || dockEase.running
             plateRadius: 28
             foot: 10
         }
