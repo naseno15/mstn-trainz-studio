@@ -50,14 +50,19 @@ const Glyph kGlyphs[] = {
     {"clear", 0xe14c},
 };
 
-QString font_file() {
-return res_icon_font();
+QString font_file() { return res_icon_font(); }
+
+// QFileInfo::absoluteFilePath() rewrites ":/studio/..." into a disk path that does not exist.
+QString font_path() {
+    const QString raw = font_file();
+    if (raw.startsWith(QLatin1String(":/"))) return raw;
+    return QFileInfo(raw).absoluteFilePath();
 }
 
 }  // namespace
 
 void load_material_icons() {
-    const QString path = QFileInfo(font_file()).absoluteFilePath();
+    const QString path = font_path();
     if (!QFileInfo::exists(path)) return;
     QFontDatabase::addApplicationFont(path);
 }
@@ -65,7 +70,7 @@ void load_material_icons() {
 QString material_icon_family() { return QStringLiteral("Material Icons"); }
 
 QString material_icon_url() {
-    const QString path = QFileInfo(font_file()).absoluteFilePath();
+    const QString path = font_path();
     if (!QFileInfo::exists(path)) return {};
     return res_url(path).toString();
 }

@@ -27,7 +27,7 @@ inline QString res_i18n_dir() {
 inline QString res_icon_font() {
     if (res_embedded()) return QStringLiteral(":/studio/fonts/MaterialIcons-Regular.ttf");
 #ifdef QML_DIR
-    return QStringLiteral(QML_DIR "/../assets/fonts/MaterialIcons-Regular.ttf");
+    return QStringLiteral(QML_DIR "/../../assets/fonts/MaterialIcons-Regular.ttf");
 #else
     return {};
 #endif
