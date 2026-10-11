@@ -2,6 +2,8 @@
 
 #include "bin.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -200,4 +202,53 @@ std::vector<MeshPart> parse_im_parts(const uint8_t* data, size_t size) {
     if (!parts.empty()) return parts;
     if (!error.empty()) throw std::runtime_error(error);
     throw std::runtime_error("no GEOM chunk in this .im");
+}
+
+std::vector<ImAttachment> parse_im_attachments(const uint8_t* data, size_t size) {
+    std::vector<ImAttachment> out;
+    bool found = false;
+    for (const Chunk& chunk : parse_chunks(data, size)) {
+        if (std::memcmp(chunk.tag, "ATCH", 4) != 0) continue;
+        found = true;
+        const size_t end = chunk.body + chunk.size;
+        if (chunk.size < 8) throw std::runtime_error("ATCH chunk is truncated");
+        const uint32_t ver = rd_u32(data + chunk.body);
+        const uint32_t count = rd_u32(data + chunk.body + 4);
+        if (ver != 100) throw std::runtime_error("unsupported ATCH version");
+        if (count > 100000) throw std::runtime_error("ATCH count out of range");
+        size_t p = chunk.body + 8;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (p + 4 > end) throw std::runtime_error("ATCH parse overrun");
+            const uint32_t nlen = rd_u32(data + p);
+            p += 4;
+            if (nlen > 4096 || p + nlen + 48 > end) throw std::runtime_error("ATCH parse overrun");
+            size_t cut = 0;
+            while (cut < nlen && data[p + cut] != 0) ++cut;
+            ImAttachment att;
+            att.name.assign(reinterpret_cast<const char*>(data + p), cut);
+            p += nlen;
+            for (int k = 0; k < 9; ++k) att.orient[k] = rd_f32(data + p + k * 4);
+            p += 36;
+            for (int k = 0; k < 3; ++k) att.pos[k] = rd_f32(data + p + k * 4);
+            p += 12;
+            if (att.name.empty()) att.name = "a." + std::to_string(i);
+            out.push_back(att);
+        }
+        if (p != end) throw std::runtime_error("ATCH parse overrun");
+    }
+    if (!found) return {};
+    return out;
+}
+
+ImView parse_im_view(const uint8_t* data, size_t size) {
+    ImView view;
+    std::string geom_error;
+    try {
+        view.parts = parse_im_parts(data, size);
+    } catch (const std::exception& error) {
+        geom_error = error.what();
+    }
+    view.atts = parse_im_attachments(data, size);
+    if (view.atts.empty() && view.parts.empty()) throw std::runtime_error(geom_error.empty() ? "no GEOM or ATCH in this .im" : geom_error);
+    return view;
 }

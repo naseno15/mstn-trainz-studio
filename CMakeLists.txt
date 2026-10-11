@@ -43,7 +43,9 @@ add_library(trainz_io STATIC
     src/io/tzarc.cpp
     src/io/zip_read.cpp
     src/io/im_geom.cpp
+    src/io/fbx.cpp
     src/io/trainzmesh.cpp
+    third_party/ufbx/ufbx.c
     src/io/config_id.cpp
     src/io/enginespec.cpp
     src/io/wav.cpp
@@ -52,7 +54,8 @@ add_library(trainz_io STATIC
     src/io/mat_name.cpp
     third_party/puff/puff.c
 )
-target_include_directories(trainz_io PUBLIC src third_party/puff)
+target_include_directories(trainz_io PUBLIC src third_party/puff third_party/ufbx)
+set_source_files_properties(third_party/ufbx/ufbx.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 add_library(trainz_ui OBJECT ${trainz_ui_sources})
 target_link_libraries(trainz_ui PUBLIC trainz_io Qt6::Core Qt6::Widgets Qt6::Quick Qt6::OpenGLWidgets Qt6::QuickWidgets)
@@ -98,7 +101,7 @@ target_link_libraries(check_boot PRIVATE Qt6::Core Qt6::Widgets)
 
 add_executable(check_formats checks/check_formats.cpp)
 target_link_libraries(check_formats PRIVATE trainz_io)
-target_compile_definitions(check_formats PRIVATE FIXTURE_DIR="${CMAKE_SOURCE_DIR}/checks/fixtures")
+target_compile_definitions(check_formats PRIVATE FIXTURE_DIR="${CMAKE_SOURCE_DIR}/checks/fixtures" EDITING_DIR="${CMAKE_SOURCE_DIR}/../editing")
 
 trainz_ui_check(check_shell)
 trainz_ui_check(check_ve)

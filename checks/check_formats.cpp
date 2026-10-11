@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "io/fbx.h"
 #include "io/cdp.h"
 #include "io/chump.h"
 #include "io/im_geom.h"
@@ -287,8 +288,58 @@ static void check_tzarc_chunks() {
     assert(all.size() == 3 && std::string(all[2].second.begin(), all[2].second.end()) == files[2].second);
 }
 
+static void check_real_meshes() {
+    const std::string editing = EDITING_DIR;
+    const std::string cab = editing + "/kuid 1190880 100078 MSTN KIHA _ ______40/cab.im";
+    const std::string door = editing + "/kuid 1125787 100060 MSTN KIHA _ ______40/door/doorback.fbx";
+    auto cab_bytes = read_bin(cab);
+    ImView cab_view = parse_im_view(cab_bytes.data(), cab_bytes.size());
+    assert(cab_view.parts.empty());
+    assert(cab_view.atts.size() > 10);
+    assert(cab_view.atts[0].name.rfind("a.", 0) == 0);
+    bool turned = false;
+    for (const ImAttachment& att : cab_view.atts)
+        if (std::fabs(att.orient[1]) > 0.15f || std::fabs(att.orient[2]) > 0.15f || std::fabs(att.orient[3]) > 0.15f || std::fabs(att.orient[6]) > 0.15f) turned = true;
+    assert(turned);
+    auto door_bytes = read_bin(door);
+    auto door_parts = parse_fbx_parts(door_bytes.data(), door_bytes.size());
+    assert(!door_parts.empty());
+    float zmin = 1e30f, zmax = -1e30f;
+    size_t tris = 0;
+    for (const MeshPart& part : door_parts) {
+        tris += part.indices.size() / 3;
+        for (size_t i = 2; i < part.positions.size(); i += 3) {
+            zmin = std::min(zmin, part.positions[i]);
+            zmax = std::max(zmax, part.positions[i]);
+        }
+    }
+    assert(tris > 100);
+    assert(zmax - zmin > 1.f);
+}
+
+static void check_fbx() {
+    auto fbx = read_bin(std::string(FIXTURE_DIR) + "/tri.fbx");
+    auto parts = parse_fbx_parts(fbx.data(), fbx.size());
+    assert(parts.size() == 1);
+    assert(parts[0].name == "tri");
+    assert(parts[0].indices.size() == 3);
+    assert(parts[0].positions.size() == 9);
+    bool origin = false, right = false, up = false;
+    for (size_t v = 0; v < 3; ++v) {
+        const float x = parts[0].positions[v * 3];
+        const float y = parts[0].positions[v * 3 + 1];
+        const float z = parts[0].positions[v * 3 + 2];
+        if (std::fabs(x) < 1e-3f && std::fabs(y) < 1e-3f && std::fabs(z) < 1e-3f) origin = true;
+        if (x > 0.5f) right = true;
+        if (z > 0.5f) up = true;
+    }
+    assert(origin && right && up);
+}
+
 int main() {
     check_tzarc_chunks();
+    check_fbx();
+    check_real_meshes();
     check_kuid();
     check_lzss();
     check_files();
