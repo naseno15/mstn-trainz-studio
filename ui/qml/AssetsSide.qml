@@ -32,13 +32,7 @@ GlassPlate {
             anchors.right: parent.right
             spacing: 6
 
-            Image {
-                anchors.horizontalCenter: parent.horizontalCenter
-                width: 108
-                height: 36
-                fillMode: Image.PreserveAspectFit
-                source: bridge.dark ? "image://mstnlogo/dark" : "image://mstnlogo/light"
-            }
+            LogoMark {}
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: parent.width

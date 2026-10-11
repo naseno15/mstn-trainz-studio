@@ -11,6 +11,7 @@
 #include "i18n.h"
 #include "icons.h"
 #include "status_hub.h"
+#include "app_update.h"
 
 #include <QApplication>
 #include <QColor>
@@ -18,7 +19,15 @@
 #include <QCursor>
 #include <QCloseEvent>
 #include <QEasingCurve>
+#include <QEventLoop>
+#include <algorithm>
+#include <QImage>
+#include <QFont>
+#include <QGraphicsBlurEffect>
 #include <QGraphicsOpacityEffect>
+#include <QGraphicsPixmapItem>
+#include <QGraphicsScene>
+#include <QPainter>
 #include <QPixmap>
 #include <QPropertyAnimation>
 #include <QEvent>
@@ -34,7 +43,9 @@
 #include <QScreen>
 #include <QStackedWidget>
 #include <QFile>
+#include <QDesktopServices>
 #include <QFileDialog>
+#include <QUrl>
 #include <QFileInfo>
 #include <QUrl>
 #include <QKeySequence>
@@ -126,6 +137,7 @@ ShellBridge::ShellBridge(QObject* parent) : QObject(parent) {
         {QStringLiteral("tools"), QStringLiteral("Tools")},
         {QStringLiteral("theme"), QStringLiteral("Theme")},
         {QStringLiteral("lang"), QStringLiteral("Lang")},
+        {QStringLiteral("help"), QStringLiteral("Help")},
     };
     for (const auto& menu : menu_rows) {
         QVariantMap row;
@@ -202,11 +214,65 @@ bool chrome_click_dismisses_menu(const QRect& menu, const QRect& title, const QP
 
 LogoProvider::LogoProvider() : QQuickImageProvider(QQuickImageProvider::Pixmap) {}
 
-QPixmap LogoProvider::requestPixmap(const QString&, QSize* size, const QSize&) {
-    QPixmap pixmap(8, 8);
-    pixmap.fill(Qt::transparent);
-    if (size) *size = pixmap.size();
-    return pixmap;
+QImage logo_mark() {
+    static QImage mark;
+    if (!mark.isNull()) return mark;
+    const QImage raw = QImage(res_logo()).convertToFormat(QImage::Format_ARGB32);
+    if (raw.isNull()) return {};
+    int min_x = raw.width();
+    int min_y = raw.height();
+    int max_x = -1;
+    int max_y = -1;
+    for (int y = 0; y < raw.height(); ++y) {
+        const auto* row = reinterpret_cast<const QRgb*>(raw.constScanLine(y));
+        for (int x = 0; x < raw.width(); ++x) {
+            const int ink = qAlpha(row[x]) < 16 ? 0 : qGray(row[x]);
+            if (ink <= 24) continue;
+            min_x = std::min(min_x, x);
+            min_y = std::min(min_y, y);
+            max_x = std::max(max_x, x);
+            max_y = std::max(max_y, y);
+        }
+    }
+    if (max_x < min_x) return {};
+    min_x = std::max(0, min_x - 2);
+    min_y = std::max(0, min_y - 2);
+    max_x = std::min(raw.width() - 1, max_x + 2);
+    max_y = std::min(raw.height() - 1, max_y + 2);
+    mark = QImage(max_x - min_x + 1, max_y - min_y + 1, QImage::Format_ARGB32);
+    mark.fill(Qt::transparent);
+    for (int y = 0; y < mark.height(); ++y) {
+        const auto* src = reinterpret_cast<const QRgb*>(raw.constScanLine(min_y + y));
+        auto* dst = reinterpret_cast<QRgb*>(mark.scanLine(y));
+        for (int x = 0; x < mark.width(); ++x) {
+            const QRgb p = src[min_x + x];
+            const int ink = qAlpha(p) < 16 ? 0 : qGray(p);
+            dst[x] = qRgba(255, 255, 255, ink);
+        }
+    }
+    return mark;
+}
+
+QPixmap LogoProvider::requestPixmap(const QString& id, QSize* size, const QSize& requested) {
+    const QImage mark = logo_mark();
+    const int want = requested.width() > 16 ? requested.width() : 480;
+    QPixmap pix = mark.isNull() ? QPixmap() : QPixmap::fromImage(mark.scaledToWidth(want, Qt::SmoothTransformation));
+    if (pix.isNull()) {
+        pix = QPixmap(8, 8);
+        pix.fill(Qt::transparent);
+    } else if (id.startsWith(QLatin1String("light"))) {
+        QPixmap ink(pix.size());
+        ink.fill(Qt::transparent);
+        QPainter painter(&ink);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(ink.rect(), QColor(QStringLiteral("#1d1d1f")));
+        painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+        painter.drawPixmap(0, 0, pix);
+        painter.end();
+        pix = ink;
+    }
+    if (size) *size = pix.size();
+    return pix;
 }
 
 void prepare_qt_runtime() {
@@ -226,6 +292,25 @@ void prepare_qt_runtime() {
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     qputenv("QSG_RHI_BACKEND", "software");
+}
+
+void apply_ui_font() {
+    // Segoe UI has no Thai or Japanese. Leelawadee UI and Yu Gothic UI are outline faces,
+    // so those scripts are not drawn with the bitmap fallback. ponytail: the scene graph stays
+    // software so the mesh GL view can show through; this is the antialiasing that backend allows.
+    QFont font(QStringLiteral("Segoe UI"));
+    font.setFamilies({
+        QStringLiteral("Segoe UI"),
+        QStringLiteral("Leelawadee UI"),
+        QStringLiteral("Yu Gothic UI"),
+        QStringLiteral("Yu Gothic"),
+        QStringLiteral("Meiryo UI"),
+        QStringLiteral("Segoe UI Emoji"),
+    });
+    font.setStyleStrategy(QFont::PreferAntialias);
+    font.setHintingPreference(QFont::PreferNoHinting);
+    QApplication::setFont(font);
+    QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
 }
 
 void ShellWindow::boot_stage(const QString& text, int pct) {
@@ -254,7 +339,6 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     title_ = load_quick(QStringLiteral("TitleBar.qml"), true);
     boot_stage(QStringLiteral("Building home page (HomePage.qml)"), 28);
     home_ = load_quick(QStringLiteral("HomePage.qml"), false);
-    home_->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
     boot_stage(QStringLiteral("Building menu dropdown (MenuDrop.qml)"), 32);
     menu_ = load_quick(QStringLiteral("MenuDrop.qml"), true);
     // Tool, not Popup: Popup on this frameless host never took the mouse grab, so the menu stayed up.
@@ -405,13 +489,21 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
     connect(settings, &QShortcut::activated, this, [this] {
         if (bridge_->page() == QLatin1String("mesh")) run_action(QStringLiteral("setpage:settings"));
     });
+    // The mesh view is a QOpenGLWidget. Creating it after the window is on screen
+    // makes Windows destroy and recreate the window, so the app blinks closed.
+    boot_stage(QStringLiteral("Building Mesh Studio (MeshPage.qml)"), 96);
+    studio_mesh();
     boot_stage(QStringLiteral("Ready — opening window"), 100);
 }
 
 void ShellWindow::ensure_studio(const QString& page) {
     if (page == QLatin1String("trainzutil")) studio_trainz();
     else if (page == QLatin1String("engine")) studio_engine();
-    else if (page == QLatin1String("assets") || page == QLatin1String("texmesh")) studio_assets();
+    else if (page == QLatin1String("assets") || page == QLatin1String("texmesh")) {
+        studio_assets();
+        // The KUID picker reads this library. Build it after the Assets page is up, not on the click.
+        if (!trainz_) QTimer::singleShot(0, this, [this] { if (!trainz_) studio_trainz(); });
+    }
     else if (page == QLatin1String("sounds")) studio_sounds();
     else if (page == QLatin1String("mesh")) studio_mesh();
 }
@@ -447,6 +539,10 @@ TrainzUtilPage* ShellWindow::studio_trainz() {
         bridge_->set_page(QStringLiteral("assets"));
         studio_assets()->setPage(QStringLiteral("packages"));
         if (!folder.isEmpty()) studio_assets()->openPaths({folder});
+    });
+    connect(trainz_, &TrainzUtilPage::configRequested, this, [this](const QString& text, const QString& path) {
+        bridge_->set_page(QStringLiteral("assets"));
+        studio_assets()->loadConfig(text, path);
     });
     take_slot(slot_trainz_, trainz_);
     return trainz_;
@@ -489,6 +585,10 @@ AssetsPage* ShellWindow::studio_assets() {
         studio_engine()->loadCdpText(text);
         bridge_->set_page(QStringLiteral("engine"));
     });
+    connect(assets_, &AssetsPage::kuidPickRequested, this, [this](int index, const QString& filter) {
+        const QString kuid = studio_trainz()->choose_kuid(filter);
+        if (!kuid.isEmpty()) studio_assets()->applyPickedKuid(index, kuid);
+    });
     take_slot(slot_assets_, assets_);
     return assets_;
 }
@@ -522,6 +622,7 @@ QQuickWidget* ShellWindow::load_quick(const QString& file, bool translucent) {
         view->setClearColor(QColor(QStringLiteral("#12161c")));
         view->setAttribute(Qt::WA_OpaquePaintEvent, true);
     }
+    view->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
     view->setSource(res_url(qml_dir() + QLatin1Char('/') + file));
     return view;
 }
@@ -590,6 +691,11 @@ QVariantList ShellWindow::menuRows(const QString& key) {
     } else if (key == QLatin1String("lang")) {
         const QString cur = UiLang::instance()->lang();
         for (const auto& lang : ui_languages()) rows << item(QStringLiteral("lang:") + lang.first, lang.second, true, {}, lang.first == cur);
+    } else if (key == QLatin1String("help")) {
+        rows << item(QStringLiteral("help:update"), QStringLiteral("Check for updates"));
+        rows << item(QStringLiteral("help:about"), QStringLiteral("About Trainz Studio"));
+        rows << sep();
+        rows << item(QStringLiteral("help:source"), QStringLiteral("Source code"));
     }
     return rows;
 }
@@ -638,6 +744,66 @@ QObject* ShellWindow::page_bridge() const {
     return nullptr;
 }
 
+namespace {
+
+QPixmap soften(const QPixmap& sharp) {
+    if (sharp.isNull()) return {};
+    QGraphicsScene scene;
+    auto* item = scene.addPixmap(sharp);
+    auto* fx = new QGraphicsBlurEffect;
+    fx->setBlurRadius(8);
+    fx->setBlurHints(QGraphicsBlurEffect::PerformanceHint);
+    item->setGraphicsEffect(fx);
+    QImage out(sharp.size(), QImage::Format_ARGB32_Premultiplied);
+    out.fill(Qt::transparent);
+    QPainter painter(&out);
+    scene.render(&painter, QRectF(out.rect()), QRectF(sharp.rect()));
+    return QPixmap::fromImage(out);
+}
+
+// Blur the window, run the swap while it is covered, then sharpen the new text.
+void blur_swap(QWidget* host, const std::function<void()>& swap) {
+    const QPixmap soft = host && host->isVisible() ? soften(host->grab()) : QPixmap();
+    if (soft.isNull()) {
+        swap();
+        return;
+    }
+    auto* veil = new QLabel(host);
+    veil->setPixmap(soft);
+    veil->setGeometry(0, 0, host->width(), host->height());
+    veil->setScaledContents(true);
+    auto* fade = new QGraphicsOpacityEffect(veil);
+    fade->setOpacity(0);
+    veil->setGraphicsEffect(fade);
+    veil->raise();
+    veil->show();
+    auto* in = new QPropertyAnimation(fade, "opacity", veil);
+    in->setDuration(150);
+    in->setStartValue(0.0);
+    in->setEndValue(1.0);
+    in->setEasingCurve(QEasingCurve::OutCubic);
+    QObject::connect(in, &QPropertyAnimation::finished, host, [host, veil, fade, swap] {
+        veil->hide();
+        swap();
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        const QPixmap next = soften(host->grab());
+        if (!next.isNull()) veil->setPixmap(next);
+        veil->setGeometry(0, 0, host->width(), host->height());
+        veil->show();
+        fade->setOpacity(1);
+        auto* out = new QPropertyAnimation(fade, "opacity", veil);
+        out->setDuration(220);
+        out->setStartValue(1.0);
+        out->setEndValue(0.0);
+        out->setEasingCurve(QEasingCurve::InCubic);
+        QObject::connect(out, &QPropertyAnimation::finished, veil, &QObject::deleteLater);
+        out->start(QAbstractAnimation::DeleteWhenStopped);
+    });
+    in->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+}  // namespace
+
 bool ShellWindow::actionOk(const QString& act_id) const {
     QObject* target = page_bridge();
     const QMetaObject* meta = target ? target->metaObject() : nullptr;
@@ -671,10 +837,19 @@ void ShellWindow::run_action(const QString& act_id) {
         studio_settings().setValue(QStringLiteral("ui/theme"), dark ? QStringLiteral("dark") : QStringLiteral("light"));
         hub->notify(QStringLiteral("info"), dark ? QStringLiteral("Dark theme") : QStringLiteral("Light theme"));
     } else if (act_id.startsWith(QLatin1String("lang:"))) {
-        UiLang::instance()->set_lang(arg);
-        for (const auto& lang : ui_languages()) {
-            if (lang.first == arg) hub->notify(QStringLiteral("info"), lang.second);
-        }
+        blur_swap(this, [arg, hub] {
+            UiLang::instance()->set_lang(arg);
+            for (const auto& lang : ui_languages()) {
+                if (lang.first == arg) hub->notify(QStringLiteral("info"), lang.second);
+            }
+        });
+    } else if (act_id == QLatin1String("help:update")) {
+        request_update_check();
+    } else if (act_id == QLatin1String("help:about")) {
+        show_crash_dialog(QStringLiteral("About Trainz Studio"), ui_tr(QStringLiteral("Version %1")).arg(studio_version()), {}, QStringLiteral("about"));
+    } else if (act_id == QLatin1String("help:source")) {
+        if (!QDesktopServices::openUrl(QUrl(studio_repo_url())))
+            hub->notify(QStringLiteral("error"), QStringLiteral("Could not open the source page"));
     }
 }
 
@@ -796,7 +971,7 @@ void ShellWindow::show_menu(const QString& key, int x, int y) {
     bridge_->set_open_key(key);
     int height = 12;
     for (const QVariant& row : bridge_->items()) height += row.toMap().value(QStringLiteral("sep")).toBool() ? 11 : 34;
-    menu_->resize(key == QLatin1String("view") || key == QLatin1String("tools") ? 290 : 260, height);
+    menu_->resize(key == QLatin1String("view") || key == QLatin1String("tools") || key == QLatin1String("help") ? 290 : 260, height);
     menu_->move(x, y);
     menu_->show();
     menu_->raise();

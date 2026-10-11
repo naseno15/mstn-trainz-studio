@@ -143,7 +143,8 @@ private:
     QObject* page_bridge() const;
     QList<VeReport> ve_last_;
     QQuickWidget* load_quick(const QString& file, bool translucent);
-    // ponytail: studios compile on first open. Ceiling: that first visit still blocks the UI thread.
+    // Mesh Studio is built before the window is shown (QOpenGLWidget). The other
+    // studios compile on first open. Ceiling: that first visit still blocks the UI thread.
     void ensure_studio(const QString& page);
     void take_slot(QWidget*& slot, QWidget* page);
     TrainzUtilPage* studio_trainz();
@@ -183,3 +184,4 @@ private:
 bool chrome_click_dismisses_menu(const QRect& menu, const QRect& title, const QPoint& global);
 
 void prepare_qt_runtime();
+void apply_ui_font();

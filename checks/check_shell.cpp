@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
         app.processEvents();
         if (!alive(QStringLiteral("file"), QStringLiteral("Open…"))) std::fprintf(stderr, "Open… dead on %s\n", page);
         assert(alive(QStringLiteral("file"), QStringLiteral("Open…")));
-        for (const char* key : {"file", "edit", "view", "tools", "theme", "lang"}) assert(!window.menuRows(QString::fromLatin1(key)).isEmpty());
+        for (const char* key : {"file", "edit", "view", "tools", "theme", "lang", "help"}) assert(!window.menuRows(QString::fromLatin1(key)).isEmpty());
     }
     window.triggerItem(QStringLiteral("engine"));
     assert(alive(QStringLiteral("edit"), QStringLiteral("Undo")) && alive(QStringLiteral("file"), QStringLiteral("Save As…")));

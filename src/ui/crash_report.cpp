@@ -1,5 +1,6 @@
 #include "ui/crash_report.h"
 #include "res_path.h"
+#include "shell_window.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -9,6 +10,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QMouseEvent>
 #include <QMutex>
 #include <QPointer>
@@ -18,6 +20,7 @@
 #include "ui/i18n.h"
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQuickImageProvider>
 #include <QQuickWidget>
 #include <QStandardPaths>
 #include <QUrl>
@@ -100,6 +103,18 @@ void terminate_handler() {
     std::abort();
 }
 
+class DialogShot final : public QQuickImageProvider {
+public:
+    explicit DialogShot(QImage image) : QQuickImageProvider(Image), image_(std::move(image)) {}
+    QImage requestImage(const QString&, QSize* size, const QSize&) override {
+        if (size) *size = image_.size();
+        return image_;
+    }
+
+private:
+    QImage image_;
+};
+
 }  // namespace
 
 QString crash_log_path() { return g_log_path; }
@@ -135,7 +150,22 @@ void end_crash_session() {
 CrashBridge::CrashBridge(QDialog* dialog, QString title, QString summary, QString detail, QString kind, bool quit_on_ok)
     : QObject(dialog), dialog_(dialog), title_(std::move(title)), summary_(std::move(summary)), detail_(std::move(detail)), kind_(std::move(kind)), quit_on_ok_(quit_on_ok) {}
 
+void CrashBridge::set_backdrop(const QImage& image, const QPoint& origin) {
+    has_shot_ = !image.isNull();
+    shot_x_ = origin.x();
+    shot_y_ = origin.y();
+    shot_w_ = image.width();
+    shot_h_ = image.height();
+}
+
 void CrashBridge::openFolder() { QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(crash_log_path()).absolutePath())); }
+
+void CrashBridge::openUrl(const QString& url) {
+    const QUrl parsed(url);
+    const QString scheme = parsed.scheme().toLower();
+    if (scheme != QLatin1String("https") && scheme != QLatin1String("http") && scheme != QLatin1String("mailto")) return;
+    QDesktopServices::openUrl(parsed);
+}
 
 void CrashBridge::copyError(const QString& selected) {
     const QString all = QStringList{title_, summary_, detail_, crash_log_path()}.join(QStringLiteral("\n\n"));
@@ -178,8 +208,8 @@ void make_borderless(QDialog* dialog) {
 }
 
 QMessageBox::StandardButton ui_box(QMessageBox::Icon icon, QWidget* parent, const QString& title, const QString& text,
-                                   QMessageBox::StandardButtons buttons, QMessageBox::StandardButton def) {
-    QMessageBox box(icon, ui_tr(title), ui_tr(text), buttons, parent);
+                                   QMessageBox::StandardButtons buttons, QMessageBox::StandardButton def, bool translate) {
+    QMessageBox box(icon, translate ? ui_tr(title) : title, translate ? ui_tr(text) : text, buttons, parent);
     make_borderless(&box);
     box.setDefaultButton(def);
     box.setStyleSheet(themed_qss(QStringLiteral(
@@ -197,14 +227,23 @@ QDialog* make_crash_dialog(const QString& title, const QString& summary, const Q
     dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
     dialog->setAttribute(Qt::WA_TranslucentBackground, true);
     dialog->setWindowTitle(QStringLiteral("Trainz Studio"));
-    const QWidget* anchor = QApplication::activeWindow();
+    QWidget* anchor = QApplication::activeWindow();
     const QScreen* screen = anchor && anchor->screen() ? anchor->screen() : QGuiApplication::primaryScreen();
     dialog->setGeometry(screen ? screen->availableGeometry() : QRect(0, 0, 640, 560));
+    QImage shot;
+    QPoint origin;
+    if (anchor && anchor != dialog) {
+        shot = anchor->grab().toImage();
+        origin = anchor->mapToGlobal(QPoint(0, 0)) - dialog->geometry().topLeft();
+    }
     auto* view = new QQuickWidget(dialog);
     auto* bridge = new CrashBridge(dialog, title, summary, detail, kind, quit_on_ok);
+    bridge->set_backdrop(shot, origin);
     view->setResizeMode(QQuickWidget::SizeRootObjectToView);
     view->setAttribute(Qt::WA_AlwaysStackOnTop, true);
     view->setClearColor(Qt::transparent);
+    view->engine()->addImageProvider(QStringLiteral("dialogshot"), new DialogShot(shot));
+    view->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
     view->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge);
     view->setSource(res_url(qml_dir() + QStringLiteral("/CrashDialog.qml")));
     auto* lay = new QVBoxLayout(dialog);

@@ -8,7 +8,7 @@ Item {
         gradient: Gradient {
             GradientStop { position: 0.0; color: bridge.dark ? "#1c2430" : "#f7f8fb" }
             GradientStop { position: 0.45; color: bridge.dark ? "#12161c" : "#e8edf3" }
-            GradientStop { position: 1.0; color: bridge.dark ? "#0a0c10" : "#d5dbe3" }
+            GradientStop { position: 1.0; color: bridge.dark ? "#141820" : "#d5dbe3" }
         }
     }
 
@@ -18,14 +18,7 @@ Item {
         spacing: 10
         width: Math.min(parent.width - 48, 1280)
 
-        Image {
-            anchors.horizontalCenter: parent.horizontalCenter
-            source: "image://mstnlogo/" + (bridge.dark ? "dark" : "light")
-            sourceSize.width: 180
-            fillMode: Image.PreserveAspectFit
-            width: 180
-            height: 56
-        }
+        LogoMark { cap: 200 }
 
         Text {
             anchors.horizontalCenter: parent.horizontalCenter

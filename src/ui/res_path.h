@@ -33,6 +33,15 @@ inline QString res_icon_font() {
 #endif
 }
 
+inline QString res_logo() {
+    if (res_embedded()) return QStringLiteral(":/studio/logo/mstn_logo_white.png");
+#ifdef QML_DIR
+    return QStringLiteral(QML_DIR "/../../assets/mstn_logo_white.png");
+#else
+    return {};
+#endif
+}
+
 inline QUrl res_url(const QString& path) {
     return path.startsWith(QLatin1String(":/")) ? QUrl(QStringLiteral("qrc") + path) : QUrl::fromLocalFile(path);
 }

@@ -37,7 +37,7 @@ Item {
         anchors.fill: parent
         gradient: Gradient {
             GradientStop { position: 0.0; color: bridge.dark ? "#1a2230" : "#eef1f6" }
-            GradientStop { position: 1.0; color: bridge.dark ? "#0c0e12" : "#d5dbe3" }
+            GradientStop { position: 1.0; color: bridge.dark ? "#161b24" : "#d5dbe3" }
         }
     }
 
@@ -67,12 +67,9 @@ Item {
                 anchors.fill: parent
                 anchors.margins: 10
                 spacing: 8
-                Image {
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredWidth: 108
-                    Layout.preferredHeight: 36
-                    fillMode: Image.PreserveAspectFit
-                    source: bridge.dark ? "image://mstnlogo/dark" : "image://mstnlogo/light"
+                LogoMark {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 68
                 }
                 Text {
                     Layout.alignment: Qt.AlignHCenter
