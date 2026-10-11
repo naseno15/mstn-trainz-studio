@@ -1,4 +1,5 @@
 #include "assets_page.h"
+#include "text_color.h"
 #include "res_path.h"
 #include "feedback.h"
 
@@ -228,6 +229,8 @@ void finder_mark(const QString& kind, const QString& name, QString& badge, QStri
     set("·", "#8e8e93", suf.isEmpty() ? QStringLiteral("File") : suf.toUpper());
 }
 
+}  // namespace
+
 QString html_escape(QString text) {
     text.replace(QLatin1Char('&'), QStringLiteral("&amp;"));
     text.replace(QLatin1Char('<'), QStringLiteral("&lt;"));
@@ -245,6 +248,10 @@ QString highlight_preview(const QString& text, int pt) {
         QStringLiteral("if"), QStringLiteral("else"), QStringLiteral("for"), QStringLiteral("while"),
         QStringLiteral("include"), QStringLiteral("define"), QStringLiteral("public"), QStringLiteral("static"),
         QStringLiteral("inherited"), QStringLiteral("null"), QStringLiteral("true"), QStringLiteral("false"),
+        QStringLiteral("version"), QStringLiteral("offset"), QStringLiteral("calcPoint"), QStringLiteral("multiplier"),
+        QStringLiteral("animationCutOff"), QStringLiteral("renderCutOff"), QStringLiteral("attachmentCutOff"),
+        QStringLiteral("mesh"), QStringLiteral("name"), QStringLiteral("Primary"), QStringLiteral("Alpha"),
+        QStringLiteral("Tile"), QStringLiteral("UsageHint"), QStringLiteral("NormalMapHint"), QStringLiteral("Compression"),
     };
     QString html;
     html.reserve(body.size() + body.size() / 4);
@@ -260,12 +267,27 @@ QString highlight_preview(const QString& text, int pt) {
             continue;
         }
         int at = 0;
+        bool lead = true;
         while (at < line.size()) {
+            if (lead && line.at(at).isSpace()) {
+                html += html_escape(line.mid(at, 1));
+                ++at;
+                continue;
+            }
+            if (line.at(at).isDigit()) {
+                int end = at + 1;
+                while (end < line.size() && (line.at(end).isDigit() || line.at(end) == QLatin1Char('.'))) ++end;
+                html += QStringLiteral("<span style=\"color:#B5CEA8\">") + html_escape(line.mid(at, end - at)) + QStringLiteral("</span>");
+                at = end;
+                lead = false;
+                continue;
+            }
             if (line.at(at) == QLatin1Char('"')) {
                 int end = line.indexOf(QLatin1Char('"'), at + 1);
                 if (end < 0) end = line.size() - 1;
                 html += QStringLiteral("<span style=\"color:#CE9178\">") + html_escape(line.mid(at, end - at + 1)) + QStringLiteral("</span>");
                 at = end + 1;
+                lead = false;
                 continue;
             }
             if (line.mid(at).startsWith(QLatin1String("<kuid"), Qt::CaseInsensitive)) {
@@ -273,18 +295,21 @@ QString highlight_preview(const QString& text, int pt) {
                 if (end < 0) end = std::min(at + 40, static_cast<int>(line.size()) - 1);
                 html += QStringLiteral("<span style=\"color:#4EC9B0\">") + html_escape(line.mid(at, end - at + 1)) + QStringLiteral("</span>");
                 at = end + 1;
+                lead = false;
                 continue;
             }
             if (line.at(at).isLetter()) {
                 int end = at;
                 while (end < line.size() && (line.at(end).isLetter() || line.at(end) == QLatin1Char('_'))) ++end;
                 const QString word = line.mid(at, end - at);
-                if (words.contains(word)) html += QStringLiteral("<span style=\"color:#569CD6\">") + word + QStringLiteral("</span>");
+                if (lead || words.contains(word, Qt::CaseInsensitive)) html += QStringLiteral("<span style=\"color:#569CD6\">") + html_escape(word) + QStringLiteral("</span>");
                 else html += html_escape(word);
                 at = end;
+                lead = false;
                 continue;
             }
             html += html_escape(line.mid(at, 1));
+            lead = false;
             ++at;
         }
         html += QStringLiteral("<br>");
@@ -293,6 +318,8 @@ QString highlight_preview(const QString& text, int pt) {
     html += QStringLiteral("</pre>");
     return html;
 }
+
+namespace {
 
 class ConfigHighlighter final : public QSyntaxHighlighter {
 public:

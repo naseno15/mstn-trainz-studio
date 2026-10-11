@@ -1,5 +1,6 @@
 #include "ui/texmesh.h"
 #include "ui/feedback.h"
+#include "ui/text_color.h"
 
 #include "io/lm_txt.h"
 #include "io/mat_name.h"
@@ -1218,15 +1219,19 @@ QString Texmesh::queue_json() const {
 }
 
 QString Texmesh::well_left() const {
-    if (page_ == QLatin1String("texture") && tex_preview_ != nullptr) return tex_preview_->toPlainText();
-    if (page_ == QLatin1String("meshops") && lm_preview_ != nullptr) return lm_preview_->toPlainText();
-    return {};
+    QString plain;
+    if (page_ == QLatin1String("texture") && tex_preview_ != nullptr) plain = tex_preview_->toPlainText();
+    else if (page_ == QLatin1String("meshops") && lm_preview_ != nullptr) plain = lm_preview_->toPlainText();
+    if (plain.isEmpty()) return {};
+    return highlight_preview(plain, 12);
 }
 
 QString Texmesh::well_right() const {
-    if (page_ == QLatin1String("texture") && tex_log_ != nullptr) return tex_log_->toPlainText();
-    if (page_ == QLatin1String("meshops") && lm_log_ != nullptr) return lm_log_->toPlainText();
-    return {};
+    QString plain;
+    if (page_ == QLatin1String("texture") && tex_log_ != nullptr) plain = tex_log_->toPlainText();
+    else if (page_ == QLatin1String("meshops") && lm_log_ != nullptr) plain = lm_log_->toPlainText();
+    if (plain.isEmpty()) return {};
+    return highlight_preview(plain, 12);
 }
 
 void Texmesh::drop_paths(const QStringList& paths) {

@@ -260,13 +260,17 @@ Item {
                     }
                     Flickable {
                         anchors.fill: parent
-                        contentHeight: leftText.implicitHeight
+                        anchors.margins: 8
                         clip: true
+                        contentWidth: Math.max(width, leftText.implicitWidth)
+                        contentHeight: leftText.implicitHeight
                         Text {
                             id: leftText
-                            width: leftSlot.width
-                            wrapMode: Text.Wrap
-                            color: bridge.dark ? "#f2f4f8" : "#1d1d1f"
+                            readonly property bool rich: bridge.wellLeft.length > 0
+                            width: rich ? contentWidth : leftSlot.width - 16
+                            wrapMode: rich ? Text.NoWrap : Text.Wrap
+                            textFormat: rich ? Text.RichText : Text.PlainText
+                            color: bridge.dark ? "#d4d4d4" : "#1d1d1f"
                             font.pixelSize: 12
                             font.family: "Consolas"
                             text: bridge.wellLeft.length > 0 ? bridge.wellLeft : qsTr("Preview")
@@ -317,13 +321,17 @@ Item {
                     }
                     Flickable {
                         anchors.fill: parent
-                        contentHeight: rightText.implicitHeight
+                        anchors.margins: 8
                         clip: true
+                        contentWidth: Math.max(width, rightText.implicitWidth)
+                        contentHeight: rightText.implicitHeight
                         Text {
                             id: rightText
-                            width: rightSlot.width
-                            wrapMode: Text.Wrap
-                            color: bridge.dark ? "#c5cad3" : "#3a414a"
+                            readonly property bool rich: bridge.wellRight.length > 0
+                            width: rich ? contentWidth : rightSlot.width - 16
+                            wrapMode: rich ? Text.NoWrap : Text.Wrap
+                            textFormat: rich ? Text.RichText : Text.PlainText
+                            color: bridge.dark ? "#d4d4d4" : "#3a414a"
                             font.pixelSize: 12
                             font.family: "Consolas"
                             text: bridge.wellRight.length > 0 ? bridge.wellRight : qsTr("Log")
