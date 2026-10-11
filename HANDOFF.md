@@ -1,5 +1,13 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-11 (Asia/Bangkok) — Backups hide empty folders
+
+`find_asset_backups` skips a day-folder child that is a directory with no file anywhere under it (nested empty folders count as empty). A loose file or a folder that still has a file stays in the list and in search.
+
+**Last updated:** 2026-10-11 (Asia/Bangkok) — Mesh Lods `.lm.txt` names
+
+Dropping `.fbx` writes `name="….trainzmesh"` in the `.lm.txt` preview and on Save. Content Manager compiles that FBX to `.trainzmesh` on submit. `.im` stays `.im`. The mesh list is a Finder-style table (name, width, LOD tick, type). Clear selected and Clear all sit on that list. Preview and log use the same coloring as the Packages viewer. The shared right dock starts at 260px.
+
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Mesh Studio opens .im and .fbx
 
 `.im` with no GEOM (attachment-only, such as `cab.im`) still opens. Each ATCH point is the same RGB line triad as the corner gizmo, spun by that point's orientation. Not a mesh part. `.fbx` goes through `parse_fbx_parts` (ufbx, metres, Trainz Z-up). Bind pose only — no skinning.
@@ -61,7 +69,7 @@ Home ↔ studio switches grab the old page and fade that pixmap on a sibling lab
 
 ## Layout
 
-Mesh Lods, Texture Params, Texture Editor, and Texture Denoiser share a 440px right dock. `Texmesh::dock_width()` resets the dock when the page changes.
+Mesh Lods, Texture Params, Texture Editor, and Texture Denoiser share a 260px right dock. `Texmesh::dock_width()` resets the dock when the page changes.
 
 | Piece | Role |
 |--------|------|
