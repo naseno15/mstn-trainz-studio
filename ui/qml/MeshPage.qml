@@ -69,7 +69,7 @@ Item {
         visible: bridge.mesh && bridge.welcome
         gradient: Gradient {
             GradientStop { position: 0.0; color: bridge.dark ? "#1a2230" : "#eef1f6" }
-            GradientStop { position: 1.0; color: bridge.dark ? "#0c0e12" : "#d5dbe3" }
+            GradientStop { position: 1.0; color: bridge.dark ? "#161b24" : "#d5dbe3" }
         }
     }
 
@@ -194,12 +194,13 @@ Item {
             width: Math.min(520, parent.width - 24)
             spacing: 12
 
-            Image {
-                anchors.horizontalCenter: parent.horizontalCenter
-                source: "image://mstnlogo/" + (bridge.dark ? "dark" : "light")
-                width: 180
-                height: 72
-                fillMode: Image.PreserveAspectFit
+            Item {
+                width: parent.width
+                height: welcomeLogo.height
+                LogoMark {
+                    id: welcomeLogo
+                    cap: 180
+                }
             }
             Text {
                 width: parent.width
@@ -426,6 +427,13 @@ Item {
         onVisibleChanged: root.publish()
         onXChanged: root.publish()
         onWidthChanged: root.publish()
+    }
+
+    NavGizmo {
+        visible: bridge.mesh && !bridge.welcome && !bridge.settingsOpen
+        z: 7
+        x: (sidePlate.shown ? sidePlate.x + sidePlate.width : root.margin) + 12
+        y: root.margin + 8
     }
 
     Item {

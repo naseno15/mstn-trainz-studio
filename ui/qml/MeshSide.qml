@@ -25,13 +25,7 @@ Item {
         anchors.right: parent.right
         spacing: 8
 
-        Image {
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: 108
-            height: 36
-            fillMode: Image.PreserveAspectFit
-            source: "image://mstnlogo/" + (bridge.dark ? "dark" : "light")
-        }
+        LogoMark {}
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: qsTr("Mesh Studio")
@@ -354,10 +348,21 @@ Item {
 
                 Card {
                     title: qsTr("Viewport")
-                    CheckRow {
-                        label: qsTr("Face Orientation")
-                        checked: side.bag.face === true
-                        onToggled: bridge.setChecked("face", !side.bag.face)
+                    Row {
+                        width: parent.width
+                        spacing: 8
+                        CheckRow {
+                            width: (parent.width - 8) / 2
+                            label: qsTr("Face Orientation")
+                            checked: side.bag.face === true
+                            onToggled: bridge.setChecked("face", !side.bag.face)
+                        }
+                        CheckRow {
+                            width: (parent.width - 8) / 2
+                            label: qsTr("Att names")
+                            checked: side.bag.attNames === true
+                            onToggled: bridge.setChecked("attNames", !side.bag.attNames)
+                        }
                     }
                 }
             }
@@ -553,9 +558,10 @@ Item {
                     title: qsTr("Animations")
                     Text {
                         visible: side.bag.animEmpty === true
-                        text: qsTr("No .kin beside this mesh")
+                        text: qsTr("No .kin matches this mesh. Drop a .kin onto the view.")
                         color: side.mute
                         font.pixelSize: 12
+                        wrapMode: Text.Wrap
                     }
                     SunkWell {
                     Repeater {
@@ -572,7 +578,7 @@ Item {
                     RaiseButton {
                         width: parent.width
                         height: 34
-                        label: qsTr("Play")
+                        label: side.bag.playing === true ? qsTr("Stop") : qsTr("Play")
                         accent: true
                         onClicked: bridge.clickId("play")
                     }

@@ -8,6 +8,7 @@
 
 #include "io/fbx.h"
 #include "io/im_geom.h"
+#include "io/kin.h"
 #include "io/texture_txt.h"
 #include "io/trainzmesh.h"
 
@@ -18,7 +19,9 @@
 #include <QCursor>
 #include <QDir>
 #include <QEventLoop>
+#include <QQuaternion>
 #include <QSaveFile>
+#include <QTimer>
 #include <QtEndian>
 #include <QFile>
 #include <QImage>
@@ -369,6 +372,8 @@ void MeshBridge::attach(MeshView* view, QWidget* chrome) {
     view_ = view;
     chrome_ = chrome;
     if (!view_) return;
+    view_->setAttNames(att_names_);
+    view_->setFaceOrient(face_);
     view_->setSun(sun_);
     view_->setMoon(moon_);
     view_->setSunPose(static_cast<float>(sun_az_), static_cast<float>(sun_el_), sun_int_ / 100.f);
@@ -381,11 +386,17 @@ void MeshBridge::attach(MeshView* view, QWidget* chrome) {
             mat_i_ = i;
             tab_ = 1;
             sync_highlight();
-            focus_selection();
             publish();
             return;
         }
     });
+    connect(view_, &MeshView::pickCleared, this, [this] {
+        mat_i_ = -1;
+        if (view_) view_->setHighlight({});
+        publish();
+    });
+    connect(view_, &MeshView::cameraMoved, this, [this] { refresh_nav(); });
+    refresh_nav();
     connect(view_, &MeshView::partPicked, this, [this](int part) {
         if (part < 0 || part >= static_cast<int>(rows_.size())) return;
         const MeshRow& row = rows_[static_cast<size_t>(part)];
@@ -522,6 +533,7 @@ void MeshBridge::load_file(const QString& path) {
                 ViewAtt gizmo;
                 std::memcpy(gizmo.pos, att.pos, sizeof(gizmo.pos));
                 std::memcpy(gizmo.orient, att.orient, sizeof(gizmo.orient));
+                gizmo.name = QString::fromStdString(att.name);
                 gizmos.push_back(gizmo);
             }
         } else if (path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) {
@@ -541,6 +553,15 @@ void MeshBridge::load_file(const QString& path) {
                 MatEdit edit;
                 edit.block = block;
                 mats_.push_back(std::move(edit));
+            }
+            for (const TzAttachment& att : parse_trainzmesh_attachments(data, static_cast<size_t>(bytes.size()))) {
+                ++att_count_;
+                grow(att.pos);
+                ViewAtt gizmo;
+                std::memcpy(gizmo.pos, att.pos, sizeof(gizmo.pos));
+                std::memcpy(gizmo.orient, att.orient, sizeof(gizmo.orient));
+                gizmo.name = QString::fromStdString(att.name);
+                gizmos.push_back(gizmo);
             }
         }
         // No material blocks (lights, markers): list the parts' own material names (else albedo name, else part name), one per part.
@@ -612,12 +633,19 @@ void MeshBridge::load_file(const QString& path) {
     file_bytes_ = bytes;
     dirty_ = false;
     path_ = path;
-    anims_ = QDir(QFileInfo(path).absolutePath()).entryList({QStringLiteral("*.kin")}, QDir::Files).size();
+    bind_anims(path);
     welcome_ = false;
     editor_open_ = true;
     shortcut_ = QFileInfo(path).fileName();
     tip_.clear();
-    post_status(QStringLiteral("Loaded ") + shortcut_);
+    QString note = QStringLiteral("Loaded ") + shortcut_;
+    if (!clips_.empty()) {
+        const KinClip& clip = clips_[static_cast<size_t>(anim_i_)].clip;
+        const QString bone = clip.bones.empty() ? QString() : QString::fromStdString(clip.bones.front());
+        note += QStringLiteral(" · ") + QFileInfo(clips_[static_cast<size_t>(anim_i_)].path).fileName() + QStringLiteral(" · %1 frames").arg(static_cast<int>(clip.frames.size()));
+        if (!bone.isEmpty()) note += QStringLiteral(" · ") + bone;
+    }
+    post_status(note);
     publish();
     reveal_view();
     stop();
@@ -641,6 +669,10 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
     bounds_set_ = false;
     anims_ = 0;
     att_count_ = 0;
+    stop_anim();
+    clips_.clear();
+    frame_ = 0;
+    if (view_) view_->setAnimMatrix({});
     const int total = static_cast<int>(paths.size());
 
     // 1. Read + parse every mesh on all cores; resolve each part's albedo image path.
@@ -689,6 +721,13 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
                     }
                 } else {
                     const TrainzMesh mesh = parse_trainzmesh(data, static_cast<size_t>(bytes.size()));
+                    for (const TzAttachment& att : parse_trainzmesh_attachments(data, static_cast<size_t>(bytes.size()))) {
+                        ImAttachment row;
+                        row.name = att.name;
+                        std::memcpy(row.pos, att.pos, sizeof(row.pos));
+                        std::memcpy(row.orient, att.orient, sizeof(row.orient));
+                        out.atts.push_back(std::move(row));
+                    }
                     for (const SubMesh& part : mesh.submeshes) {
                         ViewPart row;
                         row.name = QString::fromStdString(part.name);
@@ -787,6 +826,7 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             gizmo.file = f;
             std::memcpy(gizmo.pos, att.pos, sizeof(gizmo.pos));
             std::memcpy(gizmo.orient, att.orient, sizeof(gizmo.orient));
+            gizmo.name = QString::fromStdString(att.name);
             gizmos.push_back(gizmo);
         }
         const QString label = f < labels.size() ? labels[f] : QFileInfo(paths[f]).fileName();
@@ -953,7 +993,8 @@ bool tex_locked(const QString& key, const QString& value) {
 
 void MeshBridge::publish() {
     if (selected_ < 0 || selected_ >= static_cast<int>(rows_.size())) selected_ = 0;
-    if (mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size())) mat_i_ = 0;
+    if (mats_.empty()) mat_i_ = -1;
+    else if (mat_i_ >= static_cast<int>(mats_.size())) mat_i_ = 0;
     QJsonArray materials;
     QJsonArray mats;
     mat_owner_.clear();
@@ -1014,6 +1055,23 @@ void MeshBridge::publish() {
         }()},
         {QStringLiteral("infoOpen"), info_open_},
         {QStringLiteral("face"), face_},
+        {QStringLiteral("attNames"), att_names_},
+        {QStringLiteral("anims"), [&] {
+            QJsonArray a;
+            for (const HeldKin& held : clips_) {
+                const QString bone = held.clip.bones.empty() ? QString() : QString::fromStdString(held.clip.bones.front());
+                QString label = QFileInfo(held.path).fileName();
+                if (!bone.isEmpty()) label += QStringLiteral(" · ") + bone;
+                label += QStringLiteral(" · %1f").arg(held.clip.frames.size());
+                a.append(label);
+            }
+            return a;
+        }()},
+        {QStringLiteral("anim"), anim_i_},
+        {QStringLiteral("animEmpty"), clips_.empty()},
+        {QStringLiteral("frame"), frame_},
+        {QStringLiteral("frameMax"), clips_.empty() ? 1 : std::max(1, static_cast<int>(clips_[static_cast<size_t>(std::clamp(anim_i_, 0, static_cast<int>(clips_.size()) - 1))].clip.frames.size()) - 1)},
+        {QStringLiteral("playing"), playing_},
         {QStringLiteral("cap"), QStringLiteral("a.* → edit on right")},
         {QStringLiteral("detail"), detail},
         {QStringLiteral("sun"), sun_},
@@ -1120,6 +1178,116 @@ void MeshBridge::openFixture() {
     else tip_ = QStringLiteral("Sample mesh was not found");
     emit changed();
 }
+void MeshBridge::stop_anim() {
+    playing_ = false;
+    if (anim_timer_) anim_timer_->stop();
+}
+
+void MeshBridge::apply_frame() {
+    if (!view_) return;
+    if (clips_.empty() || anim_i_ < 0 || anim_i_ >= static_cast<int>(clips_.size())) {
+        view_->setAnimMatrix({});
+        return;
+    }
+    const KinClip& clip = clips_[static_cast<size_t>(anim_i_)].clip;
+    if (clip.bones.size() != 1 || clip.frames.empty()) {
+        view_->setAnimMatrix({});
+        return;
+    }
+    const int frame = std::clamp(frame_, 0, static_cast<int>(clip.frames.size()) - 1);
+    auto pose = [](const KinXform& x) {
+        QMatrix4x4 m;
+        m.translate(x.pos[0], x.pos[1], x.pos[2]);
+        m.rotate(QQuaternion(x.quat[3], x.quat[0], x.quat[1], x.quat[2]));
+        m.scale(x.scale[0], x.scale[1], x.scale[2]);
+        return m;
+    };
+    const QMatrix4x4 rest = pose(clip.frames.front().front());
+    const QMatrix4x4 now = pose(clip.frames[static_cast<size_t>(frame)].front());
+    view_->setAnimMatrix(now * rest.inverted());
+}
+
+void MeshBridge::bind_anims(const QString& mesh_path) {
+    stop_anim();
+    clips_.clear();
+    anim_i_ = 0;
+    frame_ = 0;
+    anims_ = 0;
+    if (view_) view_->setAnimMatrix({});
+    if (file_bytes_.isEmpty()) return;
+    const QString stem = QFileInfo(mesh_path).completeBaseName();
+    QStringList files = QDir(QFileInfo(mesh_path).absolutePath()).entryList({QStringLiteral("*.kin")}, QDir::Files);
+    std::sort(files.begin(), files.end(), [&](const QString& a, const QString& b) {
+        auto rank = [&](const QString& name) {
+            const QString base = QFileInfo(name).completeBaseName();
+            if (base.compare(stem + QStringLiteral("_scene"), Qt::CaseInsensitive) == 0) return 0;
+            if (base.compare(stem, Qt::CaseInsensitive) == 0) return 1;
+            if (base.startsWith(stem, Qt::CaseInsensitive)) return 2;
+            return 3;
+        };
+        const int ra = rank(a);
+        const int rb = rank(b);
+        return ra != rb ? ra < rb : a < b;
+    });
+    int skipped = 0;
+    for (const QString& name : files) {
+        const QString path = QDir(QFileInfo(mesh_path).absolutePath()).filePath(name);
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) continue;
+        const QByteArray bytes = file.readAll();
+        KinClip clip = parse_kin(reinterpret_cast<const uint8_t*>(bytes.constData()), static_cast<size_t>(bytes.size()));
+        std::string missing;
+        if (!clip.ok || !kin_bones_in_mesh(clip, reinterpret_cast<const uint8_t*>(file_bytes_.constData()), static_cast<size_t>(file_bytes_.size()), &missing)) {
+            ++skipped;
+            continue;
+        }
+        clips_.push_back({path, std::move(clip)});
+    }
+    anims_ = static_cast<int>(clips_.size());
+    if (skipped > 0 && clips_.empty()) post_status(QStringLiteral("No .kin in this folder matches the mesh"));
+}
+
+void MeshBridge::add_kin(const QString& path) {
+    if (scene_ || file_bytes_.isEmpty() || path_.isEmpty()) {
+        post_status(QStringLiteral("Open a single mesh first — %1 was not kept").arg(QFileInfo(path).fileName()));
+        return;
+    }
+    for (int i = 0; i < static_cast<int>(clips_.size()); ++i) {
+        if (QFileInfo(clips_[static_cast<size_t>(i)].path).absoluteFilePath().compare(QFileInfo(path).absoluteFilePath(), Qt::CaseInsensitive) == 0) {
+            anim_i_ = i;
+            frame_ = 0;
+            apply_frame();
+            publish();
+            return;
+        }
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        post_status(QStringLiteral("Could not read ") + QFileInfo(path).fileName());
+        return;
+    }
+    const QByteArray bytes = file.readAll();
+    KinClip clip = parse_kin(reinterpret_cast<const uint8_t*>(bytes.constData()), static_cast<size_t>(bytes.size()));
+    const QString shown = QFileInfo(path).fileName();
+    if (!clip.ok) {
+        post_status(shown + QStringLiteral(" — ") + QString::fromStdString(clip.error) + QStringLiteral(" — removed"));
+        return;
+    }
+    std::string missing;
+    if (!kin_bones_in_mesh(clip, reinterpret_cast<const uint8_t*>(file_bytes_.constData()), static_cast<size_t>(file_bytes_.size()), &missing)) {
+        post_status(shown + QStringLiteral(" does not match this mesh (bone ") + QString::fromStdString(missing) + QStringLiteral(") — removed"));
+        return;
+    }
+    clips_.push_back({path, std::move(clip)});
+    anims_ = static_cast<int>(clips_.size());
+    anim_i_ = static_cast<int>(clips_.size()) - 1;
+    frame_ = 0;
+    apply_frame();
+    const KinClip& kept = clips_.back().clip;
+    post_status(shown + QStringLiteral(" · %1 frames · %2").arg(kept.frames.size()).arg(QString::fromStdString(kept.bones.front())));
+    publish();
+}
+
 void MeshBridge::dropUrls(const QVariantList& urls) {
     if (urls.isEmpty()) return;
     if (loading_) {
@@ -1129,27 +1297,31 @@ void MeshBridge::dropUrls(const QVariantList& urls) {
     // Drops append to the scene. ponytail: 2+ files load through the read-only scene preview
     // (no per-mesh editing, whole scene reloads each drop); upgrade = incremental part append.
     QStringList ok;
+    QStringList kins;
     int skipped = 0;
     for (const QVariant& value : urls) {
         const QUrl url(value.toString());
         const QString path = url.isLocalFile() ? url.toLocalFile() : value.toString();
         if (path.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) ok << path;
+        else if (path.endsWith(QLatin1String(".kin"), Qt::CaseInsensitive)) kins << path;
         else ++skipped;
     }
-    if (ok.isEmpty()) {
-        post_status(QStringLiteral("Unsupported file — Mesh Studio opens .trainzmesh, .im, and .fbx"));
+    if (ok.isEmpty() && kins.isEmpty()) {
+        post_status(QStringLiteral("Unsupported file — Mesh Studio opens .trainzmesh, .im, .fbx, and .kin"));
         return;
     }
-    QStringList all = scene_paths_;
-    for (const QString& p : ok) if (!all.contains(p)) all << p;
+    if (!ok.isEmpty()) {
+        QStringList all = scene_paths_;
+        for (const QString& p : ok) if (!all.contains(p)) all << p;
+        if (all.size() == 1) load_file(all.first());
+        else {
+            QStringList labels;
+            for (const QString& p : all) labels << QFileInfo(p).fileName();
+            load_scene(all, labels, {});
+        }
+    }
+    for (const QString& kin : kins) add_kin(kin);
     if (skipped > 0) post_status(QStringLiteral("%1 unsupported file(s) skipped").arg(skipped));
-    if (all.size() == 1) {
-        load_file(all.first());
-        return;
-    }
-    QStringList labels;
-    for (const QString& p : all) labels << QFileInfo(p).fileName();
-    load_scene(all, labels, {});
 }
 void MeshBridge::noteChrome(const QVariant& rects) {
     const QVariantList packed = rects.toList();
@@ -1186,6 +1358,39 @@ void MeshBridge::setSideTab(int index) {
     publish();
 }
 void MeshBridge::clickId(const QString& id) {
+    if (id == QLatin1String("play")) {
+        if (clips_.empty()) {
+            post_status(QStringLiteral("No matching .kin — drop one onto the view"));
+            return;
+        }
+        const KinClip& clip = clips_[static_cast<size_t>(std::clamp(anim_i_, 0, static_cast<int>(clips_.size()) - 1))].clip;
+        if (clip.bones.size() != 1) {
+            post_status(QStringLiteral("This .kin moves %1 bones. Playback is for a one-bone part.").arg(clip.bones.size()));
+            return;
+        }
+        if (playing_) {
+            stop_anim();
+            publish();
+            return;
+        }
+        if (!anim_timer_) {
+            anim_timer_ = new QTimer(this);
+            connect(anim_timer_, &QTimer::timeout, this, [this] {
+                if (clips_.empty()) {
+                    stop_anim();
+                    return;
+                }
+                const int n = static_cast<int>(clips_[static_cast<size_t>(anim_i_)].clip.frames.size());
+                frame_ = n > 0 ? (frame_ + 1) % n : 0;
+                apply_frame();
+                publish();
+            });
+        }
+        playing_ = true;
+        anim_timer_->start(std::max(16, 1000 / std::max(1, clip.tick)));
+        publish();
+        return;
+    }
     if (id == QLatin1String("resetCam") && view_) view_->resetCamera();
     else if (id == QLatin1String("info")) {
         info_open_ = !info_open_;
@@ -1234,6 +1439,10 @@ void MeshBridge::clickId(const QString& id) {
         editor_open_ = false;
         bounds_set_ = false;
         anims_ = 0;
+        stop_anim();
+        clips_.clear();
+        frame_ = 0;
+        if (view_) view_->setAnimMatrix({});
         att_count_ = 0;
         if (view_) {
             view_->setParts({});
@@ -1383,6 +1592,9 @@ void MeshBridge::setChecked(const QString& key, bool on) {
     } else if (key == QLatin1String("face")) {
         face_ = on;
         if (view_) view_->setFaceOrient(on);
+    } else if (key == QLatin1String("attNames")) {
+        att_names_ = on;
+        if (view_) view_->setAttNames(on);
     }
     publish();
 }
@@ -1463,6 +1675,14 @@ void MeshBridge::setSpin(const QString& key, double value) {
     publish();
 }
 void MeshBridge::setSlider(const QString& key, int value) {
+    if (key == QLatin1String("frame")) {
+        stop_anim();
+        const int n = clips_.empty() ? 1 : static_cast<int>(clips_[static_cast<size_t>(std::clamp(anim_i_, 0, static_cast<int>(clips_.size()) - 1))].clip.frames.size());
+        frame_ = std::clamp(value, 0, std::max(0, n - 1));
+        apply_frame();
+        publish();
+        return;
+    }
     if (key == QLatin1String("az")) {
         sun_az_ = std::clamp(value, 0, 360);
         tod_ = -1;
@@ -1491,7 +1711,12 @@ void MeshBridge::setChannel(const QString& which, int index, double value) {
     publish();
 }
 void MeshBridge::pickList(const QString& list, int index) {
-    if (list == QLatin1String("mesh") && index >= 0 && index < static_cast<int>(mats_.size())) {
+    if (list == QLatin1String("anim") && index >= 0 && index < static_cast<int>(clips_.size())) {
+        stop_anim();
+        anim_i_ = index;
+        frame_ = 0;
+        apply_frame();
+    } else if (list == QLatin1String("mesh") && index >= 0 && index < static_cast<int>(mats_.size())) {
         mat_i_ = index;
         sync_highlight();
         focus_selection();
@@ -1561,6 +1786,33 @@ void MeshBridge::placeEditor(double x, double y, double w, double h) {
     if (view_) view_->setBlurRects(blur_side_, blur_editor_);
 }
 void MeshBridge::placeSettings(double, double, double, double) {}
+
+void MeshBridge::navDrag(double dx, double dy) {
+    if (view_) view_->orbitDrag(static_cast<float>(dx), static_cast<float>(dy));
+}
+
+void MeshBridge::navAxis(int axis) {
+    if (view_) view_->lookAxis(axis);
+}
+
+void MeshBridge::refresh_nav() {
+    if (!view_) return;
+    float tip[9] = {};
+    view_->navTips(tip);
+    const QString next = QStringLiteral("{\"x\":[%1,%2,%3],\"y\":[%4,%5,%6],\"z\":[%7,%8,%9]}")
+                             .arg(tip[0], 0, 'f', 4)
+                             .arg(tip[1], 0, 'f', 4)
+                             .arg(tip[2], 0, 'f', 4)
+                             .arg(tip[3], 0, 'f', 4)
+                             .arg(tip[4], 0, 'f', 4)
+                             .arg(tip[5], 0, 'f', 4)
+                             .arg(tip[6], 0, 'f', 4)
+                             .arg(tip[7], 0, 'f', 4)
+                             .arg(tip[8], 0, 'f', 4);
+    if (next == nav_json_) return;
+    nav_json_ = next;
+    emit navChanged();
+}
 
 MeshStudioPage::MeshStudioPage(QWidget* parent) : QWidget(parent) {
     load_material_icons();

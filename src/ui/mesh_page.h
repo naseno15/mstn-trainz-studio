@@ -2,6 +2,7 @@
 
 #include "ui/status_hub.h"
 
+#include "io/kin.h"
 #include "io/trainzmesh.h"
 
 #include <QElapsedTimer>
@@ -19,6 +20,7 @@
 
 class MeshView;
 class QQuickWidget;
+class QTimer;
 
 struct MatEdit {
     TzMaterial block;
@@ -57,6 +59,7 @@ class MeshBridge : public QObject {
     Q_PROPERTY(int bakePct READ bakePct NOTIFY changed)
     Q_PROPERTY(QString page READ page NOTIFY changed)
     Q_PROPERTY(QString sideJson READ sideJson NOTIFY changed)
+    Q_PROPERTY(QString navJson READ navJson NOTIFY navChanged)
     Q_PROPERTY(QString dockJson READ dockJson NOTIFY changed)
     Q_PROPERTY(QString iconFont READ iconFont NOTIFY changed)
     Q_PROPERTY(QString iconFontUrl READ iconFontUrl NOTIFY changed)
@@ -106,6 +109,7 @@ public:
     int bakePct() const { return 0; }
     QString page() const { return page_; }
     QString sideJson() const { return side_json_; }
+    QString navJson() const { return nav_json_; }
     QString dockJson() const { return dock_json_; }
     QString iconFont() const;
     QString iconFontUrl() const;
@@ -176,9 +180,12 @@ public:
     Q_INVOKABLE void placeSide(double x, double y, double w, double h);
     Q_INVOKABLE void placeEditor(double x, double y, double w, double h);
     Q_INVOKABLE void placeSettings(double x, double y, double w, double h);
+    Q_INVOKABLE void navDrag(double dx, double dy);
+    Q_INVOKABLE void navAxis(int axis);
 
 signals:
     void changed();
+    void navChanged();
     void homeRequested();
 
 private:
@@ -186,6 +193,11 @@ private:
     void sync_highlight();
     void focus_selection();
     void report_load(const QString& stage, int pct);
+    void bind_anims(const QString& mesh_path);
+    void add_kin(const QString& path);
+    void apply_frame();
+    void stop_anim();
+    void refresh_nav();
     bool welcome_ = true;
     bool editor_open_ = false;
     int pbr_ = 0;
@@ -201,6 +213,7 @@ private:
     QString tip_;
     QString shortcut_;
     QString side_json_ = QStringLiteral(R"({"tab":0,"tabs":["Scene","Mat","Lamps","Motion","Lights"],"meshes":[]})");
+    QString nav_json_ = QStringLiteral(R"({"x":[1,0,0],"y":[0,-1,0],"z":[0,0,1]})");
     QString dock_json_ = QStringLiteral(R"({"mode":"meshes","title":"","mat":{"on":false,"name":"","types":[],"tex":[],"two":false,"spec":0},"att":{"name":"","parent":"","loc":[0,0,0],"rot":[0,0,0,1]}})");
     std::vector<MeshRow> rows_;
     std::vector<MatEdit> mats_;
@@ -214,9 +227,19 @@ private:
     float bmax_[3] = {};
     int anims_ = 0;
     int att_count_ = 0;
+    struct HeldKin {
+        QString path;
+        KinClip clip;
+    };
+    std::vector<HeldKin> clips_;
+    int anim_i_ = 0;
+    int frame_ = 0;
+    bool playing_ = false;
+    QTimer* anim_timer_ = nullptr;
     bool info_open_ = true;
     bool two_sided_ = false;
     bool face_ = false;
+    bool att_names_ = false;
     MeshView* view_ = nullptr;
     QRect blur_side_;
     QRect blur_editor_;
