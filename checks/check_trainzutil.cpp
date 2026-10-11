@@ -90,6 +90,26 @@ static void check_identity() {
     assert(page.cell(0, 3) == QLatin1String("4.6"));
 }
 
+static void check_empty_backups() {
+    QTemporaryDir dir;
+    assert(dir.isValid());
+    const QString day = dir.filePath(QStringLiteral("backups/26-10-11"));
+    assert(QDir().mkpath(day + QStringLiteral("/kuid 1 2 empty/nested")));
+    assert(QDir().mkpath(day + QStringLiteral("/kuid 1 3 kept")));
+    QFile kept(day + QStringLiteral("/kuid 1 3 kept/config.txt"));
+    assert(kept.open(QIODevice::WriteOnly));
+    kept.write("kuid <kuid:1:3>\n");
+    kept.close();
+    QFile loose(day + QStringLiteral("/note.tzarc"));
+    assert(loose.open(QIODevice::WriteOnly));
+    loose.write("x");
+    loose.close();
+    const QList<AssetBackup> rows = find_asset_backups(dir.path(), QString());
+    assert(rows.size() == 2);
+    const QList<AssetBackup> hit = find_asset_backups(dir.path(), QStringLiteral("empty"));
+    assert(hit.isEmpty());
+}
+
 static void check_find() {
     QTemporaryDir dir;
     assert(dir.isValid());
@@ -260,6 +280,7 @@ int main(int argc, char** argv) {
     check_real_library();
     check_meta();
     check_identity();
+    check_empty_backups();
     check_find();
     check_queue();
     const QList<LibraryAsset> listed = parse_installed_library(

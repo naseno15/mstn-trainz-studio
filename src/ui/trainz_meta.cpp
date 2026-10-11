@@ -810,6 +810,12 @@ QString config_in_editing(const QString& editing, const QString& kuid) {
     return {};
 }
 
+// A leftover folder with only empty subfolders has nothing to open. Stop at the first file.
+static bool dir_has_file(const QString& path) {
+    QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+    return it.hasNext();
+}
+
 QList<AssetBackup> find_asset_backups(const QString& data_dir, const QString& query, int limit) {
     const QString root = data_dir + QStringLiteral("/backups");
     const QStringList tokens = search_tokens(query.trimmed());
@@ -824,6 +830,7 @@ QList<AssetBackup> find_asset_backups(const QString& data_dir, const QString& qu
             const QString blob = name.toLower();
             if (!tokens.isEmpty() && !std::all_of(tokens.begin(), tokens.end(), [&](const QString& t) { return blob.contains(t); })) continue;
             if (tokens.isEmpty() && kuid.isEmpty() && !blob.contains(QLatin1String(".tzarc")) && hash_dir.match(name).hasMatch()) continue;
+            if (child.isDir() && !dir_has_file(child.absoluteFilePath())) continue;
             AssetBackup row;
             row.day = label;
             row.day_key = day.fileName();
