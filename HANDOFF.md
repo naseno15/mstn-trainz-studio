@@ -1,5 +1,31 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-12 (Asia/Bangkok) — view gizmo on the viewport, cropped logo
+
+The axis triad floats at the top-left of the mesh viewport. Drag orbits. Clicking an axis flies the camera onto that axis. `LogoProvider` crops `assets/mstn_logo_white.png` to the ink and every sidebar, Home, and About uses that mark at the column width.
+
+Dropping a mesh lists `.kin` files in the same folder whose bone names are inside that mesh (`windowcab.trainzmesh` → `windowcab_scene.kin`, bone `r.fuckyou`). Play and the frame slider move a one-bone part from frame 0. A dropped `.kin` whose bones are not in the mesh is reported and not kept.
+
+**Last updated:** 2026-10-12 (Asia/Bangkok) — attachment pick and names
+
+Left-drag orbits even when the press lands on an attachment. Shift+click selects an attachment (brighter axes) or, if the click misses, a mesh part. Shift+click on empty space clears the attachment and the material highlight. Att names are rasterized to an image and drawn as a screen quad. QPainter on the OpenGL framebuffer flipped the glyphs.
+
+**Last updated:** 2026-10-12 (Asia/Bangkok) — trainzmesh attachment axes
+
+Opening a `.trainzmesh` reads the `a.*` table (same pose as an `.im` ATCH) and draws the RGB triad after the body, on top of the shell. The Atts checkbox still hides that file's points. An attachment-only `.im` is unchanged.
+
+**Last updated:** 2026-10-11 (Asia/Bangkok) — Config tag editor
+
+Assets Config opens `config.txt` (drop, Open, or the library **Edit config** button) as sunk fields. Short tags sit four across. `username` and `description` take the whole row, and `description` is a tall wrapping field. A hairline splits Identity, Category, Credits, Script, Asset, and Containers. A container row drills in, so `mesh-table` → a mesh → `effects` → `texture-replacement` / `corona` / `attachment` are the same list, with the editor chosen from the parent container. KUID rows pick from the TrainzUtil library, filtered by category-class. Numbered `kuid-table` keys stay plain text. Save writes `config.txt` back when the file came from an editing folder; a library copy that is not open for edit asks for a save path. Source still shows the raw text.
+
+**Last updated:** 2026-10-12 (Asia/Bangkok) — Help menu
+
+The title bar **Help** menu has Check for updates, About Trainz Studio (matte sheet: MSTN Production since 2024, purpose, Facebook, website, email, per language), and Source code. Source code opens `https://github.com/naseno15/mstn-trainz-studio`. Check for updates opens a matte sheet, asks GitHub for the latest releases and the latest commit, and shows a spinner until that returns. Each release expands. Install update appears only when a newer tag has a Windows zip. Warn, log, about, and update sheets rise in. Switching language blurs the window, swaps the catalog, then sharpens. UI text uses Segoe UI with Leelawadee UI and Yu Gothic UI so Thai and Japanese are outline faces.
+
+**Last updated:** 2026-10-11 (Asia/Bangkok) — Optional GitHub update
+
+About a second after the window is up, the app asks `https://api.github.com/repos/naseno15/mstn-trainz-studio/releases/latest` (override with `TRAINZ_UPDATE_REPO`, skip with `TRAINZ_NO_UPDATE`). A newer tag that has a `*win64.zip` asset shows a toast at the bottom-right. × dismisses it for this session. The body opens a dialog; **Install update** downloads the zip, then a hidden PowerShell helper waits for this process, copies the archive folder that contains the exe over `applicationDirPath()`, and starts that exe again. **Later** leaves the toast up. The current build is the published `v4.3.0` release, so the toast stays hidden until a higher tag exists. `check_update` covers version compare, asset pick, and the two QML files.
+
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Packages viewer dock and text well
 
 Clearing the queue (or removing the last CDP) clears the Viewer/Editor with it. Line numbers read `gutterLines.firstLine` (the old id was undefined, so every row painted NaN). Viewer and Editor are the same text document; the swap only flips read-only and does not rebuild an HTML copy. The Packages right dock opens level with the Finder: half of the width left after the queue column. The splitter cannot go wider than that.
@@ -30,7 +56,7 @@ Dropping or opening a mesh shows a glass progress sheet (read, parse, textures, 
 
 **Last updated note:** Assets Packages / Config / KUID / Export pages
 
-Packages fills the three columns: the left queue takes a CDP, tzarc, zip, or folder drop; the center Finder lists assets and, after a double-click, that asset's files (folder icon vs file icon, folders grouped on top, date modified newest first, breadcrumb, config.txt). The right Viewer stays open and shows the clicked file with line numbers. Ctrl+S saves the file open in the editor. A Finder row keeps an amber highlight and a trailing * until that file is saved, including after you open another file. Sidebar and viewer widths stay in QML while the pointer is down. Content width is frozen and clipped for that drag, then laid out once on release. Config edits config.chump as text. KUID normalizes a paste to hex and hash-XX. Export reads a KUID list and runs TrainzUtil createCDP.
+Packages fills the three columns: the left queue takes a CDP, tzarc, zip, or folder drop; the center Finder lists assets and, after a double-click, that asset's files (folder icon vs file icon, folders grouped on top, date modified newest first, breadcrumb, config.txt). A library send indexes config.txt or config.chump and every file under that asset, including subfolders; a folder with one asset opens straight onto that file list. The right Viewer stays open and shows the clicked file with line numbers. Ctrl+S saves the file open in the editor. A Finder row keeps an amber highlight and a trailing * until that file is saved, including after you open another file. Sidebar and viewer widths stay in QML while the pointer is down. Content width is frozen and clipped for that drag, then laid out once on release. Config edits config.chump as text. KUID normalizes a paste to hex and hash-XX. Export reads a KUID list and runs TrainzUtil createCDP.
 
 Opening Smart TrainzUtil probes the Launcher, then lists installed assets (`filterbystatus I`). The sidebar **Data** button opens the folder from `getinstallationdatapath`. **Refresh** and **Scan** run that probe again; the status line changes to “Checking Launcher…” while it runs. The Launcher must be open with Advanced debug tools on, or the status line says so and the table stays empty.
 
@@ -63,7 +89,7 @@ cmake --build build --target check_shell --parallel
 
 ## Boot and window
 
-`src/main.cpp` shows a frameless boot dialog (brand, orange bar, stage line) before `ShellWindow`, then closes it when the main window is up. It is not always-on-top, so other windows can cover it. The bar glide is short (about 16–70 ms per step). Startup compiles only the home chrome (title, home, menu, toast, status). Mesh, Sounds, Engine, Assets, and TrainzUtil compile the first time that page is opened. `check_shell` asserts at least four stage callbacks. The × on the card, Esc, and Alt+F4 abort startup immediately, including while a QML compile is blocking the UI thread, and still clear `session.lock`.
+`src/main.cpp` shows a frameless boot dialog (brand, orange bar, stage line) before `ShellWindow`, then closes it when the main window is up. It is not always-on-top, so other windows can cover it. The bar glide is short (about 16–70 ms per step). Startup compiles the home chrome (title, home, menu, toast, status) and Mesh Studio. The mesh page holds a `QOpenGLWidget`; building it after the window is visible makes Windows recreate the window, so the app blinks away and back. Sounds, Engine, Assets, and TrainzUtil still compile the first time that page is opened. `check_shell` asserts at least four stage callbacks. The × on the card, Esc, and Alt+F4 abort startup immediately, including while a QML compile is blocking the UI thread, and still clear `session.lock`.
 
 Home ↔ studio switches grab the old page and fade that pixmap on a sibling label (180ms). The effect stays off the OpenGL view. Title menus are a `Qt::Tool` window (not `Popup`) so a click outside or Esc dismisses them; open plays a short scale/fade in `MenuDrop.qml`. Traffic lights show × − + and a `GlassTip` while the cluster is hovered. Dragging the caption uses `startSystemMove`; `WM_EXITSIZEMOVE` maximizes when the cursor is on the top screen edge. Min/max window flags stay on so Windows snap still has a thick frame.
 
@@ -85,7 +111,8 @@ Mesh Lods, Texture Params, Texture Editor, and Texture Denoiser share a 260px ri
 A compile definition that only one check needs (such as `FIXTURE_DIR`) belongs on that check target, not on `trainz_ui`.
 
 ## TrainzUtil parity (Python trainzutil_host.py / trainz_install.py)
-- Library: Modified/Size from content index (original/local/editing), Author/Build via shared cache ~/.cache/trainz_studio/tu-archive-meta.json, Type codes -> names (trainz_meta.cpp category_label).
-- View Detail: picks drive sidebar cards (cover, deps, credits, status). Tools: Inspect/Export/Each CDP/Tuner (-> Engine page, save commits back)/Packages (-> Assets)/Edit/Submit/Validate/Backups/Encrypt. Export and Each CDP fill the right Progress list (`N of M`) the same way Validate does.
+- Library: the loading sheet waits on the Content Manager list only. Modified/Size fill in from the content index after the rows are up; author names follow from the cache. The cache stamp is a decimal string in ~/.cache/trainz_studio/tu-archive-meta.json (a JSON number cannot hold a nanosecond mtime, so a numeric stamp reopened every archive on each launch). Type codes -> names (trainz_meta.cpp category_label).
+- View Detail: picks drive sidebar cards (cover, deps, credits, status). Tools: Inspect/Export/Each CDP/Tuner (-> Engine page, save commits back)/Packages (-> Assets)/Edit/Submit/Validate/Backups/GameScript. Export and Each CDP fill the right Progress list (`N of M`) the same way Validate does.
+- GameScript page (nav id `encrypt`): TrainzUtil `encrypt` writes `.gse` beside `.gs` by asking the running game. Container is 16 bytes: `u32` version 2, `u32` 0, `u32` payload size, `u32` 0. Payload is a packed image under a per-byte XOR (one literal edit flips one ciphertext byte by the plaintext xor; repetitive text packs smaller first). Not chump, tzarc, or lzss. No decrypt command. Fixture pair: `checks/fixtures/gamescript/alsthom_mainlib.gs` + `.gse`.
 - Install: zip/cdp sources with nested zips, staged installs, real ok/fail from TrainzUtil output.
 - Check: check_trainzutil (check_meta covers labels, index, author scan).
