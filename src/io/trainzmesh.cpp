@@ -520,3 +520,76 @@ TrainzMesh parse_trainzmesh(const uint8_t* data, size_t size) {
     tzmf_detail::bind_material_names(data, size, mesh);
     return mesh;
 }
+
+namespace {
+
+bool att_name_ok(const uint8_t* p, int len) {
+    if (len < 3 || p[0] != 'a' || p[1] != '.') return false;
+    for (int i = 2; i < len; ++i) {
+        const unsigned char c = p[i];
+        const bool word = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+        if (!word) return false;
+    }
+    return true;
+}
+
+float be_f32(const uint8_t* p) {
+    const uint8_t swapped[4] = {p[3], p[2], p[1], p[0]};
+    return rd_f32(swapped);
+}
+
+void quat_to_rows(float x, float y, float z, float w, float* o) {
+    const float xx = x * x, yy = y * y, zz = z * z;
+    const float xy = x * y, xz = x * z, yz = y * z;
+    const float wx = w * x, wy = w * y, wz = w * z;
+    o[0] = 1.f - 2.f * (yy + zz);
+    o[1] = 2.f * (xy - wz);
+    o[2] = 2.f * (xz + wy);
+    o[3] = 2.f * (xy + wz);
+    o[4] = 1.f - 2.f * (xx + zz);
+    o[5] = 2.f * (yz - wx);
+    o[6] = 2.f * (xz - wy);
+    o[7] = 2.f * (yz + wx);
+    o[8] = 1.f - 2.f * (xx + yy);
+}
+
+}  // namespace
+
+std::vector<TzAttachment> parse_trainzmesh_attachments(const uint8_t* data, size_t size) {
+    std::vector<TzAttachment> out;
+    if (!data || size < 32) return out;
+    size_t j = 0;
+    while (j + 1 < size) {
+        const void* hit = std::memchr(data + j, 'a', size - j);
+        if (!hit) break;
+        j = static_cast<size_t>(static_cast<const uint8_t*>(hit) - data);
+        if (j < 1) {
+            ++j;
+            continue;
+        }
+        const int len = data[j - 1];
+        if (len < 3 || len > 64 || j + static_cast<size_t>(len) + 28 > size || !att_name_ok(data + j, len)) {
+            ++j;
+            continue;
+        }
+        const uint8_t* f = data + j + static_cast<size_t>(len);
+        float v[7];
+        bool finite = true;
+        for (int i = 0; i < 7; ++i) finite = finite && std::isfinite(v[i] = be_f32(f + static_cast<size_t>(i) * 4));
+        const float qn = v[3] * v[3] + v[4] * v[4] + v[5] * v[5] + v[6] * v[6];
+        const float span = std::max(std::fabs(v[0]), std::max(std::fabs(v[1]), std::fabs(v[2])));
+        if (!finite || qn < 0.25f || qn > 4.f || span > 1.0e4f) {
+            ++j;
+            continue;
+        }
+        TzAttachment att;
+        att.name.assign(reinterpret_cast<const char*>(data + j), static_cast<size_t>(len));
+        att.pos[0] = v[0];
+        att.pos[1] = v[1];
+        att.pos[2] = v[2];
+        quat_to_rows(v[3], v[4], v[5], v[6], att.orient);
+        out.push_back(std::move(att));
+        j += static_cast<size_t>(len) + 28;
+    }
+    return out;
+}

@@ -46,5 +46,13 @@ struct TzMaterial {
     std::vector<TzTex> textures;
 };
 
+struct TzAttachment {
+    std::string name;
+    float orient[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // row-major, each row is an axis
+    float pos[3] = {};
+};
+
 TrainzMesh parse_trainzmesh(const uint8_t* data, size_t size);
 std::vector<TzMaterial> parse_tzmf_materials(const uint8_t* data, size_t size);
+// u8 len + "a.name" + 7× BE float32 (Z-up pos + quat xyzw). Same hits as the Python loader.
+std::vector<TzAttachment> parse_trainzmesh_attachments(const uint8_t* data, size_t size);
