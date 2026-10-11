@@ -1,5 +1,9 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-11 (Asia/Bangkok) — Mesh Studio opens .im and .fbx
+
+`.im` with no GEOM (attachment-only, such as `cab.im`) still opens. Each ATCH point is the same RGB line triad as the corner gizmo, spun by that point's orientation. Not a mesh part. `.fbx` goes through `parse_fbx_parts` (ufbx, metres, Trainz Z-up). Bind pose only — no skinning.
+
 **Last updated:** 2026-10-09 (Asia/Bangkok) — Mesh Studio Tab pie
 
 Hold Tab on Preview or Settings and drag to Wireframe, Solid, Material, or Render. The wheel pops open with an overshoot, collapses on close, and the active slice eases outward while a line tracks the cursor. A short tap leaves the wheel up until a click, Esc, or Tab again. Meshes Editor and Attachs Editor use the same key for Move / Edit. Render is full lit maps; Material is albedo only; Solid and Wireframe are flat clay, and Wireframe draws edges.
@@ -14,7 +18,7 @@ Dropping or opening a mesh shows a glass progress sheet (read, parse, textures, 
 
 **Last updated note:** Assets Packages / Config / KUID / Export pages
 
-Packages fills the three columns: the left queue takes a CDP, tzarc, zip, or folder drop; the center Finder lists assets and, after a double-click, that asset's files (kind badge, size, breadcrumb, config.txt). The right Viewer stays open and shows the clicked file with line numbers. Config edits config.chump as text. KUID normalizes a paste to hex and hash-XX. Export reads a KUID list and runs TrainzUtil createCDP.
+Packages fills the three columns: the left queue takes a CDP, tzarc, zip, or folder drop; the center Finder lists assets and, after a double-click, that asset's files (folder icon vs file icon, folders grouped on top, date modified newest first, breadcrumb, config.txt). The right Viewer stays open and shows the clicked file with line numbers. Ctrl+S saves the file open in the editor. A Finder row keeps an amber highlight and a trailing * until that file is saved, including after you open another file. Sidebar and viewer widths stay in QML while the pointer is down. Content width is frozen and clipped for that drag, then laid out once on release. Config edits config.chump as text. KUID normalizes a paste to hex and hash-XX. Export reads a KUID list and runs TrainzUtil createCDP.
 
 Opening Smart TrainzUtil probes the Launcher, then lists installed assets (`filterbystatus I`). The sidebar **Data** button opens the folder from `getinstallationdatapath`. **Refresh** and **Scan** run that probe again; the status line changes to “Checking Launcher…” while it runs. The Launcher must be open with Advanced debug tools on, or the status line says so and the table stays empty.
 
@@ -47,7 +51,7 @@ cmake --build build --target check_shell --parallel
 
 ## Boot and window
 
-`src/main.cpp` shows a frameless boot dialog (brand, orange bar, stage line) before `ShellWindow`, then closes it when the main window is up. Stages are reported from the shell constructor (`Starting…`, `Chrome`, `Studios`, `Ready`). `check_shell` asserts at least four stage callbacks. The × on the card, Esc, and Alt+F4 abort startup immediately, including while a QML compile is blocking the UI thread, and still clear `session.lock`.
+`src/main.cpp` shows a frameless boot dialog (brand, orange bar, stage line) before `ShellWindow`, then closes it when the main window is up. It is not always-on-top, so other windows can cover it. The bar glide is short (about 16–70 ms per step). Startup compiles only the home chrome (title, home, menu, toast, status). Mesh, Sounds, Engine, Assets, and TrainzUtil compile the first time that page is opened. `check_shell` asserts at least four stage callbacks. The × on the card, Esc, and Alt+F4 abort startup immediately, including while a QML compile is blocking the UI thread, and still clear `session.lock`.
 
 Home ↔ studio switches grab the old page and fade that pixmap on a sibling label (180ms). The effect stays off the OpenGL view. Title menus are a `Qt::Tool` window (not `Popup`) so a click outside or Esc dismisses them; open plays a short scale/fade in `MenuDrop.qml`. Traffic lights show × − + and a `GlassTip` while the cluster is hovered. Dragging the caption uses `startSystemMove`; `WM_EXITSIZEMOVE` maximizes when the cursor is on the top screen edge. Min/max window flags stay on so Windows snap still has a thick frame.
 
