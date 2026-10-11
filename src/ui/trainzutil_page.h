@@ -67,6 +67,7 @@ public:
     void set_credits(const QString& kuid, const QString& text);
     void set_size(const QString& kuid, const QString& text);
     int count() const { return shown_.size(); }
+    const QList<LibraryAsset>& all() const { return all_; }
     int total() const { return all_.size(); }
     int author_count() const { return authors_.size(); }
     QString cell(int row, int column) const;
@@ -172,6 +173,7 @@ class TrainzUtilBridge : public QObject {
     Q_PROPERTY(QString glyphFolder READ glyphFolder NOTIFY changed)
     Q_PROPERTY(QString glyphRefresh READ glyphRefresh NOTIFY changed)
     Q_PROPERTY(QString glyphAssets READ glyphAssets NOTIFY changed)
+    Q_PROPERTY(QString glyphConfig READ glyphConfig NOTIFY changed)
     Q_PROPERTY(QString glyphSearch READ glyphSearch NOTIFY changed)
     Q_PROPERTY(QString glyphHistory READ glyphHistory NOTIFY changed)
     Q_PROPERTY(QString glyphEdit READ glyphEdit NOTIFY changed)
@@ -224,6 +226,7 @@ public:
     QString glyphFolder() const;
     QString glyphRefresh() const;
     QString glyphAssets() const;
+    QString glyphConfig() const;
     QString glyphSearch() const;
     QString glyphHistory() const;
     QString glyphEdit() const;
@@ -294,6 +297,7 @@ public:
     Q_INVOKABLE void submitEdit();
     Q_INVOKABLE void validateAssets();
     Q_INVOKABLE void openPackages();
+    Q_INVOKABLE void editConfig();
     Q_INVOKABLE void inspectStatus();
     Q_INVOKABLE void inspectErrors();
     Q_INVOKABLE void inspectDepends();
@@ -315,6 +319,7 @@ signals:
     void engineRequested(const QString& kuid, const QString& text, const QString& name);
     void sceneRequested(const QStringList& paths, const QStringList& labels, const QList<double>& yaws);
     void packagesRequested(const QString& folder);
+    void configRequested(const QString& text, const QString& path);
     void contentsReady(const QVariantList& rows);
     void sourcesReady(const QVariantList& rows);
     void scriptsReady(const QVariantList& rows);
@@ -439,6 +444,7 @@ public:
 
     void open_archive(const QString& path);
     void commit_enginespec(const QString& kuid, const QString& text);
+    QString choose_kuid(const QString& filter);
     int library_rows() const;
     QString cell(int row, int column) const;
     TrainzUtilBridge* bridge() const { return bridge_; }
@@ -451,6 +457,7 @@ signals:
     void engineRequested(const QString& kuid, const QString& text, const QString& name);
     void sceneRequested(const QStringList& paths, const QStringList& labels, const QList<double>& yaws);
     void packagesRequested(const QString& folder);
+    void configRequested(const QString& text, const QString& path);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

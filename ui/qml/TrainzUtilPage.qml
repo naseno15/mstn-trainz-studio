@@ -715,7 +715,7 @@ Item {
         anchors.fill: parent
         gradient: Gradient {
             GradientStop { position: 0.0; color: bridge.dark ? "#1a2230" : "#eef1f6" }
-            GradientStop { position: 1.0; color: bridge.dark ? "#0c0e12" : "#d5dbe3" }
+            GradientStop { position: 1.0; color: bridge.dark ? "#161b24" : "#d5dbe3" }
         }
     }
 
@@ -772,13 +772,7 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 spacing: 8
-                Image {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    width: 108
-                    height: 36
-                    fillMode: Image.PreserveAspectFit
-                    source: bridge.dark ? "image://mstnlogo/dark" : "image://mstnlogo/light"
-                }
+                LogoMark {}
                 Text {
                     width: parent.width
                     horizontalAlignment: Text.AlignHCenter
@@ -933,7 +927,7 @@ Item {
                                         width: parent.width
                                         spacing: 8
                                         RaiseButton {
-                                            width: (parent.width - 32) / 5
+                                            width: (parent.width - 40) / 6
                                             height: 36
                                             glyph: bridge.glyphHistory
                                             fontName: bridge.iconFont
@@ -942,7 +936,7 @@ Item {
                                             onClicked: bridge.findSelectedBackups()
                                         }
                                         RaiseButton {
-                                            width: (parent.width - 32) / 5
+                                            width: (parent.width - 40) / 6
                                             height: 36
                                             enabled: !bridge.taskBusy
                                             glyph: bridge.glyphEdit
@@ -951,7 +945,7 @@ Item {
                                             onClicked: bridge.openForEditing()
                                         }
                                         RaiseButton {
-                                            width: (parent.width - 32) / 5
+                                            width: (parent.width - 40) / 6
                                             height: 36
                                             enabled: !bridge.taskBusy
                                             glyph: bridge.glyphPublish
@@ -960,7 +954,7 @@ Item {
                                             onClicked: bridge.submitEdit()
                                         }
                                         RaiseButton {
-                                            width: (parent.width - 32) / 5
+                                            width: (parent.width - 40) / 6
                                             height: 36
                                             enabled: !bridge.taskBusy
                                             glyph: bridge.glyphCheck
@@ -969,12 +963,20 @@ Item {
                                             onClicked: bridge.validateAssets()
                                         }
                                         RaiseButton {
-                                            width: (parent.width - 32) / 5
+                                            width: (parent.width - 40) / 6
                                             height: 36
                                             glyph: bridge.glyphAssets
                                             fontName: bridge.iconFont
                                             tip: qsTr("Packages")
                                             onClicked: bridge.openPackages()
+                                        }
+                                        RaiseButton {
+                                            width: (parent.width - 40) / 6
+                                            height: 36
+                                            glyph: bridge.glyphConfig
+                                            fontName: bridge.iconFont
+                                            tip: qsTr("Edit config")
+                                            onClicked: bridge.editConfig()
                                         }
                                     }
 
@@ -2391,10 +2393,22 @@ Item {
                         font.pixelSize: 14
                     }
 
+                    Text {
+                        id: scriptNote
+                        visible: bridge.page === "encrypt"
+                        anchors.top: head.bottom
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.topMargin: 4
+                        wrapMode: Text.Wrap
+                        text: qsTr("TrainzUtil encrypt asks the running game for a .gse. The file is a 16-byte header (version 2, payload size) and a packed image under a per-byte XOR. It is not a chump, tzarc, or lzss blob, and there is no decrypt command. The .gs stays the source.")
+                        color: bridge.dark ? "#9aa3b2" : "#5c6570"
+                        font.pixelSize: 11
+                    }
                     ListView {
                         id: scriptList
                         visible: bridge.page === "encrypt"
-                        anchors.top: head.bottom
+                        anchors.top: scriptNote.bottom
                         anchors.bottom: parent.bottom
                         anchors.left: parent.left
                         anchors.right: parent.right
@@ -2849,7 +2863,7 @@ Item {
         Item {
             id: cluster
             anchors.centerIn: parent
-            width: 578
+            width: 606
             height: 48
 
             function placePill(animate) {
@@ -2927,7 +2941,7 @@ Item {
             Rectangle {
                 x: 478
                 y: 2
-                width: 100
+                width: 124
                 height: 44
                 radius: 16
                 color: Qt.rgba(0, 0, 0, bridge.dark ? 0.32 : 0.06)
@@ -3015,9 +3029,9 @@ Item {
             }
             NavChip {
                 id: encryptChip
-                x: 482
-                width: 92
-                label: qsTr("Encrypt")
+                x: 484
+                width: 112
+                label: qsTr("GameScript")
                 hot: bridge.page === "encrypt"
                 onPicked: bridge.showPage("encrypt")
             }

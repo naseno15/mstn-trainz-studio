@@ -21,6 +21,8 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDeadlineTimer>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -28,6 +30,10 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHash>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QVBoxLayout>
 #include <QPointer>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -759,7 +765,11 @@ void LibraryList::pop_scope() {
 
 void LibraryList::set_owners(const QHash<qint64, QString>& owners) {
     owners_ = owners;
-    rebuild();
+    if (!query_.isEmpty() || sort_key_ == QLatin1String("author")) {
+        rebuild();
+        return;
+    }
+    touch_all({kRoleAuthor});
 }
 
 void LibraryList::merge_meta(const QHash<QString, AssetMeta>& meta) {
@@ -1029,18 +1039,31 @@ void LibraryList::rebuild() {
     };
     const bool numeric = key == QLatin1String("installed") || key == QLatin1String("modified") || key == QLatin1String("size");
     const bool status = key == QLatin1String("status");
+    QVector<double> numbers;
+    QVector<QString> labels;
+    QVector<int> ranks;
+    if (numeric) {
+        numbers.resize(all_.size());
+        for (int i = 0; i < all_.size(); ++i) numbers[i] = number(all_[i]);
+    } else if (status) {
+        ranks.resize(all_.size());
+        for (int i = 0; i < all_.size(); ++i) ranks[i] = status_rank(bits(all_[i]));
+    } else {
+        labels.resize(all_.size());
+        for (int i = 0; i < all_.size(); ++i) labels[i] = text(all_[i]);
+    }
     std::stable_sort(shown_.begin(), shown_.end(), [&](int li, int ri) {
         const LibraryAsset& l = all_[li];
         const LibraryAsset& r = all_[ri];
         int order = 0;
         if (numeric) {
-            const double a = number(l);
-            const double b = number(r);
+            const double a = numbers[li];
+            const double b = numbers[ri];
             order = a < b ? -1 : a > b ? 1 : 0;
         } else if (status) {
-            order = status_rank(bits(l)) - status_rank(bits(r));
+            order = ranks[li] - ranks[ri];
         } else {
-            order = text(l).compare(text(r));
+            order = labels[li].compare(labels[ri]);
         }
         if (order == 0) order = l.name.compare(r.name, Qt::CaseInsensitive);
         if (order == 0) order = l.kuid.compare(r.kuid);
@@ -1097,6 +1120,7 @@ QString TrainzUtilBridge::glyphHome() const { return glyph("home"); }
 QString TrainzUtilBridge::glyphFolder() const { return glyph("folder_open"); }
 QString TrainzUtilBridge::glyphRefresh() const { return glyph("refresh"); }
 QString TrainzUtilBridge::glyphAssets() const { return glyph("inventory_2"); }
+QString TrainzUtilBridge::glyphConfig() const { return glyph("file_open"); }
 QString TrainzUtilBridge::glyphSearch() const { return glyph("search"); }
 QString TrainzUtilBridge::glyphHistory() const { return glyph("history"); }
 QString TrainzUtilBridge::glyphEdit() const { return glyph("edit"); }
@@ -1122,7 +1146,8 @@ void TrainzUtilBridge::note_library() {
 }
 
 void TrainzUtilBridge::publish_load(const QString& text) {
-    const bool waiting = fill_library_ || fill_dates_ || fill_meta_;
+    // The sheet waits on Content Manager only. Dates and author names fill the columns after the rows are on screen.
+    const bool waiting = fill_library_;
     const QString detail = text.simplified();
     if (!detail.isEmpty() && (load_lines_.isEmpty() || load_lines_.last() != detail)) {
         load_lines_ << detail;
@@ -1279,15 +1304,9 @@ void TrainzUtilBridge::scan_content() {
     spawn([self, gen, roots] {
         auto index = std::make_shared<const ContentIndex>(index_content(roots));
         const AssetDates dates = read_asset_dates(*index);
-        QHash<qint64, QString> owners;
-        for (const QString& root : roots) {
-            owners = read_kuid_owners(root + QStringLiteral("/assets.tdx"));
-            if (!owners.isEmpty()) break;
-        }
-        post([self, gen, index, dates, owners] {
+        post([self, gen, index, dates] {
             if (!self || gen != self->fill_gen_) return;
             self->index_ = index;
-            if (!owners.isEmpty()) self->library_->set_owners(owners);
             self->fill_dates_ = false;
             self->library_->set_dates(dates);
             self->note_library();
@@ -1296,6 +1315,17 @@ void TrainzUtilBridge::scan_content() {
                                    .arg(self->fill_meta_ ? ui_tr(QStringLiteral(" Author names are still being read from each archive.")) : QString()));
             if (!self->focus_kuid_.isEmpty()) self->load_cover(self->focus_kuid_);
         });
+        QHash<qint64, QString> owners;
+        for (const QString& root : roots) {
+            owners = read_kuid_owners(root + QStringLiteral("/assets.tdx"));
+            if (!owners.isEmpty()) break;
+        }
+        if (!owners.isEmpty()) {
+            post([self, gen, owners] {
+                if (!self || gen != self->fill_gen_) return;
+                self->library_->set_owners(owners);
+            });
+        }
         const QHash<QString, AssetMeta> meta = scan_archive_meta(*index, meta_cache_file(), [self, gen](const QString& text) {
             post([self, gen, text] {
                 if (self && gen == self->fill_gen_) self->publish_load(text);
@@ -2446,6 +2476,30 @@ void TrainzUtilBridge::commit_enginespec(const QString& kuid, const QString& tex
     });
 }
 
+void TrainzUtilBridge::editConfig() {
+    const QString kuid = (focus_kuid_.isEmpty() ? detail_kuid_ : focus_kuid_).trimmed();
+    if (kuid.isEmpty() || !index_) {
+        note(index_ ? QStringLiteral("Select an asset first") : QStringLiteral("Content folders are still being read"));
+        return;
+    }
+    QString path;
+    const QString folder = index_->editing_folder.value(kuid);
+    if (!folder.isEmpty()) {
+        const QString file_path = folder + QStringLiteral("/config.txt");
+        QFile file(file_path);
+        if (file.open(QIODevice::ReadOnly)) {
+            emit configRequested(QString::fromUtf8(file.readAll()), file_path);
+            return;
+        }
+    }
+    const QString text = index_source(*index_).read_config(kuid);
+    if (text.isEmpty()) {
+        note(QStringLiteral("No config.txt for this asset"));
+        return;
+    }
+    emit configRequested(text, QString());
+}
+
 void TrainzUtilBridge::openPackages() {
     const QString kuid = (focus_kuid_.isEmpty() ? detail_kuid_ : focus_kuid_).trimmed();
     const std::shared_ptr<const ContentIndex> index = index_;
@@ -2652,6 +2706,7 @@ TrainzUtilPage::TrainzUtilPage(QWidget* parent, bool start_probe) : QWidget(pare
     connect(bridge_, &TrainzUtilBridge::engineRequested, this, &TrainzUtilPage::engineRequested);
     connect(bridge_, &TrainzUtilBridge::sceneRequested, this, &TrainzUtilPage::sceneRequested);
     connect(bridge_, &TrainzUtilBridge::packagesRequested, this, &TrainzUtilPage::packagesRequested);
+    connect(bridge_, &TrainzUtilBridge::configRequested, this, &TrainzUtilPage::configRequested);
     view_ = new QQuickWidget(this);
     view_->setResizeMode(QQuickWidget::SizeRootObjectToView);
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
@@ -2659,6 +2714,67 @@ TrainzUtilPage::TrainzUtilPage(QWidget* parent, bool start_probe) : QWidget(pare
     view_->setClearColor(QColor(QStringLiteral("#12161c")));
     view_->setSource(res_url(qml_file()));
     if (start_probe) bridge_->refreshLauncher();
+}
+
+QString TrainzUtilPage::choose_kuid(const QString& filter) {
+    QWidget* host = window();
+    QDialog dialog(host);
+    dialog.setWindowFlag(Qt::Window, true);
+    dialog.setWindowModality(Qt::ApplicationModal);
+    dialog.setWindowTitle(QStringLiteral("Choose asset"));
+    dialog.resize(520, 560);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* hint = new QLabel(&dialog);
+    hint->setWordWrap(true);
+    auto* search = new QLineEdit(&dialog);
+    search->setPlaceholderText(QStringLiteral("Name or KUID"));
+    auto* list = new QListWidget(&dialog);
+    layout->addWidget(hint);
+    layout->addWidget(search);
+    layout->addWidget(list, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QObject::connect(list, &QListWidget::itemDoubleClicked, &dialog, &QDialog::accept);
+    const QStringList codes = filter.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    auto refill = [this, codes, hint, search, list] {
+        list->clear();
+        static const QList<LibraryAsset> kEmpty;
+        const QList<LibraryAsset>& rows = library_ == nullptr ? kEmpty : library_->all();
+        const bool loading = bridge_ && bridge_->busy() && rows.isEmpty();
+        hint->setText(rows.isEmpty()
+                          ? (loading ? QStringLiteral("Reading Content Manager. The list fills when TrainzUtil answers.")
+                                     : QStringLiteral("The library is empty. Open the Trainz Launcher with Advanced debug tools, then refresh TrainzUtil."))
+                          : QStringLiteral("Installed assets. The list starts on the kind this tag expects."));
+        const QString needle = search->text().trimmed();
+        int shown = 0;
+        for (const LibraryAsset& asset : rows) {
+            if (!codes.isEmpty()) {
+                bool match = false;
+                for (const QString& code : codes)
+                    if (asset.category.compare(code.trimmed(), Qt::CaseInsensitive) == 0) match = true;
+                if (!match && needle.isEmpty()) continue;
+            }
+            if (!needle.isEmpty() && !asset.name.contains(needle, Qt::CaseInsensitive) && !asset.kuid.contains(needle, Qt::CaseInsensitive)) continue;
+            auto* item = new QListWidgetItem(asset.name + QStringLiteral("    ") + asset.kuid, list);
+            item->setData(Qt::UserRole, asset.kuid);
+            if (++shown >= 400) break;
+        }
+    };
+    refill();
+    int loaded = library_ == nullptr ? 0 : library_->total();
+    if (bridge_) {
+        QObject::connect(bridge_, &TrainzUtilBridge::changed, &dialog, [this, refill, loaded]() mutable {
+            const int now = library_ == nullptr ? 0 : library_->total();
+            if (now == loaded && now > 0) return;
+            loaded = now;
+            refill();
+        });
+    }
+    QObject::connect(search, &QLineEdit::textChanged, &dialog, refill);
+    if (dialog.exec() != QDialog::Accepted || list->currentItem() == nullptr) return {};
+    return list->currentItem()->data(Qt::UserRole).toString();
 }
 
 void TrainzUtilPage::open_archive(const QString& path) {
