@@ -668,6 +668,15 @@ ContentIndex index_content(const QStringList& roots) {
 
 QString meta_cache_file() { return cache_dir(QString()) + QStringLiteral("tu-archive-meta.json"); }
 
+// A JSON number above 2^53 cannot come back as the same nanosecond stamp.
+static qint64 cached_archive_mtime(const QJsonValue& value) {
+    if (value.isString()) return value.toString().toLongLong();
+    if (!value.isDouble()) return 0;
+    const double number = value.toDouble();
+    if (number > 9007199254740992.0 || number < -9007199254740992.0) return 0;
+    return static_cast<qint64>(number);
+}
+
 QHash<QString, AssetMeta> scan_archive_meta(
     const ContentIndex& index, const QString& cache_file, const std::function<void(const QString&)>& status) {
     const QHash<QString, ArchiveHit> chosen = index.chosen();
@@ -681,9 +690,10 @@ QHash<QString, AssetMeta> scan_archive_meta(
     QStringList misses;
     for (auto it = chosen.begin(); it != chosen.end(); ++it) {
         const QJsonArray row = cache.value(it.key()).toArray();
-        // [author, build, mtime] is a hit. Username, when present, is index 3.
-        // Requiring 4 fields would reopen every archive written by an older cache.
-        if (row.size() >= 3 && row.at(2).toInteger() == it->mtime_ns) {
+        // [author, build, mtime, username?]. mtime is a decimal string: JSON numbers
+        // are doubles, and a nanosecond stamp does not round-trip, so every launch
+        // used to reopen the whole library.
+        if (row.size() >= 3 && cached_archive_mtime(row.at(2)) == it->mtime_ns) {
             out.insert(it.key(), {row.at(0).toString(), row.at(1).toString(), row.size() >= 4 ? row.at(3).toString() : QString()});
             continue;
         }
@@ -702,7 +712,7 @@ QHash<QString, AssetMeta> scan_archive_meta(
         for (int i = 0; i < misses.size(); ++i) {
             const AssetMeta& meta = rows[static_cast<size_t>(i)];
             out.insert(misses[i], meta);
-            cache.insert(misses[i], QJsonArray{meta.author, meta.build, chosen.value(misses[i]).mtime_ns, meta.username});
+            cache.insert(misses[i], QJsonArray{meta.author, meta.build, QString::number(chosen.value(misses[i]).mtime_ns), meta.username});
         }
         QFile file(cache_file);
         if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) file.write(QJsonDocument(cache).toJson(QJsonDocument::Compact));

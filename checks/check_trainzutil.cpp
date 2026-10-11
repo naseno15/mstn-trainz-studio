@@ -10,6 +10,9 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStringList>
 #include <QTemporaryDir>
 
@@ -198,9 +201,19 @@ static void check_meta() {
     assert(chosen.contains(QStringLiteral("<kuid:7:8>")));
     assert(chosen.value(QStringLiteral("<kuid:7:8>")).size == static_cast<qint64>(archive.size()));
     assert(chosen.value(QStringLiteral("<kuid:7:8>")).mtime_ns > 0);
-    const QHash<QString, AssetMeta> meta = scan_archive_meta(index, dir.filePath(QStringLiteral("cache.json")), {});
+    const QString cache_path = dir.filePath(QStringLiteral("cache.json"));
+    const QHash<QString, AssetMeta> meta = scan_archive_meta(index, cache_path, {});
     assert(meta.value(QStringLiteral("<kuid:7:8>")).author == QLatin1String("Boonnop"));
     assert(meta.value(QStringLiteral("<kuid:7:8>")).build == QLatin1String("5.0"));
+    QFile cache_file(cache_path);
+    assert(cache_file.open(QIODevice::ReadOnly));
+    const QJsonArray cached = QJsonDocument::fromJson(cache_file.readAll()).object().value(QStringLiteral("<kuid:7:8>")).toArray();
+    cache_file.close();
+    assert(cached.at(2).isString());
+    assert(cached.at(2).toString().toLongLong() == chosen.value(QStringLiteral("<kuid:7:8>")).mtime_ns);
+    assert(QFile::remove(out.fileName()));
+    const QHash<QString, AssetMeta> again = scan_archive_meta(index, cache_path, {});
+    assert(again.value(QStringLiteral("<kuid:7:8>")).author == QLatin1String("Boonnop"));
 }
 
 static void write_file(const QString& path, const QByteArray& body) {
