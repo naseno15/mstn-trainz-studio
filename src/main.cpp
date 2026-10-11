@@ -43,7 +43,7 @@ class BootDialog : public QDialog {
 public:
     BootDialog() {
         setWindowTitle(QStringLiteral("Trainz Studio"));
-        setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+        setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
         setAttribute(Qt::WA_TranslucentBackground);
         setFixedSize(560, 270);
 
@@ -154,12 +154,12 @@ public:
         render_history();
         stage_->setText(QStringLiteral("Ready"));
         glide_to(100);
-        pump(260, true);
+        pump(40, true);
     }
     void dissolve() {
         QElapsedTimer clock;
         clock.start();
-        constexpr int ms = 320;
+        constexpr int ms = 140;
         while (clock.elapsed() < ms) {
             setWindowOpacity(1.0 - QEasingCurve(QEasingCurve::InOutQuad).valueForProgress(double(clock.elapsed()) / ms));
             pump(8, false);
@@ -182,7 +182,7 @@ private:
     // Eased glide of bar + percent toward the target; the pause is deliberate so each step is readable.
     void glide_to(int pct) {
         const int from = bar_->value(), to = pct * 10;
-        const int ms = std::clamp(180 + std::abs(to - from) * 2 / 3, 180, 520);
+        const int ms = std::clamp(16 + std::abs(to - from) / 12, 16, 70);
         QElapsedTimer clock;
         clock.start();
         const QEasingCurve curve(QEasingCurve::OutCubic);
