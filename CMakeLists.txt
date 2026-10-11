@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets OpenGLWidgets Quick QuickWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets OpenGLWidgets Quick QuickWidgets Network)
 
 if(TRAINZ_QT_PREFIX)
     set(trainz_qt_define QT_PREFIX="${TRAINZ_QT_PREFIX}")
@@ -16,7 +16,9 @@ set(trainz_qml_define QML_DIR="${CMAKE_SOURCE_DIR}/ui/qml" I18N_DIR="${CMAKE_SOU
 # same objects. A per-check compile define cannot live in these TUs — put it
 # on the check .cpp only. Upgrade path: split a page out if it needs its own flags.
 set(trainz_ui_sources
+    src/io/acs_tree.cpp
     src/ui/icons.cpp
+    src/ui/app_update.cpp
     src/ui/crash_report.cpp
     src/ui/shell_window.cpp
     src/ui/status_hub.cpp
@@ -45,6 +47,7 @@ add_library(trainz_io STATIC
     src/io/im_geom.cpp
     src/io/fbx.cpp
     src/io/trainzmesh.cpp
+    src/io/kin.cpp
     third_party/ufbx/ufbx.c
     src/io/config_id.cpp
     src/io/enginespec.cpp
@@ -58,12 +61,12 @@ target_include_directories(trainz_io PUBLIC src third_party/puff third_party/ufb
 set_source_files_properties(third_party/ufbx/ufbx.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 add_library(trainz_ui OBJECT ${trainz_ui_sources})
-target_link_libraries(trainz_ui PUBLIC trainz_io Qt6::Core Qt6::Widgets Qt6::Quick Qt6::OpenGLWidgets Qt6::QuickWidgets)
+target_link_libraries(trainz_ui PUBLIC trainz_io Qt6::Core Qt6::Widgets Qt6::Quick Qt6::OpenGLWidgets Qt6::QuickWidgets Qt6::Network)
 if(WIN32)
     target_link_libraries(trainz_ui PUBLIC winmm)
 endif()
 target_include_directories(trainz_ui PUBLIC src)
-target_compile_definitions(trainz_ui PUBLIC ${trainz_qml_define} ${trainz_qt_define})
+target_compile_definitions(trainz_ui PUBLIC ${trainz_qml_define} ${trainz_qt_define} TRAINZ_STUDIO_VERSION="${PROJECT_VERSION}")
 target_precompile_headers(trainz_ui PRIVATE src/ui/qt_pch.h)
 
 qt_add_executable(trainz_studio_cpp src/main.cpp)
@@ -74,6 +77,7 @@ set_target_properties(trainz_studio_cpp PROPERTIES WIN32_EXECUTABLE TRUE)
 file(GLOB studio_qml CONFIGURE_DEPENDS ui/qml/*.qml)
 file(GLOB studio_i18n CONFIGURE_DEPENDS assets/i18n/*.json)
 set(studio_font assets/fonts/MaterialIcons-Regular.ttf)
+set(studio_logo assets/mstn_logo_white.png)
 foreach(f ${studio_qml})
     get_filename_component(n ${f} NAME)
     set_source_files_properties(${f} PROPERTIES QT_RESOURCE_ALIAS qml/${n})
@@ -83,11 +87,18 @@ foreach(f ${studio_i18n})
     set_source_files_properties(${f} PROPERTIES QT_RESOURCE_ALIAS i18n/${n})
 endforeach()
 set_source_files_properties(${studio_font} PROPERTIES QT_RESOURCE_ALIAS fonts/MaterialIcons-Regular.ttf)
-qt_add_resources(trainz_studio_cpp studio PREFIX /studio FILES ${studio_qml} ${studio_i18n} ${studio_font})
+set_source_files_properties(${studio_logo} PROPERTIES QT_RESOURCE_ALIAS logo/mstn_logo_white.png)
+qt_add_resources(trainz_studio_cpp studio PREFIX /studio FILES ${studio_qml} ${studio_i18n} ${studio_font} ${studio_logo})
 
 # Static Qt (tools/build_qt_static.ps1): one exe, no DLLs.
 if(TRAINZ_STATIC)
     qt_import_qml_plugins(trainz_studio_cpp)
+    # CrashDialog blurs with MultiEffect. The static import scan misses QtQuick.Effects, so the sheet never loads.
+    if(NOT TARGET Qt6::effectsplugin)
+        include("${Qt6Qml_DIR}/QmlPlugins/Qt6effectspluginConfig.cmake")
+    endif()
+    target_link_libraries(trainz_studio_cpp PRIVATE Qt6::effectsplugin)
+    target_sources(trainz_studio_cpp PRIVATE $<TARGET_OBJECTS:Qt6::effectsplugin_init>)
     target_link_options(trainz_studio_cpp PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
 
@@ -104,6 +115,7 @@ target_link_libraries(check_formats PRIVATE trainz_io)
 target_compile_definitions(check_formats PRIVATE FIXTURE_DIR="${CMAKE_SOURCE_DIR}/checks/fixtures" EDITING_DIR="${CMAKE_SOURCE_DIR}/../editing")
 
 trainz_ui_check(check_shell)
+trainz_ui_check(check_update)
 trainz_ui_check(check_ve)
 trainz_ui_check(check_trainzutil)
 trainz_ui_check(check_engine)
