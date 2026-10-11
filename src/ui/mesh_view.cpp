@@ -1,10 +1,15 @@
 #include "mesh_view.h"
 
+#include <QColor>
 #include <QElapsedTimer>
+#include <QFont>
+#include <QFontMetrics>
+#include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMatrix4x4>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <QVector3D>
@@ -329,6 +334,23 @@ void main() {
 }
 )";
 
+const char* k_label_vert = R"(#version 330 core
+layout(location = 0) in vec2 in_pos;
+layout(location = 1) in vec2 in_uv;
+out vec2 v_uv;
+void main() {
+    v_uv = in_uv;
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+}
+)";
+
+const char* k_label_frag = R"(#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_tex;
+out vec4 FragColor;
+void main() { FragColor = texture(u_tex, v_uv); }
+)";
+
 const char* k_line_vert = R"(#version 330 core
 layout(location = 0) in vec3 in_pos;
 layout(location = 1) in vec3 in_col;
@@ -546,6 +568,7 @@ void MeshView::frame_camera() {
     move_v_[0] = move_v_[1] = move_v_[2] = 0.f;
     if (coast_) coast_->stop();
     pitch_ = 25.f;
+    emit cameraMoved();
 }
 
 void MeshView::setDebugMode(int mode) {
@@ -604,6 +627,103 @@ void MeshView::setPartTwo(int index, bool on) {
     parts_[static_cast<size_t>(index)].two_sided = on;
     update();
 }
+void MeshView::setAttNames(bool on) {
+    att_names_ = on;
+    update();
+}
+
+void MeshView::setAnimMatrix(const QMatrix4x4& model) {
+    anim_model_ = model;
+    update();
+}
+
+void MeshView::paint_att_names(const QMatrix4x4& proj, const QMatrix4x4& view) {
+    if (!att_names_ || atts_.empty() || label_prog_ == 0) return;
+    int fbw = 1;
+    int fbh = 1;
+    fb_size(&fbw, &fbh);
+    const qreal dpr = std::max(qreal(1), devicePixelRatioF());
+    const QMatrix4x4 mvp = proj * view * anim_model_;
+    auto label_for = [&](const QString& name, bool hot) -> AttLabel {
+        const QString key = name + QLatin1Char(hot ? '1' : '0') + QString::number(int(std::lround(dpr * 100)));
+        if (att_labels_.contains(key)) return att_labels_.value(key);
+        QFont font;
+        font.setPixelSize(std::max(12, static_cast<int>(std::lround(13 * dpr))));
+        font.setBold(true);
+        const QFontMetrics fm(font);
+        const int pad_x = std::max(6, fm.horizontalAdvance(QStringLiteral("a")) / 2);
+        const int pad_y = std::max(3, int(std::lround(2 * dpr)));
+        const int tw = fm.horizontalAdvance(name);
+        const int th = fm.height();
+        QImage img(tw + pad_x * 2, th + pad_y * 2, QImage::Format_RGBA8888_Premultiplied);
+        img.fill(Qt::transparent);
+        QPainter painter(&img);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::TextAntialiasing);
+        painter.setFont(font);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(hot ? QColor(255, 244, 230, 235) : QColor(8, 8, 12, 220));
+        painter.drawRoundedRect(QRectF(0.5, 0.5, img.width() - 1, img.height() - 1), 5 * dpr, 5 * dpr);
+        painter.setPen(hot ? QColor(20, 16, 12) : QColor(255, 255, 255));
+        painter.drawText(img.rect(), Qt::AlignCenter, name);
+        painter.end();
+        // GL reads the first row as the bottom of the texture. Flip so the top of the word stays the top of the quad.
+        const QImage rgba = img.mirrored(false, true).convertToFormat(QImage::Format_RGBA8888);
+        AttLabel slot;
+        slot.w = rgba.width();
+        slot.h = rgba.height();
+        glGenTextures(1, &slot.tex);
+        glBindTexture(GL_TEXTURE_2D, slot.tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, rgba.bytesPerLine() / 4);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rgba.width(), rgba.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.constBits());
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        att_labels_.insert(key, slot);
+        return slot;
+    };
+    bind_widget_target();
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(label_prog_);
+    glUniform1i(glGetUniformLocation(label_prog_, "u_tex"), 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(label_vao_);
+    const float gap = float(std::lround(4 * dpr));
+    for (size_t i = 0; i < atts_.size(); ++i) {
+        const ViewAtt& att = atts_[i];
+        if (att.name.isEmpty()) continue;
+        if (att.file >= 0 && att.file < static_cast<int>(att_on_.size()) && !att_on_[static_cast<size_t>(att.file)]) continue;
+        const QVector3D clip = mvp.map(QVector3D(att.pos[0], att.pos[1], att.pos[2]));
+        if (clip.z() < -1.f || clip.z() > 1.f) continue;
+        const AttLabel slot = label_for(att.name, static_cast<int>(i) == att_sel_);
+        if (slot.tex == 0) continue;
+        const float sx = (clip.x() * 0.5f + 0.5f) * float(fbw);
+        const float sy = (0.5f - clip.y() * 0.5f) * float(fbh);
+        const float left = sx - slot.w * 0.5f;
+        const float top = sy - slot.h - gap;
+        const float right = left + slot.w;
+        const float bottom = top + slot.h;
+        auto nx = [&](float x) { return x / float(fbw) * 2.f - 1.f; };
+        auto ny = [&](float y) { return 1.f - y / float(fbh) * 2.f; };
+        const float quad[] = {
+            nx(left), ny(top), 0.f, 1.f, nx(left), ny(bottom), 0.f, 0.f, nx(right), ny(top), 1.f, 1.f,
+            nx(right), ny(top), 1.f, 1.f, nx(left), ny(bottom), 0.f, 0.f, nx(right), ny(bottom), 1.f, 0.f,
+        };
+        glBindTexture(GL_TEXTURE_2D, slot.tex);
+        glBindBuffer(GL_ARRAY_BUFFER, label_vbo_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    glBindVertexArray(0);
+    glDisable(GL_BLEND);
+}
+
 void MeshView::setFaceOrient(bool on) {
     face_orient_ = on;
     update();
@@ -619,6 +739,61 @@ void MeshView::setShown(int index, bool on) {
     update();
 }
 void MeshView::resetCamera() { fly_on_ = false; fov_ = 40.f; frame_camera(); update(); }
+
+void MeshView::orbitDrag(float dx_px, float dy_px) {
+    fly_on_ = false;
+    fly_orient_ = false;
+    spin_yaw_ = spin_pitch_ = 0.f;
+    yaw_ -= dx_px * 0.45f;
+    pitch_ = std::clamp(pitch_ + dy_px * 0.45f, -85.f, 85.f);
+    update();
+    emit cameraMoved();
+}
+
+void MeshView::lookAxis(int axis) {
+    float yaw = yaw_;
+    float pitch = pitch_;
+    switch (axis) {
+    case 0: yaw = 0.f; pitch = 0.f; break;
+    case 1: yaw = 180.f; pitch = 0.f; break;
+    case 2: yaw = 90.f; pitch = 0.f; break;
+    case 3: yaw = -90.f; pitch = 0.f; break;
+    case 4: pitch = 85.f; break;
+    case 5: pitch = -85.f; break;
+    default: return;
+    }
+    float turn = yaw - yaw_;
+    while (turn > 180.f) turn -= 360.f;
+    while (turn < -180.f) turn += 360.f;
+    spin_yaw_ = spin_pitch_ = 0.f;
+    fly_from_[0] = fly_to_[0] = target_[0];
+    fly_from_[1] = fly_to_[1] = target_[1];
+    fly_from_[2] = fly_to_[2] = target_[2];
+    fly_from_[3] = fly_to_[3] = dist_;
+    fly_yaw0_ = yaw_;
+    fly_yaw1_ = yaw_ + turn;
+    fly_pitch0_ = pitch_;
+    fly_pitch1_ = pitch;
+    fly_orient_ = true;
+    fly_on_ = true;
+    fly_clock_.start();
+    kick_coast();
+}
+
+void MeshView::navTips(float out[9]) const {
+    const float yr = qDegreesToRadians(yaw_);
+    const float pr = qDegreesToRadians(pitch_);
+    const QVector3D eye(std::cos(pr) * std::cos(yr), std::cos(pr) * std::sin(yr), std::sin(pr));
+    QMatrix4x4 cam;
+    cam.lookAt(eye, QVector3D(0, 0, 0), QVector3D(0, 0, 1));
+    const QVector3D axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    for (int i = 0; i < 3; ++i) {
+        const QVector3D v = cam.mapVector(axes[i]);
+        out[i * 3] = v.x();
+        out[i * 3 + 1] = -v.y();
+        out[i * 3 + 2] = v.z();
+    }
+}
 
 void MeshView::flyToHighlight() {
     QVector3D lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
@@ -695,30 +870,42 @@ int MeshView::pick_att(const QPoint& pos) const {
     QMatrix4x4 proj, view;
     proj.perspective(fov_, std::max(0.1f, float(width()) / float(height())), near_p, far_p);
     view.lookAt(eye, QVector3D(target_[0], target_[1], target_[2]), QVector3D(0, 0, 1));
-    const QMatrix4x4 inv = (proj * view).inverted();
-    const float nx = 2.f * pos.x() / width() - 1.f, ny = 1.f - 2.f * pos.y() / height();
-    const QVector3D a = inv.map(QVector3D(nx, ny, -1.f)), b = inv.map(QVector3D(nx, ny, 1.f));
-    const QVector3D o = a, d = (b - a).normalized();
-    const float length = std::max(0.12f, radius_ * 0.08f);
-    const float reach = std::max(0.05f, length * 0.45f);
+    const QMatrix4x4 mvp = proj * view * anim_model_;
+    const QPointF cursor(pos);
+    // Drawn axes are 2px. A few pixels of slop, not a sphere around the point.
+    const float slop = 3.f;
+    auto project = [&](const QVector3D& p, QPointF* out) {
+        const QVector4D c = mvp * QVector4D(p, 1.f);
+        if (c.w() <= 1e-4f) return false;
+        const float iw = 1.f / c.w();
+        *out = QPointF((c.x() * iw * 0.5f + 0.5f) * width(), (0.5f - c.y() * iw * 0.5f) * height());
+        return true;
+    };
+    auto along = [](const QPointF& a, const QPointF& b, const QPointF& p) {
+        const QPointF ab = b - a;
+        const float len2 = float(QPointF::dotProduct(ab, ab));
+        const float t = len2 < 1e-4f ? 0.f : std::clamp(float(QPointF::dotProduct(p - a, ab) / len2), 0.f, 1.f);
+        const QPointF dlt = p - (a + ab * t);
+        return float(std::sqrt(QPointF::dotProduct(dlt, dlt)));
+    };
     int best = -1;
-    float best_t = 1e30f;
+    float best_px = slop;
+    const float length = std::max(0.12f, radius_ * 0.08f);
     for (size_t i = 0; i < atts_.size(); ++i) {
         const ViewAtt& att = atts_[i];
         if (att.file >= 0 && att.file < static_cast<int>(att_on_.size()) && !att_on_[static_cast<size_t>(att.file)]) continue;
+        const float len = length * (static_cast<int>(i) == att_sel_ ? 1.6f : 1.f);
         const QVector3D origin(att.pos[0], att.pos[1], att.pos[2]);
-        QVector3D samples[4] = {origin, origin, origin, origin};
+        QPointF a;
+        if (!project(origin, &a)) continue;
         for (int axis = 0; axis < 3; ++axis) {
             QVector3D dir(att.orient[axis * 3], att.orient[axis * 3 + 1], att.orient[axis * 3 + 2]);
             if (dir.lengthSquared() < 1e-8f) continue;
-            samples[axis + 1] = origin + dir.normalized() * length * 0.65f;
-        }
-        for (const QVector3D& p : samples) {
-            const float t = QVector3D::dotProduct(p - o, d);
-            if (t <= 0.f) continue;
-            const float gap = (o + d * t - p).length();
-            if (gap < reach && t < best_t) {
-                best_t = t;
+            QPointF b;
+            if (!project(origin + dir.normalized() * len, &b)) continue;
+            const float px = along(a, b, cursor);
+            if (px <= best_px) {
+                best_px = px;
                 best = static_cast<int>(i);
             }
         }
@@ -737,6 +924,16 @@ void MeshView::initializeGL() {
     depth_prog_ = link_program(this, k_depth_vert, k_depth_frag);
     line_prog_ = link_program(this, k_line_vert, k_line_frag);
     glow_prog_ = link_program(this, k_glow_vert, k_glow_frag);
+    label_prog_ = link_program(this, k_label_vert, k_label_frag);
+    glGenVertexArrays(1, &label_vao_);
+    glGenBuffers(1, &label_vbo_);
+    glBindVertexArray(label_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, label_vbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(2 * sizeof(float)));
+    glBindVertexArray(0);
     std::vector<float> disc;
     disc.insert(disc.end(), {0.f, 0.f, 0.f});
     for (int i = 0; i <= 28; ++i) {
@@ -1264,9 +1461,9 @@ void MeshView::rebuild_atts() {
             az /= n;
             float r = rgb[axis][0], g = rgb[axis][1], b = rgb[axis][2];
             if (hot) {
-                r = std::min(1.f, r + 0.25f);
-                g = std::min(1.f, g + 0.25f);
-                b = std::min(1.f, b + 0.25f);
+                r = std::min(1.f, r + (1.f - r) * 0.75f);
+                g = std::min(1.f, g + (1.f - g) * 0.75f);
+                b = std::min(1.f, b + (1.f - b) * 0.75f);
             }
             line(att.pos[0], att.pos[1], att.pos[2], att.pos[0] + ax * len, att.pos[1] + ay * len, att.pos[2] + az * len, r, g, b);
         }
@@ -1280,19 +1477,24 @@ void MeshView::rebuild_atts() {
     atts_dirty_ = false;
 }
 
-void MeshView::draw_guides(const QMatrix4x4& proj, const QMatrix4x4& view) {
+void MeshView::draw_atts(const QMatrix4x4& proj, const QMatrix4x4& view) {
     if (line_prog_ == 0) return;
     if (atts_dirty_) rebuild_atts();
-    if (att_verts_ > 0) {
-        glEnable(GL_DEPTH_TEST);
-        glDisable(GL_CULL_FACE);
-        glUseProgram(line_prog_);
-        const QMatrix4x4 mvp = proj * view;
-        glUniformMatrix4fv(glGetUniformLocation(line_prog_, "u_mvp"), 1, GL_FALSE, mvp.constData());
-        glBindVertexArray(att_vao_);
-        glLineWidth(2.f);
-        glDrawArrays(GL_LINES, 0, att_verts_);
-    }
+    if (att_verts_ <= 0) return;
+    // Drawn after the body. Depth-tested axes sit under the shell and never show; an attachment-only .im has no triangles so it looked fine.
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glUseProgram(line_prog_);
+    const QMatrix4x4 mvp = proj * view * anim_model_;
+    glUniformMatrix4fv(glGetUniformLocation(line_prog_, "u_mvp"), 1, GL_FALSE, mvp.constData());
+    glBindVertexArray(att_vao_);
+    glLineWidth(2.f);
+    glDrawArrays(GL_LINES, 0, att_verts_);
+}
+
+void MeshView::draw_guides(const QMatrix4x4& proj, const QMatrix4x4& view) {
+    if (line_prog_ == 0) return;
     if (guides_dirty_) rebuild_guides();
     if (guide_count_ > 0) {
         glEnable(GL_DEPTH_TEST);
@@ -1302,22 +1504,6 @@ void MeshView::draw_guides(const QMatrix4x4& proj, const QMatrix4x4& view) {
         glBindVertexArray(line_vao_);
         glDrawArrays(GL_LINES, 0, guide_count_);
     }
-    glDisable(GL_DEPTH_TEST);
-    QMatrix4x4 rot;
-    for (int col = 0; col < 3; ++col)
-        for (int row = 0; row < 3; ++row) rot(row, col) = view(row, col);
-    int fbw = 1;
-    int fbh = 1;
-    fb_size(&fbw, &fbh);
-    const float aspect = std::max(0.1f, float(fbw) / float(fbh));
-    QMatrix4x4 place;
-    place.translate(0.f, -0.62f, 0.f);
-    place.scale(0.10f, 0.10f * aspect, 0.10f);
-    const QMatrix4x4 gmvp = place * rot;
-    glUseProgram(line_prog_);
-    glUniformMatrix4fv(glGetUniformLocation(line_prog_, "u_mvp"), 1, GL_FALSE, gmvp.constData());
-    glBindVertexArray(gizmo_vao_);
-    glDrawArrays(GL_LINES, 0, 6);
 }
 
 void MeshView::paintGL() {
@@ -1378,6 +1564,8 @@ void MeshView::paintGL() {
     }
     draw_guides(proj, view);
     if (index_total_ <= 0 || mesh_prog_ == 0) {
+        draw_atts(proj, view);
+        paint_att_names(proj, view);
         sync_fps();
         return;
     }
@@ -1387,7 +1575,7 @@ void MeshView::paintGL() {
     const bool use_maps = shade_ >= 3;
     if (wire) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     glUseProgram(mesh_prog_);
-    QMatrix4x4 model;
+    QMatrix4x4 model = anim_model_;
     const QMatrix4x4 mvp = proj * view * model;
     glUniformMatrix4fv(glGetUniformLocation(mesh_prog_, "u_mvp"), 1, GL_FALSE, mvp.constData());
     glUniformMatrix4fv(glGetUniformLocation(mesh_prog_, "u_model"), 1, GL_FALSE, model.constData());
@@ -1544,7 +1732,9 @@ void MeshView::paintGL() {
         glBindVertexArray(ground_vao_);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
+    draw_atts(proj, view);
     blur_panels();
+    paint_att_names(proj, view);
     sync_fps();
 }
 
@@ -1632,12 +1822,21 @@ void MeshView::cam_right(float* x, float* y) const {
 }
 
 void MeshView::coast() {
+    const float yaw0 = yaw_;
+    const float pitch0 = pitch_;
     if (fly_on_) {
         const float t = std::min(1.f, fly_clock_.elapsed() / 650.f);
         const float s = t * t * t * (t * (t * 6.f - 15.f) + 10.f);  // smootherstep
         for (int i = 0; i < 3; ++i) target_[i] = fly_from_[i] + (fly_to_[i] - fly_from_[i]) * s;
         dist_ = fly_from_[3] + (fly_to_[3] - fly_from_[3]) * s;
-        if (t >= 1.f) fly_on_ = false;
+        if (fly_orient_) {
+            yaw_ = fly_yaw0_ + (fly_yaw1_ - fly_yaw0_) * s;
+            pitch_ = std::clamp(fly_pitch0_ + (fly_pitch1_ - fly_pitch0_) * s, -85.f, 85.f);
+        }
+        if (t >= 1.f) {
+            fly_on_ = false;
+            fly_orient_ = false;
+        }
     }
     const bool walking = key_up_ || key_down_ || key_left_ || key_right_ || key_pgup_ || key_pgdn_;
     if (std::abs(spin_yaw_) > 1e-4f || std::abs(spin_pitch_) > 1e-4f) {
@@ -1648,6 +1847,7 @@ void MeshView::coast() {
         if (std::abs(spin_yaw_) < 1e-3f) spin_yaw_ = 0.f;
         if (std::abs(spin_pitch_) < 1e-3f) spin_pitch_ = 0.f;
     }
+    if (yaw_ != yaw0 || pitch_ != pitch0) emit cameraMoved();
     if (std::abs(zoom_v_) > 1e-5f) {
         dist_ = std::clamp(dist_ * (1.f + zoom_v_), std::max(0.05f, radius_ * 0.2f), std::max(radius_ * 40.f, 1.f));
         zoom_v_ *= 0.82f;
@@ -1716,25 +1916,39 @@ void MeshView::mousePressEvent(QMouseEvent* event) {
     last_ = event->pos();
     setFocus(Qt::MouseFocusReason);
     fly_on_ = false;
-    att_grab_ = false;
+    fly_orient_ = false;
     pick_press_ = event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier);
-    if (event->button() == Qt::LeftButton && !pick_press_) {
-        const int att = pick_att(event->pos());
-        if (att >= 0) {
-            att_grab_ = true;
-            emit attPicked(att);
+    if (!pick_press_) return;
+    const int att = pick_att(event->pos());
+    if (att >= 0) {
+        att_sel_ = att;
+        atts_dirty_ = true;
+        update();
+        emit attPicked(att);
+        return;
+    }
+    const int hit = pick_part(event->pos());
+    if (hit >= 0) {
+        if (att_sel_ != -1) {
+            att_sel_ = -1;
+            atts_dirty_ = true;
+            update();
         }
+        emit partPicked(hit);
+        return;
     }
-    if (pick_press_) {
-        const int hit = pick_part(event->pos());
-        if (hit >= 0) emit partPicked(hit);
+    if (att_sel_ != -1) {
+        att_sel_ = -1;
+        atts_dirty_ = true;
+        update();
     }
+    emit pickCleared();
 }
 
 void MeshView::mouseMoveEvent(QMouseEvent* event) {
     const QPoint d = event->pos() - last_;
     last_ = event->pos();
-    if (pick_press_ || att_grab_) return;
+    if (pick_press_) return;
     if (event->buttons() & Qt::LeftButton) {
         spin_yaw_ = std::clamp(spin_yaw_ - d.x() * 0.045f, -8.f, 8.f);
         spin_pitch_ = std::clamp(spin_pitch_ + d.y() * 0.045f, -8.f, 8.f);
@@ -1754,7 +1968,6 @@ void MeshView::mouseMoveEvent(QMouseEvent* event) {
 void MeshView::mouseReleaseEvent(QMouseEvent* event) {
     Q_UNUSED(event);
     pick_press_ = false;
-    att_grab_ = false;
     kick_coast();
 }
 

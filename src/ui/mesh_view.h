@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QMatrix4x4>
 #include <deque>
 #include <QOpenGLFunctions_3_3_Core>
@@ -19,6 +20,7 @@ struct ViewAtt {
     float pos[3] = {};
     float orient[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // row-major, each row is an axis
     int file = 0;
+    QString name;
 };
 
 struct ViewPart {
@@ -65,9 +67,16 @@ public:
     void setTwoSided(bool on);
     void setPartTwo(int index, bool on);
     void setFaceOrient(bool on);
+    void setAttNames(bool on);
+    void setAnimMatrix(const QMatrix4x4& model);
     void setShown(int index, bool on);
     void setHighlight(std::vector<uint8_t> on);
     void resetCamera();
+    // Sidebar nav gizmo. axis: 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z.
+    void orbitDrag(float dx_px, float dy_px);
+    void lookAxis(int axis);
+    // Screen tips of the world axes: x,y,z triples, y down, z toward the camera.
+    void navTips(float out[9]) const;
     // Smoothly fly the orbit target/distance to frame the highlighted parts.
     void flyToHighlight();
     // Panel rects (widget coords, y from top) whose backdrop gets blurred.
@@ -79,6 +88,8 @@ public:
 signals:
     void partPicked(int index);  // Shift+click on a part
     void attPicked(int index);
+    void pickCleared();  // Shift+click on empty viewport
+    void cameraMoved();
 
 protected:
     void initializeGL() override;
@@ -101,6 +112,8 @@ private:
     void draw_sky();
     void draw_disc(const QMatrix4x4& proj, const QMatrix4x4& view, const QVector3D& eye, const QVector3D& dir, float radius, float r, float g, float b, float a, bool additive);
     void draw_guides(const QMatrix4x4& proj, const QMatrix4x4& view);
+    void draw_atts(const QMatrix4x4& proj, const QMatrix4x4& view);
+    void paint_att_names(const QMatrix4x4& proj, const QMatrix4x4& view);
     void rebuild_guides();
     void rebuild_atts();
     void frame_camera();
@@ -108,8 +121,13 @@ private:
     int pick_att(const QPoint& pos) const;
     bool pick_press_ = false;
     bool fly_on_ = false;
+    bool fly_orient_ = false;
     float fly_from_[4] = {};
     float fly_to_[4] = {};
+    float fly_yaw0_ = 0.f;
+    float fly_yaw1_ = 0.f;
+    float fly_pitch0_ = 0.f;
+    float fly_pitch1_ = 0.f;
     QElapsedTimer fly_clock_;
     void coast();
     void kick_coast();
@@ -150,6 +168,8 @@ private:
     bool ground_ = false;
     bool two_sided_ = false;
     bool face_orient_ = false;
+    bool att_names_ = false;
+    QMatrix4x4 anim_model_;
     bool guides_dirty_ = true;
     float yaw_ = 35.f;
     float pitch_ = 25.f;
@@ -207,10 +227,18 @@ private:
     unsigned att_vbo_ = 0;
     int att_verts_ = 0;
     bool atts_dirty_ = false;
+    unsigned label_prog_ = 0;
+    unsigned label_vao_ = 0;
+    unsigned label_vbo_ = 0;
+    struct AttLabel {
+        unsigned tex = 0;
+        int w = 0;
+        int h = 0;
+    };
+    QHash<QString, AttLabel> att_labels_;
     std::vector<ViewAtt> atts_;
     std::vector<char> att_on_;
     int att_sel_ = -1;
-    bool att_grab_ = false;
     std::vector<uint8_t> shown_;
     struct PartMaps {
         unsigned albedo = 0;
