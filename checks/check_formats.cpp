@@ -14,6 +14,7 @@
 #include "io/cdp.h"
 #include "io/chump.h"
 #include "io/im_geom.h"
+#include "io/kin.h"
 #include "io/kuid.h"
 #include "io/lzss.h"
 #include "io/lm_txt.h"
@@ -240,6 +241,51 @@ static void check_files() {
     assert(mats[0].name == "body.m.pbrmetal");
     assert(mats[0].textures.size() == 1);
     assert(mats[0].textures[0].key == "txAlbedo");
+    const std::string kin_path = std::string(EDITING_DIR) + "/kuid 1190880 100144 MSTN KIHA _ ______40/glass/windowcab_scene.kin";
+    const std::string mesh_path = std::string(EDITING_DIR) + "/kuid 1190880 100144 MSTN KIHA _ ______40/glass/windowcab.trainzmesh";
+    if (std::ifstream(kin_path, std::ios::binary) && std::ifstream(mesh_path, std::ios::binary)) {
+        const auto kin_bin = read_bin(kin_path);
+        const auto mesh_bin = read_bin(mesh_path);
+        const KinClip clip = parse_kin(kin_bin.data(), kin_bin.size());
+        assert(clip.ok);
+        assert(clip.frames.size() == 99);
+        assert(clip.bones.size() == 1 && clip.bones[0] == "r.fuckyou");
+        assert(std::fabs(clip.frames[1][0].pos[2] + 0.0128f) < 1e-4f);
+        std::string missing;
+        assert(kin_bones_in_mesh(clip, mesh_bin.data(), mesh_bin.size(), &missing));
+        KinClip foreign = clip;
+        foreign.bones[0] = "r.not-on-this-mesh";
+        assert(!kin_bones_in_mesh(foreign, mesh_bin.data(), mesh_bin.size(), &missing));
+        assert(missing == "r.not-on-this-mesh");
+    }
+    std::vector<uint8_t> att_bin;
+    const std::string att_name = "a.bog0";
+    att_bin.push_back(static_cast<uint8_t>(att_name.size()));
+    att_bin.insert(att_bin.end(), att_name.begin(), att_name.end());
+    auto push_be = [&](float v) {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &v, 4);
+        for (int s = 24; s >= 0; s -= 8) att_bin.push_back(static_cast<uint8_t>((bits >> s) & 0xFF));
+    };
+    push_be(1.5f);
+    push_be(-2.f);
+    push_be(0.25f);
+    push_be(0.f);
+    push_be(0.f);
+    push_be(0.f);
+    push_be(1.f);
+    const auto atts = parse_trainzmesh_attachments(att_bin.data(), att_bin.size());
+    assert(atts.size() == 1);
+    assert(atts[0].name == "a.bog0");
+    assert(std::fabs(atts[0].pos[0] - 1.5f) < 1e-5f);
+    assert(std::fabs(atts[0].orient[0] - 1.f) < 1e-5f && std::fabs(atts[0].orient[4] - 1.f) < 1e-5f);
+    const std::string body = std::string(EDITING_DIR) + "/kuid 1125787 100059 MSTN KIHA _ ______40/body/body.trainzmesh";
+    if (std::ifstream(body, std::ios::binary)) {
+        const auto body_bin = read_bin(body);
+        const auto body_atts = parse_trainzmesh_attachments(body_bin.data(), body_bin.size());
+        assert(body_atts.size() == 102);
+        assert(body_atts[0].name == "a.airdryer");
+    }
     const std::string door = "c:/trs22/backups/26-10-03/kuid 1125787 100060 MSTN KIHA _ ______40/door/doorintback.trainzmesh";
     if (std::ifstream(door, std::ios::binary)) {
         const auto door_bin = read_bin(door);
@@ -292,6 +338,7 @@ static void check_real_meshes() {
     const std::string editing = EDITING_DIR;
     const std::string cab = editing + "/kuid 1190880 100078 MSTN KIHA _ ______40/cab.im";
     const std::string door = editing + "/kuid 1125787 100060 MSTN KIHA _ ______40/door/doorback.fbx";
+    if (!std::ifstream(cab, std::ios::binary)) return;
     auto cab_bytes = read_bin(cab);
     ImView cab_view = parse_im_view(cab_bytes.data(), cab_bytes.size());
     assert(cab_view.parts.empty());
