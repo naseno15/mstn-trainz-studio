@@ -1,5 +1,9 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-11 (Asia/Bangkok) — Packages viewer dock and text well
+
+Clearing the queue (or removing the last CDP) clears the Viewer/Editor with it. Line numbers read `gutterLines.firstLine` (the old id was undefined, so every row painted NaN). Viewer and Editor are the same text document; the swap only flips read-only and does not rebuild an HTML copy. The Packages right dock opens level with the Finder: half of the width left after the queue column. The splitter cannot go wider than that.
+
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Backups hide empty folders
 
 `find_asset_backups` skips a day-folder child that is a directory with no file anywhere under it (nested empty folders count as empty). A loose file or a folder that still has a file stays in the list and in search.

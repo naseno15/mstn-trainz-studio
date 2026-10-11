@@ -77,7 +77,6 @@ Item {
                             height: 30
                             width: (tabs.width - 6) / 2
                             x: 3 + bridge.viewPane * width
-                            Behavior on x { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
                             Repeater {
                                 model: 3

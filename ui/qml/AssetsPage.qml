@@ -20,9 +20,23 @@ Item {
         property bool layoutDrag: false
         property real sideLive: 380
         property real dockLive: 560
+        property bool dockUser: false
         property real holdCenter: 0
         property real holdDock: 0
         property real footHold: 0
+        // Packages viewer opens level with the Finder (the first layout). Texmesh keeps its own dock width.
+        function dockCap() {
+            return Math.max(280, Math.round((width - sideLive - 20) / 2))
+        }
+        function fitDock() {
+            if (bridge.suite === "texmesh" || !bridge.viewerOn)
+                return
+            var cap = dockCap()
+            var next = dockUser ? Math.min(dockLive, cap) : cap
+            if (Math.abs(next - dockLive) < 1)
+                return
+            dockLive = next
+        }
         function sideFoot() {
             if (layoutDrag)
                 return footHold
@@ -40,9 +54,12 @@ Item {
         function endDrag() {
             layoutDrag = false
             bridge.setSideW(sideLive)
-            bridge.setDockW(dockLive)
             sideLive = bridge.sideW
-            dockLive = bridge.dockW
+            if (bridge.suite !== "texmesh" && bridge.viewerOn)
+                fitDock()
+            bridge.setDockW(dockLive)
+            if (bridge.suite === "texmesh" || !bridge.viewerOn)
+                dockLive = bridge.dockW
             queueSlot.sync()
             dockSlot.sync()
             previewSlot.sync()
@@ -52,15 +69,24 @@ Item {
         }
         Component.onCompleted: {
             sideLive = bridge.sideW
-            dockLive = bridge.dockW
+            fitDock()
         }
+        onWidthChanged: fitDock()
         Connections {
             target: bridge
             function onLayoutChanged() {
                 if (stage.layoutDrag)
                     return
                 stage.sideLive = bridge.sideW
-                stage.dockLive = bridge.dockW
+                if (bridge.suite === "texmesh" || !bridge.viewerOn)
+                    stage.dockLive = bridge.dockW
+                else
+                    stage.fitDock()
+            }
+            function onChanged() {
+                if (stage.layoutDrag)
+                    return
+                stage.fitDock()
             }
         }
         anchors.fill: parent
@@ -343,7 +369,7 @@ Item {
                                 height: gutterLines.lineH
                                 horizontalAlignment: Text.AlignRight
                                 verticalAlignment: Text.AlignVCenter
-                                text: editorGutter.firstLine + index + 1
+                                text: gutterLines.firstLine + index + 1
                                 color: "#858585"
                                 font.family: "Consolas"
                                 font.pixelSize: bridge.previewPt
@@ -1063,7 +1089,10 @@ Item {
                 if (!pressed)
                     return
                 var now = mapToItem(stage, mouseX, 0).x
-                stage.dockLive = Math.max(280, Math.min(720, Math.round(grabW - (now - pressX))))
+                var cap = stage.dockCap()
+                var next = Math.max(280, Math.min(cap, Math.round(grabW - (now - pressX))))
+                stage.dockLive = next
+                stage.dockUser = next < cap - 2
             }
             onReleased: stage.endDrag()
             onCanceled: stage.endDrag()

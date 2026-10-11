@@ -615,7 +615,8 @@ void AssetsBridge::setSideW(double width) {
     emit layoutChanged();
 }
 void AssetsBridge::setDockW(double width) {
-    const int next = std::max(220, std::min(720, static_cast<int>(width)));
+    // QML caps the Packages viewer at half the width left after the queue column.
+    const int next = std::max(280, std::min(4096, static_cast<int>(width)));
     if (next == dock_w_) return;
     dock_w_ = next;
     emit layoutChanged();
@@ -734,6 +735,7 @@ void AssetsBridge::queueClear() {
     queue_row_ = -1;
     finder_asset_ = -1;
     finder_parts_.clear();
+    clear_preview();
     refresh_queue();
     refresh_finder();
     center_tip_ = QStringLiteral("Queue cleared");
@@ -758,6 +760,8 @@ void AssetsBridge::queueRemove() {
     else {
         assets_.clear();
         bytes_.clear();
+        path_.clear();
+        clear_preview();
         refresh_finder();
     }
     refresh_queue();
@@ -896,6 +900,9 @@ void AssetsBridge::clear_preview() {
     view_pane_ = 0;
     view_title_ = QStringLiteral("Viewer");
     view_hint_ = QStringLiteral("Select a file in Finder");
+    current_edit_key_.clear();
+    if (preview_text_ != nullptr) preview_text_->clear();
+    if (preview_ != nullptr && preview_empty_ != nullptr) preview_->setCurrentWidget(preview_empty_);
 }
 QString AssetsBridge::stage_selected_asset() {
     if (finder_sel_ < 0 || finder_sel_ >= static_cast<int>(shown_.size()) || finder_asset_ < 0) return {};
@@ -935,15 +942,8 @@ void AssetsBridge::setViewerPane(int pane) {
     if (pane == 1 && !view_editor_) return;
     if (pane == view_pane_) return;
     view_pane_ = pane;
-    if (preview_on_ && view_editor_) {
-        if (view_pane_ == 1) {
-            preview_body_ = preview_plain_;
-            preview_rich_ = false;
-        } else {
-            preview_body_ = highlight_preview(preview_plain_, preview_pt_);
-            preview_rich_ = true;
-        }
-    }
+    // The text well is one TextEdit. Viewer is that document locked; coloring is the highlighter.
+    // Rebuilding an HTML copy here reparsed the whole file on the UI thread and hitch-ed the swap.
     const QString mode = view_pane_ == 1 ? QStringLiteral("Editor") : QStringLiteral("Viewer");
     view_title_ = preview_name_.isEmpty() ? mode : mode + QStringLiteral(" — ") + preview_name_;
     emit changed();
@@ -1003,7 +1003,6 @@ void AssetsBridge::audioStop() {
 }
 void AssetsBridge::viewerFont(int delta) {
     preview_pt_ = std::max(8, std::min(28, preview_pt_ + delta));
-    if (preview_on_ && view_editor_ && view_pane_ == 0) preview_body_ = highlight_preview(preview_plain_, preview_pt_);
     emit changed();
 }
 void AssetsBridge::viewerBack() {}
@@ -2065,15 +2064,9 @@ void AssetsBridge::preview_file(int row) {
     preview_plain_ = plain;
     view_editor_ = true;
     preview_on_ = true;
-    if (view_pane_ == 1) {
-        preview_body_ = plain;
-        preview_rich_ = false;
-        view_title_ = QStringLiteral("Editor — ") + shown;
-    } else {
-        preview_body_ = highlight_preview(plain, preview_pt_);
-        preview_rich_ = true;
-        view_title_ = QStringLiteral("Viewer — ") + shown;
-    }
+    preview_body_.clear();
+    preview_rich_ = false;
+    view_title_ = (view_pane_ == 1 ? QStringLiteral("Editor — ") : QStringLiteral("Viewer — ")) + shown;
     if (preview_text_ != nullptr) {
         preview_text_->setPlainText(plain);
         if (preview_ != nullptr) preview_->setCurrentWidget(preview_text_);
