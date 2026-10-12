@@ -64,9 +64,19 @@ void append_faces(MeshPart& part, ufbx_node* node, ufbx_mesh* mesh, const uint32
     }
 }
 
+bool att_node(const std::string& name) {
+    return name.size() > 2 && (name[0] == 'a' || name[0] == 'A') && name[1] == '.';
+}
+
 }  // namespace
 
 std::vector<MeshPart> parse_fbx_parts(const uint8_t* data, size_t size) {
+    ImView view = parse_fbx_view(data, size);
+    if (view.parts.empty()) throw std::runtime_error("no mesh in this .fbx");
+    return std::move(view.parts);
+}
+
+ImView parse_fbx_view(const uint8_t* data, size_t size) {
     // ponytail: bind-pose triangles only. Skinning and animation stay in the FBX until a deform path is needed.
     ufbx_load_opts opts = {};
     opts.generate_missing_normals = true;
@@ -80,9 +90,26 @@ std::vector<MeshPart> parse_fbx_parts(const uint8_t* data, size_t size) {
         ~Release() { ufbx_free_scene(scene); }
     } release{scene};
 
-    std::vector<MeshPart> parts;
+    ImView view;
+    std::vector<MeshPart>& parts = view.parts;
     for (size_t n = 0; n < scene->nodes.count; ++n) {
         ufbx_node* node = scene->nodes.data[n];
+        if (att_node(ufbx_text(node->name))) {
+            ImAttachment att;
+            att.name = ufbx_text(node->name);
+            const ufbx_matrix& m = node->node_to_world;
+            for (int k = 0; k < 3; ++k) att.pos[k] = static_cast<float>(m.cols[3].v[k]);
+            for (int axis = 0; axis < 3; ++axis) {
+                const ufbx_vec3 c = m.cols[axis];
+                const double len = std::sqrt(c.x * c.x + c.y * c.y + c.z * c.z);
+                const double s = len > 1e-12 ? 1.0 / len : 0.0;
+                att.orient[axis * 3] = static_cast<float>(c.x * s);
+                att.orient[axis * 3 + 1] = static_cast<float>(c.y * s);
+                att.orient[axis * 3 + 2] = static_cast<float>(c.z * s);
+            }
+            view.atts.push_back(std::move(att));
+            continue;
+        }
         ufbx_mesh* mesh = node->mesh;
         if (!mesh || mesh->num_faces == 0 || mesh->num_triangles == 0) continue;
         std::vector<uint32_t> tri(std::max<size_t>(mesh->max_face_triangles, 1) * 3);
@@ -112,6 +139,6 @@ std::vector<MeshPart> parse_fbx_parts(const uint8_t* data, size_t size) {
             if (!part.indices.empty()) parts.push_back(std::move(part));
         }
     }
-    if (parts.empty()) throw std::runtime_error("no mesh in this .fbx");
-    return parts;
+    if (parts.empty() && view.atts.empty()) throw std::runtime_error("no mesh or a.* node in this .fbx");
+    return view;
 }
