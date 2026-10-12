@@ -738,9 +738,19 @@ void AssetsBridge::runAction(const QString& action) {
 
 void AssetsBridge::undoEdit() {
     if (suite_ == QLatin1String("texmesh") && tex_) tex_->run_action(QStringLiteral("param_undo"));
+    else if (page_ == QLatin1String("config")) step_config(config_undo_, config_redo_);
 }
 void AssetsBridge::redoEdit() {
     if (suite_ == QLatin1String("texmesh") && tex_) tex_->run_action(QStringLiteral("param_redo"));
+    else if (page_ == QLatin1String("config")) step_config(config_redo_, config_undo_);
+}
+void AssetsBridge::step_config(QStringList& from, QStringList& to) {
+    if (config_edit_ == nullptr || from.isEmpty()) return;
+    to.append(config_edit_->toPlainText());
+    config_edit_->setPlainText(from.takeLast());
+    config_typing_ = false;
+    publish_config();
+    emit changed();
 }
 
 void AssetsBridge::queueClear() {
@@ -1344,12 +1354,20 @@ QString AssetsBridge::queueJson() const {
 QString AssetsBridge::configText() const { return config_edit_ == nullptr ? QString() : config_edit_->toPlainText(); }
 void AssetsBridge::setConfigText(const QString& text) {
     if (config_edit_ == nullptr || config_edit_->toPlainText() == text) return;
+    if (!config_typing_) {
+        config_undo_.append(config_edit_->toPlainText());
+        config_redo_.clear();
+        config_typing_ = true;
+    }
     config_edit_->setPlainText(text);
 }
 
 void AssetsBridge::load_config(const QString& text, const QString& path) {
     if (config_edit_ == nullptr) return;
     config_edit_->setPlainText(text);
+    config_undo_.clear();
+    config_redo_.clear();
+    config_typing_ = false;
     config_path_ = path;
     config_at_.clear();
     config_filter_.clear();
@@ -1465,6 +1483,11 @@ void AssetsBridge::write_config_value(int index, const QString& value) {
     const QString next = acs_format(hint.editor, value, kid.quoted);
     if (kid.begin < 0 || kid.end < kid.begin || kid.end > text.size()) return;
     text.replace(kid.begin, kid.end - kid.begin, next);
+    if (text == config_edit_->toPlainText()) return;
+    config_undo_.append(config_edit_->toPlainText());
+    if (config_undo_.size() > 100) config_undo_.removeFirst();
+    config_redo_.clear();
+    config_typing_ = false;
     config_edit_->setPlainText(text);
     publish_config();
     emit changed();

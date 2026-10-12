@@ -286,7 +286,7 @@ public:
     Q_INVOKABLE void viewerBack();
     Q_INVOKABLE void viewerExpand();
     Q_INVOKABLE void viewerSave();
-    Q_INVOKABLE void undoEdit();  // Edit ▸ Undo / Ctrl+Z (image editor)
+    Q_INVOKABLE void undoEdit();  // Edit ▸ Undo / Ctrl+Z (image editor, config rows)
     Q_INVOKABLE void redoEdit();
     Q_INVOKABLE void viewerEngine();
     void applyEngineText(const QString& text);
@@ -370,6 +370,9 @@ private:
     bool config_source_ = false;
     void publish_config();
     void write_config_value(int index, const QString& value);
+    QStringList config_undo_, config_redo_;  // whole config text before each row edit
+    bool config_typing_ = false;             // a Source typing burst is one undo step
+    void step_config(QStringList& from, QStringList& to);
     QString tzarc_text_;
     QString export_exe_;
     QTableWidget* queue_table_ = nullptr;
