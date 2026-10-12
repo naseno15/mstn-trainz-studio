@@ -20,6 +20,7 @@ Item {
         contentHeight: col.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        MiddleScroll { flick: scroller }
 
         Column {
             id: col

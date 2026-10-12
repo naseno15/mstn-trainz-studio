@@ -53,6 +53,7 @@ Item {
     }
 
     Flickable {
+        id: scroller
         anchors.top: head.bottom
         anchors.topMargin: 10
         anchors.left: parent.left
@@ -63,6 +64,7 @@ Item {
         contentHeight: form.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        MiddleScroll { flick: scroller }
 
         Column {
             id: form

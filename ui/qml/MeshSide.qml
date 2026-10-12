@@ -104,6 +104,7 @@ Item {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         NumberAnimation { id: scrollAnim; target: scroller; property: "contentY"; duration: 380; easing.type: Easing.OutCubic }
+        MiddleScroll { flick: scroller }
 
         Column {
             id: body
@@ -252,6 +253,26 @@ Item {
                 visible: side.bag.tab === 0
 
                 Card {
+                    title: qsTr("Viewport")
+                    Row {
+                        width: parent.width
+                        spacing: 8
+                        CheckRow {
+                            width: (parent.width - 8) / 2
+                            label: qsTr("Face Orientation")
+                            checked: side.bag.face === true
+                            onToggled: bridge.setChecked("face", !side.bag.face)
+                        }
+                        CheckRow {
+                            width: (parent.width - 8) / 2
+                            label: qsTr("Att names")
+                            checked: side.bag.attNames === true
+                            onToggled: bridge.setChecked("attNames", !side.bag.attNames)
+                        }
+                    }
+                }
+
+                Card {
                     visible: (side.bag.atts || []).length > 0
                     title: qsTr("Attachments")
                     Text {
@@ -343,26 +364,6 @@ Item {
                         label: side.bag.dsLabel || qsTr("Apply")
                         accent: true
                         onClicked: bridge.clickId("dsApply")
-                    }
-                }
-
-                Card {
-                    title: qsTr("Viewport")
-                    Row {
-                        width: parent.width
-                        spacing: 8
-                        CheckRow {
-                            width: (parent.width - 8) / 2
-                            label: qsTr("Face Orientation")
-                            checked: side.bag.face === true
-                            onToggled: bridge.setChecked("face", !side.bag.face)
-                        }
-                        CheckRow {
-                            width: (parent.width - 8) / 2
-                            label: qsTr("Att names")
-                            checked: side.bag.attNames === true
-                            onToggled: bridge.setChecked("attNames", !side.bag.attNames)
-                        }
                     }
                 }
             }

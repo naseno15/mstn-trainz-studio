@@ -1,5 +1,9 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-13 (Asia/Bangkok) — Scene tab order, middle-drag scroll
+
+On the Mesh Studio Scene tab the Viewport card sits under Mesh Info, above Attachments. Holding the middle button and dragging scrolls the left sidebar, the right Editor dock, and the Settings page at 3× pointer travel (`MiddleScroll.qml`, a middle-button `DragHandler` with `flick` and `gain`). Left clicks still go to the rows.
+
 **Last updated:** 2026-10-12 (Asia/Bangkok) — Scene attachment list
 
 Dropping a `.trainzmesh` puts each `a.*` name in the left Scene list. Clicking a row selects that triad and flies the camera to it. The list stays on the Scene tab while previewing.
