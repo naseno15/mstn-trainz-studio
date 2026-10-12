@@ -10,6 +10,11 @@ Item {
     }
     readonly property var mat: bag.mat || {}
     readonly property var att: bag.att || {}
+
+    function num(key, text) {
+        var v = Number(text)
+        if (text.trim().length > 0 && isFinite(v)) bridge.setSpin(key, v)
+    }
     readonly property color ink: bridge.dark ? "#f2f4f8" : "#1d1d1f"
     readonly property color mute: bridge.dark ? "#8b93a1" : "#5c6570"
     readonly property color line: Qt.rgba(1, 1, 1, bridge.dark ? 0.08 : 0.40)
@@ -146,29 +151,25 @@ Item {
                     Field { label: "Parent"; live: dock.att.parent || ""; onCommit: function (t) { bridge.setText("attParent", t) } }
                 }
                 Card {
-                    title: qsTr("Location")
-                    Grid {
+                    title: qsTr("Location (m)")
+                    Row {
                         width: parent.width
-                        columns: 3
-                        columnSpacing: 6
-                        rowSpacing: 6
-                        Field { width: (parent.width - 12) / 3; label: "X"; live: String((dock.att.loc || [0, 0, 0])[0]); onCommit: function (t) { bridge.setSpin("loc0", Number(t)) } }
-                        Field { width: (parent.width - 12) / 3; label: "Y"; live: String((dock.att.loc || [0, 0, 0])[1]); onCommit: function (t) { bridge.setSpin("loc1", Number(t)) } }
-                        Field { width: (parent.width - 12) / 3; label: "Z"; live: String((dock.att.loc || [0, 0, 0])[2]); onCommit: function (t) { bridge.setSpin("loc2", Number(t)) } }
+                        spacing: 6
+                        Field { width: (parent.width - 12) / 3; label: "X"; live: (dock.att.loc || ["0", "0", "0"])[0]; onCommit: function (t) { dock.num("loc0", t) } }
+                        Field { width: (parent.width - 12) / 3; label: "Y"; live: (dock.att.loc || ["0", "0", "0"])[1]; onCommit: function (t) { dock.num("loc1", t) } }
+                        Field { width: (parent.width - 12) / 3; label: "Z"; live: (dock.att.loc || ["0", "0", "0"])[2]; onCommit: function (t) { dock.num("loc2", t) } }
                     }
                 }
                 Card {
-                    title: qsTr("Rotation")
-                    Grid {
+                    title: qsTr("Rotation (XYZ °)")
+                    Row {
                         width: parent.width
-                        columns: 2
-                        columnSpacing: 6
-                        rowSpacing: 6
-                        Field { width: (parent.width - 6) / 2; label: "X"; live: String((dock.att.rot || [0, 0, 0, 1])[0]); onCommit: function (t) { bridge.setSpin("rot0", Number(t)) } }
-                        Field { width: (parent.width - 6) / 2; label: "Y"; live: String((dock.att.rot || [0, 0, 0, 1])[1]); onCommit: function (t) { bridge.setSpin("rot1", Number(t)) } }
-                        Field { width: (parent.width - 6) / 2; label: "Z"; live: String((dock.att.rot || [0, 0, 0, 1])[2]); onCommit: function (t) { bridge.setSpin("rot2", Number(t)) } }
-                        Field { width: (parent.width - 6) / 2; label: "W"; live: String((dock.att.rot || [0, 0, 0, 1])[3]); onCommit: function (t) { bridge.setSpin("rot3", Number(t)) } }
+                        spacing: 6
+                        Field { width: (parent.width - 12) / 3; label: "X"; live: (dock.att.rot || ["0", "0", "0"])[0]; onCommit: function (t) { dock.num("rot0", t) } }
+                        Field { width: (parent.width - 12) / 3; label: "Y"; live: (dock.att.rot || ["0", "0", "0"])[1]; onCommit: function (t) { dock.num("rot1", t) } }
+                        Field { width: (parent.width - 12) / 3; label: "Z"; live: (dock.att.rot || ["0", "0", "0"])[2]; onCommit: function (t) { dock.num("rot2", t) } }
                     }
+                    Field { label: "Quaternion xyzw (file)"; live: dock.att.quat || ""; lock: true }
                 }
             }
         }
@@ -186,29 +187,31 @@ Item {
             color: dock.line
         }
         Row {
-            width: parent.width
-            spacing: 6
+            spacing: 8
             visible: dock.bag.mode === "attachs"
             RaiseButton {
-                width: (parent.width - 12) / 3
-                height: 34
-                label: qsTr("Apply")
-                accent: true
-                enabled: dock.bag.applyOn === true
+                width: 36
+                height: 36
+                accent: dock.bag.applyOn === true
+                glyph: "\ue5ca"
+                fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
+                tip: qsTr("Apply")
                 onClicked: bridge.clickId("apply")
             }
             RaiseButton {
-                width: (parent.width - 12) / 3
-                height: 34
-                label: qsTr("Add")
-                enabled: dock.bag.addOn === true
+                width: 36
+                height: 36
+                glyph: "\ue145"
+                fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
+                tip: qsTr("Add attachment")
                 onClicked: bridge.clickId("add")
             }
             RaiseButton {
-                width: (parent.width - 12) / 3
-                height: 34
-                label: qsTr("Delete")
-                enabled: dock.bag.delOn === true
+                width: 36
+                height: 36
+                glyph: "\ue872"
+                fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
+                tip: qsTr("Delete attachment")
                 onClicked: bridge.clickId("del")
             }
         }
@@ -392,6 +395,7 @@ Item {
                 clip: true
                 text: input.activeFocus ? input.text : live
                 onEditingFinished: if (!lock) commit(text)
+                onAccepted: input.focus = false
             }
         }
     }

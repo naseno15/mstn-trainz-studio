@@ -181,6 +181,8 @@ public:
     Q_INVOKABLE void placeSide(double x, double y, double w, double h);
     Q_INVOKABLE void placeEditor(double x, double y, double w, double h);
     Q_INVOKABLE void placeSettings(double x, double y, double w, double h);
+    Q_INVOKABLE void undoEdit();  // Edit ▸ Undo / Ctrl+Z: attachments and materials
+    Q_INVOKABLE void redoEdit();
     Q_INVOKABLE void navDrag(double dx, double dy);
     Q_INVOKABLE void navAxis(int axis);
 
@@ -191,7 +193,7 @@ signals:
 
 private:
     void publish();
-    void note_atts(const std::vector<ViewAtt>& gizmos);
+    void note_atts(std::vector<ViewAtt>& gizmos);
     void sync_highlight();
     void focus_selection();
     void report_load(const QString& stage, int pct);
@@ -229,8 +231,21 @@ private:
     float bmax_[3] = {};
     int anims_ = 0;
     int att_count_ = 0;
-    std::vector<QString> att_labels_;
+    std::vector<ViewAtt> att_rows_;
+    ViewAtt att_edit_;  // Attachs Editor fields; Apply copies into att_rows_[att_i_]
     int att_i_ = -1;
+    void pick_att(int index);
+    void apply_att();
+    struct EditSnap {
+        std::vector<ViewAtt> atts;
+        std::vector<MatEdit> mats;
+    };
+    EditSnap snap() const { return {att_rows_, mats_}; }
+    void record(const EditSnap& before);  // pushes only if atts/mats changed since before
+    void restore(const EditSnap& state);
+    void clear_history();
+    std::vector<EditSnap> undo_, redo_;
+    std::vector<EditSnap> drag_before_;  // 0 or 1 entry while a viewport drag is running
     struct HeldKin {
         QString path;
         KinClip clip;
@@ -277,6 +292,9 @@ private:
 };
 
 int pie_sector(float dx, float dy, int count, int keep);
+// Attachment rotation as Blender XYZ Euler degrees (R = Rz·Ry·Rx). q is xyzw.
+void att_euler(const float q[4], double out[3]);
+void att_quat(const double deg[3], float q[4]);
 
 class MeshStudioPage : public QWidget {
     Q_OBJECT

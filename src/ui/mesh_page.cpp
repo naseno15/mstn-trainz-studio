@@ -21,6 +21,7 @@
 #include <QEventLoop>
 #include <QQuaternion>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QtEndian>
 #include <QFile>
@@ -287,9 +288,11 @@ int pie_sector(float dx, float dy, int count, int keep) {
         const int wrapped = keep % count;
         return wrapped < 0 ? wrapped + count : wrapped;
     }
-    float ang = std::atan2(dx, -dy);
-    if (ang < 0.f) ang += 6.28318530718f;
+    // Slice i is drawn centred on i·step from the top (MeshPage.qml), so shift by half a slice.
     const float step = 6.28318530718f / static_cast<float>(count);
+    float ang = std::atan2(dx, -dy) + step * 0.5f;
+    while (ang < 0.f) ang += 6.28318530718f;
+    while (ang >= 6.28318530718f) ang -= 6.28318530718f;
     int index = static_cast<int>(ang / step);
     if (index < 0) index = 0;
     if (index >= count) index = count - 1;
@@ -352,8 +355,12 @@ void MeshBridge::commitPie() {
     pie_open_ = false;
     pie_sticky_ = false;
     if (pick >= 0 && pick < count) {
-        if (editor_pie()) tool_ = pick;
-        else {
+        if (editor_pie()) {
+            tool_ = pick;
+            const bool move = page_ == QLatin1String("attachs") && tool_ == 0;
+            if (view_) view_->setMoveTool(move);
+            if (move) post_status(QStringLiteral("Move: drag an attachment's centre to move it freely, or an axis to slide along it. Hold Shift to lock to the main axis. Esc cancels."));
+        } else {
             shade_ = pick;
             if (view_) view_->setShade(shade_);
         }
@@ -381,12 +388,29 @@ void MeshBridge::attach(MeshView* view, QWidget* chrome) {
     for (int i = 0; i < 5; ++i) view_->setArrayLight(i, array_on_[i]);
     // Shift+click in the viewport: select that part's material, open the Mat tab.
     connect(view_, &MeshView::attPicked, this, [this](int gizmo) {
-        if (gizmo < 0 || gizmo >= static_cast<int>(att_labels_.size())) return;
-        att_i_ = gizmo;
+        if (gizmo < 0 || gizmo >= static_cast<int>(att_rows_.size())) return;
+        pick_att(gizmo);
         publish();
+    });
+    connect(view_, &MeshView::attMoved, this, [this](int index, float x, float y, float z) {
+        if (index < 0 || index >= static_cast<int>(att_rows_.size())) return;
+        if (drag_before_.empty()) drag_before_.push_back(snap());
+        ViewAtt& row = att_rows_[static_cast<size_t>(index)];
+        row.pos[0] = x;
+        row.pos[1] = y;
+        row.pos[2] = z;
+        if (index == att_i_) std::memcpy(att_edit_.pos, row.pos, sizeof(row.pos));
+        dirty_ = true;
+        publish();
+    });
+    connect(view_, &MeshView::attDragDone, this, [this] {
+        if (drag_before_.empty()) return;
+        record(drag_before_.front());
+        drag_before_.clear();
     });
     connect(view_, &MeshView::pickCleared, this, [this] {
         att_i_ = -1;
+        att_edit_ = ViewAtt{};
         mat_i_ = -1;
         if (view_) view_->setHighlight({});
         publish();
@@ -453,8 +477,9 @@ void MeshBridge::load_file(const QString& path) {
     bounds_set_ = false;
     anims_ = 0;
     att_count_ = 0;
-    att_labels_.clear();
+    att_rows_.clear();
     att_i_ = -1;
+    clear_history();
     std::vector<ViewPart> drawn;
     std::vector<ViewAtt> gizmos;
     auto grow = [&](const float* p) {
@@ -513,8 +538,9 @@ void MeshBridge::load_file(const QString& path) {
     };
     report_load(QStringLiteral("Parsing mesh…"), 22);
     try {
-        if (path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
-            const ImView view = parse_im_view(data, static_cast<size_t>(bytes.size()));
+        const bool is_fbx = path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive);
+        if (is_fbx || path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
+            const ImView view = is_fbx ? parse_fbx_view(data, static_cast<size_t>(bytes.size())) : parse_im_view(data, static_cast<size_t>(bytes.size()));
             att_count_ = static_cast<int>(view.atts.size());
             for (const MeshPart& part : view.parts) {
                 push(QString::fromStdString(part.name), {}, QString::fromStdString(part.albedo), QString::fromStdString(part.normal_map), {}, {}, part.positions, part.normals, part.uvs, part.indices);
@@ -534,13 +560,6 @@ void MeshBridge::load_file(const QString& path) {
                 gizmo.name = QString::fromStdString(att.name);
                 gizmos.push_back(gizmo);
             }
-        } else if (path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) {
-            for (const MeshPart& part : parse_fbx_parts(data, static_cast<size_t>(bytes.size()))) {
-                push(QString::fromStdString(part.name), {}, QString::fromStdString(part.albedo), QString::fromStdString(part.normal_map), {}, {}, part.positions, part.normals, part.uvs, part.indices);
-                MatEdit edit;
-                edit.block.name = part.name;
-                mats_.push_back(std::move(edit));
-            }
         } else {
             const TrainzMesh mesh = parse_trainzmesh(data, static_cast<size_t>(bytes.size()));
             for (const SubMesh& part : mesh.submeshes) {
@@ -558,6 +577,8 @@ void MeshBridge::load_file(const QString& path) {
                 ViewAtt gizmo;
                 std::memcpy(gizmo.pos, att.pos, sizeof(gizmo.pos));
                 std::memcpy(gizmo.orient, att.orient, sizeof(gizmo.orient));
+                std::memcpy(gizmo.quat, att.quat, sizeof(gizmo.quat));
+                gizmo.off = static_cast<int>(att.off);
                 gizmo.name = QString::fromStdString(att.name);
                 gizmos.push_back(gizmo);
             }
@@ -575,7 +596,7 @@ void MeshBridge::load_file(const QString& path) {
         }
     } catch (const std::exception& error) {
         att_count_ = 0;
-        att_labels_.clear();
+        att_rows_.clear();
         att_i_ = -1;
         if (view_) view_->setAttachments({});
         tip_ = QString::fromUtf8(error.what());
@@ -670,8 +691,9 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
     bounds_set_ = false;
     anims_ = 0;
     att_count_ = 0;
-    att_labels_.clear();
+    att_rows_.clear();
     att_i_ = -1;
+    clear_history();
     stop_anim();
     clips_.clear();
     frame_ = 0;
@@ -698,21 +720,11 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             const auto* data = reinterpret_cast<const uint8_t*>(bytes.constData());
             QStringList albedo;
             try {
-                if (path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
-                    const ImView view = parse_im_view(data, static_cast<size_t>(bytes.size()));
+                const bool is_fbx = path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive);
+                if (is_fbx || path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
+                    const ImView view = is_fbx ? parse_fbx_view(data, static_cast<size_t>(bytes.size())) : parse_im_view(data, static_cast<size_t>(bytes.size()));
                     out.atts = view.atts;
                     for (const MeshPart& part : view.parts) {
-                        ViewPart row;
-                        row.name = QString::fromStdString(part.name);
-                        row.positions = part.positions;
-                        row.normals = part.normals;
-                        row.uvs = part.uvs;
-                        row.indices = part.indices;
-                        out.parts.push_back(std::move(row));
-                        albedo << QString::fromStdString(part.albedo);
-                    }
-                } else if (path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) {
-                    for (const MeshPart& part : parse_fbx_parts(data, static_cast<size_t>(bytes.size()))) {
                         ViewPart row;
                         row.name = QString::fromStdString(part.name);
                         row.positions = part.positions;
@@ -995,12 +1007,165 @@ bool tex_locked(const QString& key, const QString& value) {
 
 }  // namespace
 
-void MeshBridge::note_atts(const std::vector<ViewAtt>& gizmos) {
-    att_labels_.clear();
-    att_labels_.reserve(gizmos.size());
+void MeshBridge::note_atts(std::vector<ViewAtt>& gizmos) {
+    for (ViewAtt& gizmo : gizmos) {
+        if (gizmo.off >= 0) continue;
+        QMatrix3x3 rot;
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c) rot(r, c) = gizmo.orient[r * 3 + c];
+        const QQuaternion q = QQuaternion::fromRotationMatrix(rot);
+        gizmo.quat[0] = q.x();
+        gizmo.quat[1] = q.y();
+        gizmo.quat[2] = q.z();
+        gizmo.quat[3] = q.scalar();
+    }
+    att_rows_ = gizmos;
     att_count_ = static_cast<int>(gizmos.size());
-    for (const ViewAtt& gizmo : gizmos) att_labels_.push_back(gizmo.name);
     att_i_ = -1;
+    att_edit_ = ViewAtt{};
+}
+
+void MeshBridge::pick_att(int index) {
+    att_i_ = index;
+    att_edit_ = att_rows_[static_cast<size_t>(index)];
+}
+
+namespace {
+
+bool same_att(const ViewAtt& a, const ViewAtt& b) {
+    return a.name == b.name && std::memcmp(a.pos, b.pos, sizeof(a.pos)) == 0 && std::memcmp(a.quat, b.quat, sizeof(a.quat)) == 0 && std::memcmp(a.orient, b.orient, sizeof(a.orient)) == 0;
+}
+
+bool same_mat(const MatEdit& a, const MatEdit& b) {
+    const TzMaterial& x = a.block;
+    const TzMaterial& y = b.block;
+    if (a.two != b.two || x.name != y.name || x.type_name != y.type_name || x.spec_power != y.spec_power) return false;
+    if (std::memcmp(x.color, y.color, sizeof(x.color)) != 0 || std::memcmp(x.emissive, y.emissive, sizeof(x.emissive)) != 0 || std::memcmp(x.specular, y.specular, sizeof(x.specular)) != 0) return false;
+    if (x.textures.size() != y.textures.size()) return false;
+    for (size_t i = 0; i < x.textures.size(); ++i)
+        if (x.textures[i].key != y.textures[i].key || x.textures[i].value != y.textures[i].value) return false;
+    return true;
+}
+
+}  // namespace
+
+void MeshBridge::record(const EditSnap& before) {
+    if (before.atts.size() == att_rows_.size() && before.mats.size() == mats_.size()) {
+        bool same = true;
+        for (size_t i = 0; same && i < att_rows_.size(); ++i) same = same_att(before.atts[i], att_rows_[i]);
+        for (size_t i = 0; same && i < mats_.size(); ++i) same = same_mat(before.mats[i], mats_[i]);
+        if (same) return;
+    }
+    undo_.push_back(before);
+    // ponytail: 100 whole-state snapshots (attachments + material blocks, no geometry). Diff entries if meshes grow huge.
+    if (undo_.size() > 100) undo_.erase(undo_.begin());
+    redo_.clear();
+}
+
+void MeshBridge::restore(const EditSnap& state) {
+    att_rows_ = state.atts;
+    mats_ = state.mats;
+    if (att_i_ >= static_cast<int>(att_rows_.size())) att_i_ = -1;
+    att_edit_ = att_i_ >= 0 ? att_rows_[static_cast<size_t>(att_i_)] : ViewAtt{};
+    if (mat_i_ >= static_cast<int>(mats_.size())) mat_i_ = mats_.empty() ? -1 : 0;
+    if (view_)
+        for (int i = 0; i < static_cast<int>(att_rows_.size()); ++i) view_->updateAttachment(i, att_rows_[static_cast<size_t>(i)]);
+    for (const MatEdit& edit : mats_) {
+        const QString name = QString::fromStdString(edit.block.name);
+        for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
+            MeshRow& row = rows_[static_cast<size_t>(i)];
+            if (row.name.compare(name, Qt::CaseInsensitive) != 0 && row.material.compare(name, Qt::CaseInsensitive) != 0) continue;
+            if (row.two == edit.two) continue;
+            row.two = edit.two;
+            if (view_) view_->setPartTwo(i, edit.two);
+        }
+    }
+    dirty_ = true;
+    sync_highlight();
+    publish();
+}
+
+void MeshBridge::clear_history() {
+    undo_.clear();
+    redo_.clear();
+    drag_before_.clear();
+}
+
+void MeshBridge::undoEdit() {
+    if (undo_.empty()) {
+        post_status(QStringLiteral("Nothing to undo"));
+        return;
+    }
+    redo_.push_back(snap());
+    const EditSnap state = std::move(undo_.back());
+    undo_.pop_back();
+    restore(state);
+    post_status(QStringLiteral("Undo"));
+}
+
+void MeshBridge::redoEdit() {
+    if (redo_.empty()) {
+        post_status(QStringLiteral("Nothing to redo"));
+        return;
+    }
+    undo_.push_back(snap());
+    const EditSnap state = std::move(redo_.back());
+    redo_.pop_back();
+    restore(state);
+    post_status(QStringLiteral("Redo"));
+}
+
+void MeshBridge::apply_att() {
+    if (att_i_ < 0 || att_i_ >= static_cast<int>(att_rows_.size())) return;
+    QQuaternion q(att_edit_.quat[3], att_edit_.quat[0], att_edit_.quat[1], att_edit_.quat[2]);
+    if (q.lengthSquared() < 1e-8f) {
+        post_status(QStringLiteral("Rotation quaternion is zero"));
+        return;
+    }
+    q.normalize();
+    att_edit_.quat[0] = q.x();
+    att_edit_.quat[1] = q.y();
+    att_edit_.quat[2] = q.z();
+    att_edit_.quat[3] = q.scalar();
+    const QMatrix3x3 rot = q.toRotationMatrix();
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c) att_edit_.orient[r * 3 + c] = rot(r, c);
+    att_rows_[static_cast<size_t>(att_i_)] = att_edit_;
+    if (view_) view_->updateAttachment(att_i_, att_edit_);
+    dirty_ = true;
+    post_status(att_edit_.off >= 0 ? QStringLiteral("Applied ") + att_edit_.name + QStringLiteral(" · Save to write the file") : QStringLiteral("Applied ") + att_edit_.name + QStringLiteral(" · preview only, this file type is not written"));
+}
+
+// Blender XYZ Euler (R = Rz·Ry·Rx), degrees.
+void att_euler(const float q[4], double out[3]) {
+    const QMatrix3x3 m = QQuaternion(q[3], q[0], q[1], q[2]).normalized().toRotationMatrix();
+    const double s = std::clamp(-double(m(2, 0)), -1.0, 1.0);
+    out[1] = std::asin(s);
+    if (std::abs(s) < 0.999999) {
+        out[0] = std::atan2(m(2, 1), m(2, 2));
+        out[2] = std::atan2(m(1, 0), m(0, 0));
+    } else {
+        out[0] = 0.0;
+        out[2] = std::atan2(-m(0, 1), m(1, 1));
+    }
+    for (int k = 0; k < 3; ++k) out[k] = qRadiansToDegrees(out[k]);
+}
+
+void att_quat(const double deg[3], float q[4]) {
+    const QQuaternion r = QQuaternion::fromAxisAndAngle(0, 0, 1, float(deg[2])) * QQuaternion::fromAxisAndAngle(0, 1, 0, float(deg[1])) * QQuaternion::fromAxisAndAngle(1, 0, 0, float(deg[0]));
+    q[0] = r.x();
+    q[1] = r.y();
+    q[2] = r.z();
+    q[3] = r.scalar();
+}
+
+static QString att_num(double v, int decimals) {
+    QString s = QString::number(v, 'f', decimals);
+    if (s.contains(QLatin1Char('.'))) {
+        while (s.endsWith(QLatin1Char('0'))) s.chop(1);
+        if (s.endsWith(QLatin1Char('.'))) s.chop(1);
+    }
+    return s == QLatin1String("-0") ? QStringLiteral("0") : s;
 }
 
 void MeshBridge::publish() {
@@ -1070,7 +1235,7 @@ void MeshBridge::publish() {
         {QStringLiteral("attNames"), att_names_},
         {QStringLiteral("atts"), [&] {
             QJsonArray a;
-            for (const QString& name : att_labels_) a.append(name);
+            for (const ViewAtt& row : att_rows_) a.append(row.name);
             return a;
         }()},
         {QStringLiteral("att"), att_i_},
@@ -1145,6 +1310,8 @@ void MeshBridge::publish() {
         tex.append(QJsonObject{{QStringLiteral("k"), slot.key}, {QStringLiteral("v"), slot.value}, {QStringLiteral("lock"), tex_locked(slot.key, slot.value)}});
     }
     const QString mode = page_ == QLatin1String("attachs") ? QStringLiteral("attachs") : page_ == QLatin1String("meshes") ? QStringLiteral("meshes") : QString();
+    double euler[3] = {};
+    att_euler(att_edit_.quat, euler);
     const QJsonObject dock{
         {QStringLiteral("mode"), mode},
         {QStringLiteral("title"), page_ == QLatin1String("attachs") ? QStringLiteral("Attachs Editor") : QStringLiteral("Meshes Editor")},
@@ -1166,11 +1333,15 @@ void MeshBridge::publish() {
          }},
         {QStringLiteral("att"),
          QJsonObject{
-             {QStringLiteral("name"), QString()},
+             {QStringLiteral("name"), att_edit_.name},
              {QStringLiteral("parent"), QString()},
-             {QStringLiteral("loc"), QJsonArray{0, 0, 0}},
-             {QStringLiteral("rot"), QJsonArray{0, 0, 0, 1}},
+             {QStringLiteral("loc"), QJsonArray{att_num(att_edit_.pos[0], 6), att_num(att_edit_.pos[1], 6), att_num(att_edit_.pos[2], 6)}},
+             {QStringLiteral("rot"), QJsonArray{att_num(euler[0], 4), att_num(euler[1], 4), att_num(euler[2], 4)}},
+             {QStringLiteral("quat"), QStringLiteral("%1, %2, %3, %4").arg(att_num(att_edit_.quat[0], 6), att_num(att_edit_.quat[1], 6), att_num(att_edit_.quat[2], 6), att_num(att_edit_.quat[3], 6))},
          }},
+        {QStringLiteral("applyOn"), att_i_ >= 0},
+        {QStringLiteral("addOn"), false},
+        {QStringLiteral("delOn"), false},
     };
     dock_json_ = QString::fromUtf8(QJsonDocument(dock).toJson(QJsonDocument::Compact));
     emit changed();
@@ -1179,6 +1350,7 @@ void MeshBridge::publish() {
 void MeshBridge::setPage(const QString& page) {
     if (pie_open_) cancelPie();
     page_ = page;
+    if (view_) view_->setMoveTool(page_ == QLatin1String("attachs") && tool_ == 0);
     publish();
 }
 void MeshBridge::goHome() { emit homeRequested(); }
@@ -1376,6 +1548,18 @@ void MeshBridge::setSideTab(int index) {
     publish();
 }
 void MeshBridge::clickId(const QString& id) {
+    if (id == QLatin1String("apply")) {
+        if (att_i_ < 0) post_status(QStringLiteral("Pick an attachment first"));
+        const EditSnap before = snap();
+        apply_att();
+        record(before);
+        publish();
+        return;
+    }
+    if (id == QLatin1String("add") || id == QLatin1String("del")) {
+        post_status(QStringLiteral("Add and Delete are not written yet. They change the .trainzmesh layout."));
+        return;
+    }
     if (id == QLatin1String("play")) {
         if (clips_.empty()) {
             post_status(QStringLiteral("No matching .kin — drop one onto the view"));
@@ -1462,8 +1646,9 @@ void MeshBridge::clickId(const QString& id) {
         frame_ = 0;
         if (view_) view_->setAnimMatrix({});
         att_count_ = 0;
-        att_labels_.clear();
+        att_rows_.clear();
         att_i_ = -1;
+        clear_history();
         if (view_) {
             view_->setParts({});
             view_->setAttachments({});
@@ -1488,6 +1673,11 @@ void MeshBridge::clickId(const QString& id) {
                 if (block.specular_off >= 0)
                     for (int c = 0; c < 4; ++c) write_le_f32(data, block.specular_off + c * 4, block.specular[c]);
                 if (block.spec_power_off >= 0) write_le_f32(data, block.spec_power_off, block.spec_power);
+            }
+            for (const ViewAtt& att : att_rows_) {
+                if (att.off < 0) continue;
+                for (int c = 0; c < 3; ++c) write_be_f32(data, att.off + c * 4, att.pos[c]);
+                for (int c = 0; c < 4; ++c) write_be_f32(data, att.off + 12 + c * 4, att.quat[c]);
             }
             struct Patch {
                 int off;
@@ -1560,6 +1750,7 @@ void MeshBridge::clickId(const QString& id) {
     }
 }
 void MeshBridge::setChecked(const QString& key, bool on) {
+    const auto undo = qScopeGuard([this, before = snap()] { record(before); });
     if (key == QLatin1String("sun")) {
         sun_ = on;
         if (on) moon_ = false;
@@ -1619,6 +1810,7 @@ void MeshBridge::setChecked(const QString& key, bool on) {
     publish();
 }
 void MeshBridge::setCombo(const QString& key, int index) {
+    const auto undo = qScopeGuard([this, before = snap()] { record(before); });
     if (key == QLatin1String("tod") && index >= 0 && index < 4) {
         const int az[4] = {92, 135, 255, 210};
         const int el[4] = {8, 48, 6, -8};
@@ -1671,6 +1863,7 @@ void MeshBridge::setCombo(const QString& key, int index) {
     publish();
 }
 void MeshBridge::setText(const QString& key, const QString& text) {
+    const auto undo = qScopeGuard([this, before = snap()] { record(before); });
     if (mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size())) return;
     MatEdit& edit = mats_[static_cast<size_t>(mat_i_)];
     if (key == QLatin1String("matName")) {
@@ -1689,9 +1882,21 @@ void MeshBridge::setText(const QString& key, const QString& text) {
     publish();
 }
 void MeshBridge::setSpin(const QString& key, double value) {
-    if (key == QLatin1String("spec") && mat_i_ >= 0 && mat_i_ < static_cast<int>(mats_.size()))
+    const auto undo = qScopeGuard([this, before = snap()] { record(before); });
+    const int k = key.size() == 4 ? key[3].digitValue() : -1;
+    if (key.startsWith(QLatin1String("loc")) && k >= 0 && k < 3 && att_i_ >= 0 && std::isfinite(value)) {
+        att_edit_.pos[k] = static_cast<float>(value);
+        apply_att();
+    } else if (key.startsWith(QLatin1String("rot")) && k >= 0 && k < 3 && att_i_ >= 0 && std::isfinite(value)) {
+        double deg[3] = {};
+        att_euler(att_edit_.quat, deg);
+        deg[k] = value;
+        att_quat(deg, att_edit_.quat);
+        apply_att();
+    } else if (key == QLatin1String("spec") && mat_i_ >= 0 && mat_i_ < static_cast<int>(mats_.size())) {
         mats_[static_cast<size_t>(mat_i_)].block.spec_power = static_cast<float>(value);
         dirty_ = true;
+    }
     publish();
 }
 void MeshBridge::setSlider(const QString& key, int value) {
@@ -1719,6 +1924,7 @@ void MeshBridge::setSlider(const QString& key, int value) {
     publish();
 }
 void MeshBridge::setChannel(const QString& which, int index, double value) {
+    const auto undo = qScopeGuard([this, before = snap()] { record(before); });
     if (mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size()) || index < 0 || index > 3) return;
     float* dest = nullptr;
     TzMaterial& block = mats_[static_cast<size_t>(mat_i_)].block;
@@ -1740,8 +1946,8 @@ void MeshBridge::pickList(const QString& list, int index) {
         mat_i_ = index;
         sync_highlight();
         focus_selection();
-    } else if (list == QLatin1String("atts") && index >= 0 && index < static_cast<int>(att_labels_.size())) {
-        att_i_ = index;
+    } else if (list == QLatin1String("atts") && index >= 0 && index < static_cast<int>(att_rows_.size())) {
+        pick_att(index);
         if (view_) view_->setAttSelected(index);
     } else if (list == QLatin1String("scene") && index >= 0 && index < static_cast<int>(rows_.size())) selected_ = index;
     else return;

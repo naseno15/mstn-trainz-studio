@@ -1,5 +1,6 @@
 #undef NDEBUG
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 
 #include <QApplication>
@@ -36,6 +37,21 @@ int main(int argc, char** argv) {
     assert(page.loadSteps() >= 4);
     assert(page.sideJson().contains(QStringLiteral("tri.trainzmesh")));
     assert(page.sideJson().contains(QStringLiteral("\"atts\":")));
+    {
+        auto* mesh = page.findChild<MeshBridge*>();
+        assert(mesh);
+        const QString was = mesh->dockJson();
+        mesh->setText(QStringLiteral("matName"), QStringLiteral("undo_probe"));
+        assert(mesh->dockJson().contains(QStringLiteral("undo_probe")));
+        mesh->undoEdit();
+        assert(!mesh->dockJson().contains(QStringLiteral("undo_probe")) && mesh->dockJson() == was);
+        mesh->redoEdit();
+        assert(mesh->dockJson().contains(QStringLiteral("undo_probe")));
+        mesh->undoEdit();
+        mesh->setChecked(QStringLiteral("ground"), true);  // view toggle, not an edit: no undo step
+        mesh->undoEdit();
+        assert(!mesh->dockJson().contains(QStringLiteral("undo_probe")));
+    }
     assert(studio_softbox_peak() == 255);
     const QImage frame = page.grabView();
     assert(!frame.isNull());
@@ -61,12 +77,29 @@ int main(int argc, char** argv) {
         app.processEvents();
         assert(page.sideJson().contains(QStringLiteral("a.airdryer")));
     }
+    {
+        const double deg[3] = {10.0, -35.0, 120.0};
+        float q[4] = {};
+        att_quat(deg, q);
+        double back[3] = {};
+        att_euler(q, back);
+        for (int k = 0; k < 3; ++k) assert(std::fabs(back[k] - deg[k]) < 1e-3);
+        const double yaw[3] = {0.0, 0.0, 90.0};
+        att_quat(yaw, q);
+        assert(std::fabs(q[2] - 0.70710678f) < 1e-5f && std::fabs(q[3] - 0.70710678f) < 1e-5f);
+        const float flip[4] = {0.f, 0.f, 1.f, -1.947e-7f};
+        att_euler(flip, back);
+        assert(std::fabs(std::fabs(back[2]) - 180.0) < 1e-3 && std::fabs(back[0]) < 1e-3 && std::fabs(back[1]) < 1e-3);
+    }
     assert(pie_sector(0.f, -40.f, 4, 3) == 0);
     assert(pie_sector(40.f, 0.f, 4, 3) == 1);
     assert(pie_sector(0.f, 40.f, 4, 3) == 2);
     assert(pie_sector(-40.f, 0.f, 4, 3) == 3);
     assert(pie_sector(0.f, 0.f, 4, 2) == 2);
     assert(pie_sector(0.f, 40.f, 2, 0) == 1);
+    assert(pie_sector(-30.f, -40.f, 2, 1) == 0);  // upper-left is still the top (Move) slice
+    assert(pie_sector(-40.f, 30.f, 2, 0) == 1);
+    assert(pie_sector(-20.f, -40.f, 4, 1) == 0);
     const QImage page_shot = page.grab().toImage();
     int shown = 0;
     const int x0 = page_shot.width() * 3 / 10;
