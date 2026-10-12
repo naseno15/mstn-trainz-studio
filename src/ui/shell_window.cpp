@@ -88,10 +88,10 @@ QVariantMap sep() {
 QString page_verb(const QString& page, const QString& verb) {
     static const QHash<QString, QHash<QString, QString>> table = {
         {QStringLiteral("home"), {{QStringLiteral("open"), QStringLiteral("home:open")}}},
-        {QStringLiteral("mesh"), {{QStringLiteral("open"), QStringLiteral("click:open")}, {QStringLiteral("save"), QStringLiteral("click:save")}, {QStringLiteral("saveAs"), QStringLiteral("click:saveAs")}}},
+        {QStringLiteral("mesh"), {{QStringLiteral("open"), QStringLiteral("click:open")}, {QStringLiteral("save"), QStringLiteral("click:save")}, {QStringLiteral("saveAs"), QStringLiteral("click:saveAs")}, {QStringLiteral("undo"), QStringLiteral("call:undoEdit")}, {QStringLiteral("redo"), QStringLiteral("call:redoEdit")}}},
         {QStringLiteral("sounds"), {{QStringLiteral("open"), QStringLiteral("call:browse")}, {QStringLiteral("saveAs"), QStringLiteral("call:saveAs")}}},
         {QStringLiteral("engine"), {{QStringLiteral("open"), QStringLiteral("call:openFile")}, {QStringLiteral("save"), QStringLiteral("call:saveFile")}, {QStringLiteral("saveAs"), QStringLiteral("call:saveFileAs")}, {QStringLiteral("undo"), QStringLiteral("call:undoEdit")}, {QStringLiteral("redo"), QStringLiteral("call:redoEdit")}}},
-        {QStringLiteral("assets"), {{QStringLiteral("open"), QStringLiteral("call:openFolder")}, {QStringLiteral("save"), QStringLiteral("call:viewerSave")}}},
+        {QStringLiteral("assets"), {{QStringLiteral("open"), QStringLiteral("call:openFolder")}, {QStringLiteral("save"), QStringLiteral("call:viewerSave")}, {QStringLiteral("undo"), QStringLiteral("call:undoEdit")}, {QStringLiteral("redo"), QStringLiteral("call:redoEdit")}}},
         {QStringLiteral("texmesh"), {{QStringLiteral("open"), QStringLiteral("call:openFolder")}, {QStringLiteral("undo"), QStringLiteral("call:undoEdit")}, {QStringLiteral("redo"), QStringLiteral("call:redoEdit")}}},
         {QStringLiteral("trainzutil"), {{QStringLiteral("open"), QStringLiteral("call:addFiles")}}},
     };
