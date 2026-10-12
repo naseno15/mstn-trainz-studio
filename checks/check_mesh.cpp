@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
     assert(!page.loadOpen());
     assert(page.loadSteps() >= 4);
     assert(page.sideJson().contains(QStringLiteral("tri.trainzmesh")));
+    assert(page.sideJson().contains(QStringLiteral("\"atts\":")));
     assert(studio_softbox_peak() == 255);
     const QImage frame = page.grabView();
     assert(!frame.isNull());
@@ -54,6 +55,12 @@ int main(int argc, char** argv) {
     assert(page.sideJson().contains(QStringLiteral("Alpha: ")) && page.sideJson().contains(QStringLiteral("Beta: ")));
     assert(!page.sideJson().contains(QStringLiteral("Gone")));
     assert(page.sideJson().contains(QStringLiteral("2 meshes")));
+    const QString body = QStringLiteral("c:/trs22/editing/kuid 1125787 100059 MSTN KIHA _ ______40/body/body.trainzmesh");
+    if (QFileInfo::exists(body)) {
+        page.loadFile(body);
+        app.processEvents();
+        assert(page.sideJson().contains(QStringLiteral("a.airdryer")));
+    }
     assert(pie_sector(0.f, -40.f, 4, 3) == 0);
     assert(pie_sector(40.f, 0.f, 4, 3) == 1);
     assert(pie_sector(0.f, 40.f, 4, 3) == 2);

@@ -252,8 +252,8 @@ Item {
                 visible: side.bag.tab === 0
 
                 Card {
-                    visible: bridge.page === "attachs"
-                    title: side.bag.attTitle || qsTr("Attachments")
+                    visible: (side.bag.atts || []).length > 0
+                    title: qsTr("Attachments")
                     Text {
                         visible: (side.bag.cap || "").length > 0
                         width: parent.width

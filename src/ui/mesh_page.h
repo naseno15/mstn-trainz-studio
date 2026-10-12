@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/mesh_view.h"
 #include "ui/status_hub.h"
 
 #include "io/kin.h"
@@ -190,6 +191,7 @@ signals:
 
 private:
     void publish();
+    void note_atts(const std::vector<ViewAtt>& gizmos);
     void sync_highlight();
     void focus_selection();
     void report_load(const QString& stage, int pct);
@@ -227,6 +229,8 @@ private:
     float bmax_[3] = {};
     int anims_ = 0;
     int att_count_ = 0;
+    std::vector<QString> att_labels_;
+    int att_i_ = -1;
     struct HeldKin {
         QString path;
         KinClip clip;

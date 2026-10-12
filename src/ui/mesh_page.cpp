@@ -381,16 +381,12 @@ void MeshBridge::attach(MeshView* view, QWidget* chrome) {
     for (int i = 0; i < 5; ++i) view_->setArrayLight(i, array_on_[i]);
     // Shift+click in the viewport: select that part's material, open the Mat tab.
     connect(view_, &MeshView::attPicked, this, [this](int gizmo) {
-        for (int i = 0; i < static_cast<int>(mats_.size()); ++i) {
-            if (mats_[static_cast<size_t>(i)].gizmo != gizmo) continue;
-            mat_i_ = i;
-            tab_ = 1;
-            sync_highlight();
-            publish();
-            return;
-        }
+        if (gizmo < 0 || gizmo >= static_cast<int>(att_labels_.size())) return;
+        att_i_ = gizmo;
+        publish();
     });
     connect(view_, &MeshView::pickCleared, this, [this] {
+        att_i_ = -1;
         mat_i_ = -1;
         if (view_) view_->setHighlight({});
         publish();
@@ -457,6 +453,8 @@ void MeshBridge::load_file(const QString& path) {
     bounds_set_ = false;
     anims_ = 0;
     att_count_ = 0;
+    att_labels_.clear();
+    att_i_ = -1;
     std::vector<ViewPart> drawn;
     std::vector<ViewAtt> gizmos;
     auto grow = [&](const float* p) {
@@ -577,6 +575,8 @@ void MeshBridge::load_file(const QString& path) {
         }
     } catch (const std::exception& error) {
         att_count_ = 0;
+        att_labels_.clear();
+        att_i_ = -1;
         if (view_) view_->setAttachments({});
         tip_ = QString::fromUtf8(error.what());
         stop();
@@ -625,6 +625,7 @@ void MeshBridge::load_file(const QString& path) {
     }
     report_load(QStringLiteral("Uploading mesh…"), 98);
     part_file_.assign(rows_.size(), 0);
+    note_atts(gizmos);
     if (view_) {
         view_->setParts(std::move(drawn));
         view_->setAttachments(std::move(gizmos));
@@ -669,6 +670,8 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
     bounds_set_ = false;
     anims_ = 0;
     att_count_ = 0;
+    att_labels_.clear();
+    att_i_ = -1;
     stop_anim();
     clips_.clear();
     frame_ = 0;
@@ -866,6 +869,7 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
         }
     }
     report_load(QStringLiteral("Uploading %1 parts to the GPU").arg(drawn.size()), 96);
+    note_atts(gizmos);
     if (view_) {
         view_->setParts(std::move(drawn));
         view_->setAttachments(std::move(gizmos));
@@ -991,6 +995,14 @@ bool tex_locked(const QString& key, const QString& value) {
 
 }  // namespace
 
+void MeshBridge::note_atts(const std::vector<ViewAtt>& gizmos) {
+    att_labels_.clear();
+    att_labels_.reserve(gizmos.size());
+    att_count_ = static_cast<int>(gizmos.size());
+    for (const ViewAtt& gizmo : gizmos) att_labels_.push_back(gizmo.name);
+    att_i_ = -1;
+}
+
 void MeshBridge::publish() {
     if (selected_ < 0 || selected_ >= static_cast<int>(rows_.size())) selected_ = 0;
     if (mats_.empty()) mat_i_ = -1;
@@ -1056,6 +1068,12 @@ void MeshBridge::publish() {
         {QStringLiteral("infoOpen"), info_open_},
         {QStringLiteral("face"), face_},
         {QStringLiteral("attNames"), att_names_},
+        {QStringLiteral("atts"), [&] {
+            QJsonArray a;
+            for (const QString& name : att_labels_) a.append(name);
+            return a;
+        }()},
+        {QStringLiteral("att"), att_i_},
         {QStringLiteral("anims"), [&] {
             QJsonArray a;
             for (const HeldKin& held : clips_) {
@@ -1444,6 +1462,8 @@ void MeshBridge::clickId(const QString& id) {
         frame_ = 0;
         if (view_) view_->setAnimMatrix({});
         att_count_ = 0;
+        att_labels_.clear();
+        att_i_ = -1;
         if (view_) {
             view_->setParts({});
             view_->setAttachments({});
@@ -1720,7 +1740,10 @@ void MeshBridge::pickList(const QString& list, int index) {
         mat_i_ = index;
         sync_highlight();
         focus_selection();
-    } else if ((list == QLatin1String("scene") || list == QLatin1String("atts")) && index >= 0 && index < static_cast<int>(rows_.size())) selected_ = index;
+    } else if (list == QLatin1String("atts") && index >= 0 && index < static_cast<int>(att_labels_.size())) {
+        att_i_ = index;
+        if (view_) view_->setAttSelected(index);
+    } else if (list == QLatin1String("scene") && index >= 0 && index < static_cast<int>(rows_.size())) selected_ = index;
     else return;
     publish();
 }
