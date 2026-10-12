@@ -587,6 +587,8 @@ std::vector<TzAttachment> parse_trainzmesh_attachments(const uint8_t* data, size
         att.pos[0] = v[0];
         att.pos[1] = v[1];
         att.pos[2] = v[2];
+        for (int k = 0; k < 4; ++k) att.quat[k] = v[3 + k];
+        att.off = j + static_cast<size_t>(len);
         quat_to_rows(v[3], v[4], v[5], v[6], att.orient);
         out.push_back(std::move(att));
         j += static_cast<size_t>(len) + 28;

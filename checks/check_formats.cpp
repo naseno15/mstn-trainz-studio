@@ -279,6 +279,8 @@ static void check_files() {
     assert(atts[0].name == "a.bog0");
     assert(std::fabs(atts[0].pos[0] - 1.5f) < 1e-5f);
     assert(std::fabs(atts[0].orient[0] - 1.f) < 1e-5f && std::fabs(atts[0].orient[4] - 1.f) < 1e-5f);
+    assert(atts[0].off == 1 + att_name.size());
+    assert(std::fabs(atts[0].quat[3] - 1.f) < 1e-5f);
     const std::string body = std::string(EDITING_DIR) + "/kuid 1125787 100059 MSTN KIHA _ ______40/body/body.trainzmesh";
     if (std::ifstream(body, std::ios::binary)) {
         const auto body_bin = read_bin(body);
@@ -365,6 +367,12 @@ static void check_real_meshes() {
 }
 
 static void check_fbx() {
+    const auto att_fbx = read_bin(std::string(FIXTURE_DIR) + "/att.fbx");
+    const ImView att_view = parse_fbx_view(att_fbx.data(), att_fbx.size());
+    assert(att_view.parts.size() == 1 && att_view.parts[0].name == "tri");
+    assert(att_view.atts.size() == 1 && att_view.atts[0].name == "a.bog0");
+    assert(std::fabs(att_view.atts[0].pos[0] - 1.f) < 1e-3f && std::fabs(att_view.atts[0].pos[2] - 2.f) < 1e-3f && std::fabs(att_view.atts[0].pos[1]) < 1e-3f);
+    assert(std::fabs(att_view.atts[0].orient[0] - 1.f) < 1e-3f);
     auto fbx = read_bin(std::string(FIXTURE_DIR) + "/tri.fbx");
     auto parts = parse_fbx_parts(fbx.data(), fbx.size());
     assert(parts.size() == 1);

@@ -50,6 +50,8 @@ struct TzAttachment {
     std::string name;
     float orient[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // row-major, each row is an axis
     float pos[3] = {};
+    float quat[4] = {0, 0, 0, 1};  // xyzw as stored
+    size_t off = 0;                // first of the 7 BE floats
 };
 
 TrainzMesh parse_trainzmesh(const uint8_t* data, size_t size);
