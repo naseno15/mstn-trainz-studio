@@ -861,7 +861,8 @@ int MeshView::pick_part(const QPoint& pos) const {
     return best;
 }
 
-int MeshView::pick_att(const QPoint& pos) const {
+int MeshView::pick_att(const QPoint& pos, int* axis_hit) const {
+    if (axis_hit) *axis_hit = -1;
     if (atts_.empty() || width() < 2 || height() < 2) return -1;
     const float yr = qDegreesToRadians(yaw_), pr = qDegreesToRadians(pitch_);
     const QVector3D eye(target_[0] + dist_ * std::cos(pr) * std::cos(yr), target_[1] + dist_ * std::cos(pr) * std::sin(yr), target_[2] + dist_ * std::sin(pr));
@@ -873,7 +874,7 @@ int MeshView::pick_att(const QPoint& pos) const {
     const QMatrix4x4 mvp = proj * view * anim_model_;
     const QPointF cursor(pos);
     // Drawn axes are 2px. A few pixels of slop, not a sphere around the point.
-    const float slop = 3.f;
+    const float slop = move_tool_ ? 6.f : 3.f;
     auto project = [&](const QVector3D& p, QPointF* out) {
         const QVector4D c = mvp * QVector4D(p, 1.f);
         if (c.w() <= 1e-4f) return false;
@@ -898,19 +899,79 @@ int MeshView::pick_att(const QPoint& pos) const {
         const QVector3D origin(att.pos[0], att.pos[1], att.pos[2]);
         QPointF a;
         if (!project(origin, &a)) continue;
+        const QPointF to_origin = cursor - a;
+        const float origin_px = float(std::sqrt(QPointF::dotProduct(to_origin, to_origin)));
+        if (origin_px <= best_px) {
+            best_px = origin_px;
+            best = static_cast<int>(i);
+            if (axis_hit) *axis_hit = -1;
+        }
         for (int axis = 0; axis < 3; ++axis) {
             QVector3D dir(att.orient[axis * 3], att.orient[axis * 3 + 1], att.orient[axis * 3 + 2]);
             if (dir.lengthSquared() < 1e-8f) continue;
             QPointF b;
             if (!project(origin + dir.normalized() * len, &b)) continue;
             const float px = along(a, b, cursor);
-            if (px <= best_px) {
+            // Near the origin every axis is close; keep the free move there.
+            if (px < best_px && origin_px > slop) {
                 best_px = px;
                 best = static_cast<int>(i);
+                if (axis_hit) *axis_hit = axis;
             }
         }
     }
     return best;
+}
+
+bool MeshView::mouse_ray(const QPoint& pos, QVector3D* origin, QVector3D* dir, QVector3D* forward) const {
+    if (width() < 2 || height() < 2) return false;
+    const float yr = qDegreesToRadians(yaw_), pr = qDegreesToRadians(pitch_);
+    const QVector3D eye(target_[0] + dist_ * std::cos(pr) * std::cos(yr), target_[1] + dist_ * std::cos(pr) * std::sin(yr), target_[2] + dist_ * std::sin(pr));
+    const QVector3D target(target_[0], target_[1], target_[2]);
+    const float near_p = std::max(0.001f, radius_ * 0.008f);
+    const float far_p = std::max(near_p * 100.f, std::max(dist_ * 40.f, 120.f));
+    QMatrix4x4 proj, view;
+    proj.perspective(fov_, std::max(0.1f, float(width()) / float(height())), near_p, far_p);
+    view.lookAt(eye, target, QVector3D(0, 0, 1));
+    bool ok = false;
+    const QMatrix4x4 inv = (proj * view * anim_model_).inverted(&ok);
+    if (!ok) return false;
+    const float nx = 2.f * float(pos.x()) / float(width()) - 1.f;
+    const float ny = 1.f - 2.f * float(pos.y()) / float(height());
+    const QVector4D a = inv * QVector4D(nx, ny, -1.f, 1.f);
+    const QVector4D b = inv * QVector4D(nx, ny, 1.f, 1.f);
+    if (std::abs(a.w()) < 1e-9f || std::abs(b.w()) < 1e-9f) return false;
+    *origin = a.toVector3D() / a.w();
+    *dir = (b.toVector3D() / b.w() - *origin).normalized();
+    *forward = (anim_model_.inverted().mapVector(target - eye)).normalized();
+    return true;
+}
+
+// Where the cursor lands on the drag constraint (axis line or view plane through drag_from_).
+bool MeshView::drag_point(const QPoint& pos, QVector3D* out) const {
+    QVector3D o, r, fwd;
+    if (!mouse_ray(pos, &o, &r, &fwd)) return false;
+    if (drag_axis_ < 0) {
+        const float den = QVector3D::dotProduct(fwd, r);
+        if (std::abs(den) < 1e-6f) return false;
+        *out = o + r * (QVector3D::dotProduct(fwd, drag_from_ - o) / den);
+        return true;
+    }
+    const ViewAtt& att = atts_[static_cast<size_t>(drag_att_)];
+    const QVector3D d = QVector3D(att.orient[drag_axis_ * 3], att.orient[drag_axis_ * 3 + 1], att.orient[drag_axis_ * 3 + 2]).normalized();
+    const QVector3D w0 = drag_from_ - o;
+    const float b = QVector3D::dotProduct(d, r), dd = QVector3D::dotProduct(d, w0), e = QVector3D::dotProduct(r, w0);
+    const float den = 1.f - b * b;
+    if (std::abs(den) < 1e-6f) return false;
+    *out = drag_from_ + d * ((b * e - dd) / den);
+    return true;
+}
+
+void MeshView::setMoveTool(bool on) {
+    move_tool_ = on;
+    if (!on) drag_att_ = -1;
+    atts_dirty_ = true;
+    update();
 }
 
 void MeshView::initializeGL() {
@@ -1408,6 +1469,13 @@ void MeshView::setAttachments(std::vector<ViewAtt> atts) {
     update();
 }
 
+void MeshView::updateAttachment(int index, const ViewAtt& att) {
+    if (index < 0 || index >= static_cast<int>(atts_.size())) return;
+    atts_[static_cast<size_t>(index)] = att;
+    atts_dirty_ = true;
+    update();
+}
+
 void MeshView::setAttSelected(int index) {
     att_sel_ = index >= 0 && index < static_cast<int>(atts_.size()) ? index : -1;
     atts_dirty_ = true;
@@ -1466,6 +1534,34 @@ void MeshView::rebuild_atts() {
                 b = std::min(1.f, b + (1.f - b) * 0.75f);
             }
             line(att.pos[0], att.pos[1], att.pos[2], att.pos[0] + ax * len, att.pos[1] + ay * len, att.pos[2] + az * len, r, g, b);
+            if (hot && move_tool_) {
+                // Arrowhead: four short barbs back from the tip, around the axis.
+                const QVector3D dir(ax, ay, az);
+                const QVector3D side = QVector3D::crossProduct(dir, std::abs(az) < 0.9f ? QVector3D(0, 0, 1) : QVector3D(1, 0, 0)).normalized();
+                const QVector3D up = QVector3D::crossProduct(dir, side);
+                const QVector3D tip = QVector3D(att.pos[0], att.pos[1], att.pos[2]) + dir * len;
+                for (const QVector3D& off : {side, -side, up, -up}) {
+                    const QVector3D barb = tip - dir * (len * 0.16f) + off * (len * 0.06f);
+                    line(tip.x(), tip.y(), tip.z(), barb.x(), barb.y(), barb.z(), r, g, b);
+                }
+            }
+        }
+        if (hot && move_tool_) {
+            // Free-move handle: small white box on the origin.
+            const float h = length * 0.09f;
+            const float* p = att.pos;
+            for (int e = 0; e < 12; ++e) {
+                static const int edges[12][2] = {{0, 1}, {1, 3}, {3, 2}, {2, 0}, {4, 5}, {5, 7}, {7, 6}, {6, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+                auto corner = [&](int c, float* o) {
+                    o[0] = p[0] + ((c & 1) ? h : -h);
+                    o[1] = p[1] + ((c & 2) ? h : -h);
+                    o[2] = p[2] + ((c & 4) ? h : -h);
+                };
+                float a[3], b[3];
+                corner(edges[e][0], a);
+                corner(edges[e][1], b);
+                line(a[0], a[1], a[2], b[0], b[1], b[2], 1.f, 1.f, 1.f);
+            }
         }
     }
     att_verts_ = static_cast<int>(verts.size() / 6);
@@ -1917,6 +2013,23 @@ void MeshView::mousePressEvent(QMouseEvent* event) {
     setFocus(Qt::MouseFocusReason);
     fly_on_ = false;
     fly_orient_ = false;
+    if (move_tool_ && event->button() == Qt::LeftButton && !(event->modifiers() & Qt::ShiftModifier)) {
+        int axis = -1;
+        const int att = pick_att(event->pos(), &axis);
+        if (att >= 0) {
+            const ViewAtt& hit = atts_[static_cast<size_t>(att)];
+            drag_att_ = att;
+            drag_axis_ = axis;
+            shift_axis_ = -1;
+            drag_from_ = QVector3D(hit.pos[0], hit.pos[1], hit.pos[2]);
+            if (!drag_point(event->pos(), &drag_grab_)) drag_grab_ = drag_from_;
+            att_sel_ = att;
+            atts_dirty_ = true;
+            update();
+            emit attPicked(att);
+            return;
+        }
+    }
     pick_press_ = event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier);
     if (!pick_press_) return;
     const int att = pick_att(event->pos());
@@ -1948,6 +2061,35 @@ void MeshView::mousePressEvent(QMouseEvent* event) {
 void MeshView::mouseMoveEvent(QMouseEvent* event) {
     const QPoint d = event->pos() - last_;
     last_ = event->pos();
+    if (drag_att_ >= 0 && drag_att_ < static_cast<int>(atts_.size())) {
+        QVector3D now;
+        if (!drag_point(event->pos(), &now)) return;
+        QVector3D delta = now - drag_grab_;
+        // Blender-style: Shift during a free drag locks to the world axis it has moved along most.
+        if (drag_axis_ < 0 && (event->modifiers() & Qt::ShiftModifier)) {
+            if (shift_axis_ < 0 && delta.lengthSquared() > 1e-12f) {
+                shift_axis_ = 0;
+                for (int k = 1; k < 3; ++k)
+                    if (std::abs(delta[k]) > std::abs(delta[shift_axis_])) shift_axis_ = k;
+            }
+            if (shift_axis_ >= 0) {
+                const float keep = delta[shift_axis_];
+                delta = QVector3D();
+                delta[shift_axis_] = keep;
+            }
+        } else {
+            shift_axis_ = -1;
+        }
+        const QVector3D p = drag_from_ + delta;
+        ViewAtt& att = atts_[static_cast<size_t>(drag_att_)];
+        att.pos[0] = p.x();
+        att.pos[1] = p.y();
+        att.pos[2] = p.z();
+        atts_dirty_ = true;
+        update();
+        emit attMoved(drag_att_, p.x(), p.y(), p.z());
+        return;
+    }
     if (pick_press_) return;
     if (event->buttons() & Qt::LeftButton) {
         spin_yaw_ = std::clamp(spin_yaw_ - d.x() * 0.045f, -8.f, 8.f);
@@ -1967,6 +2109,8 @@ void MeshView::mouseMoveEvent(QMouseEvent* event) {
 
 void MeshView::mouseReleaseEvent(QMouseEvent* event) {
     Q_UNUSED(event);
+    if (drag_att_ >= 0) emit attDragDone();
+    drag_att_ = -1;
     pick_press_ = false;
     kick_coast();
 }
@@ -2007,7 +2151,21 @@ void MeshView::note_keys(int key, bool down, bool repeat) {
 
 void MeshView::setWalk(int key, bool down) { note_keys(key, down, false); }
 
-void MeshView::keyPressEvent(QKeyEvent* event) { note_keys(event->key(), true, event->isAutoRepeat()); }
+void MeshView::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape && drag_att_ >= 0 && drag_att_ < static_cast<int>(atts_.size())) {
+        ViewAtt& att = atts_[static_cast<size_t>(drag_att_)];
+        att.pos[0] = drag_from_.x();
+        att.pos[1] = drag_from_.y();
+        att.pos[2] = drag_from_.z();
+        atts_dirty_ = true;
+        update();
+        emit attMoved(drag_att_, drag_from_.x(), drag_from_.y(), drag_from_.z());
+        drag_att_ = -1;
+        emit attDragDone();
+        return;
+    }
+    note_keys(event->key(), true, event->isAutoRepeat());
+}
 void MeshView::keyReleaseEvent(QKeyEvent* event) { note_keys(event->key(), false, event->isAutoRepeat()); }
 
 void MeshView::toggleFps() {

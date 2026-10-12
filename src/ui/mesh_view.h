@@ -19,7 +19,9 @@ class QWheelEvent;
 struct ViewAtt {
     float pos[3] = {};
     float orient[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // row-major, each row is an axis
+    float quat[4] = {0, 0, 0, 1};                   // xyzw, same pose as orient
     int file = 0;
+    int off = -1;  // .trainzmesh byte offset of pos+quat, -1 when not writable
     QString name;
 };
 
@@ -52,8 +54,11 @@ public:
 
     void setParts(std::vector<ViewPart> parts);
     void setAttachments(std::vector<ViewAtt> atts);
+    void updateAttachment(int index, const ViewAtt& att);
     void setAttFileShown(int file, bool on);
     void setAttSelected(int index);
+    // Move tool: left-drag an attachment. On an axis line: along that axis. On the origin: in the view plane. Esc cancels.
+    void setMoveTool(bool on);
     void setDebugMode(int mode);
     void setShade(int mode);
     void setEnvironment(int index);
@@ -88,6 +93,8 @@ public:
 signals:
     void partPicked(int index);  // Shift+click on a part
     void attPicked(int index);
+    void attMoved(int index, float x, float y, float z);
+    void attDragDone();  // release or Esc after a Move-tool drag
     void pickCleared();  // Shift+click on empty viewport
     void cameraMoved();
 
@@ -118,8 +125,16 @@ private:
     void rebuild_atts();
     void frame_camera();
     int pick_part(const QPoint& pos) const;
-    int pick_att(const QPoint& pos) const;
+    int pick_att(const QPoint& pos, int* axis = nullptr) const;
+    bool mouse_ray(const QPoint& pos, QVector3D* origin, QVector3D* dir, QVector3D* forward) const;
+    bool drag_point(const QPoint& pos, QVector3D* out) const;
     bool pick_press_ = false;
+    bool move_tool_ = false;
+    int drag_att_ = -1;
+    int drag_axis_ = -1;   // -1 view plane
+    int shift_axis_ = -1;  // world axis locked by Shift during a free drag
+    QVector3D drag_from_;
+    QVector3D drag_grab_;
     bool fly_on_ = false;
     bool fly_orient_ = false;
     float fly_from_[4] = {};
