@@ -1,5 +1,9 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-15 (Asia/Bangkok) — every trainzmesh material is listed
+
+`.trainzmesh` material blocks are found by layout only (`read_material_head`: identifier type, name, `00000000 01`, colour, BE count 1–32, then every key/value string). There is no type whitelist and no `.m.` name rule. The old list was lowercase and compared case-sensitively, so `StdOneTex` / `StdOneTexBlend` blocks (lights, dest signs, stickers, status) were dropped. Part naming (`bind_material_names`) and `parse_tzmf_materials` share that reader. `texture0` counts as the albedo slot. The Type combo has one handler that respects an unknown type prepended at index 0. `check_formats` covers a `StdOneTexBlend` block with no `.m.` and the real KIHA40 `int.trainzmesh` (26 materials).
+
 **Last updated:** 2026-10-14 (Asia/Bangkok) — TrainzUtil only on demand, faster library search
 
 Opening Assets Tools or Texture & Mesh Lods no longer builds the TrainzUtil page, so the Launcher probe and library sync do not start. Only the TrainzUtil page itself, or the Assets **Config** tab (`AssetsBridge::pageOpened("config")`, deferred one tick), builds it. A KUID pick still builds it if it is missing. Library search keeps one lowercase search string per row (`LibraryList::hay_`) and clears it in every mutator that changes rows, dates, owners, meta, or credits. Typing more of the same query filters the current `shown_` (already sorted) and skips the full re-scan and re-sort. `check_trainzutil` covers narrowing, widening, and a row added mid-search.
@@ -46,7 +50,7 @@ The title bar **Help** menu has Check for updates, About Trainz Studio (matte sh
 
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Optional GitHub update
 
-About a second after the window is up, the app asks `https://api.github.com/repos/naseno15/mstn-trainz-studio/releases/latest` (override with `TRAINZ_UPDATE_REPO`, skip with `TRAINZ_NO_UPDATE`). A newer tag that has a `*win64.zip` asset shows a toast at the bottom-right. × dismisses it for this session. The body opens a dialog; **Install update** downloads the zip, then a hidden PowerShell helper waits for this process, copies the archive folder that contains the exe over `applicationDirPath()`, and starts that exe again. **Later** leaves the toast up. The current build is the published `v4.3.4` release, so the toast stays hidden until a higher tag exists. `check_update` covers version compare, asset pick, and the two QML files.
+About a second after the window is up, the app asks `https://api.github.com/repos/naseno15/mstn-trainz-studio/releases/latest` (override with `TRAINZ_UPDATE_REPO`, skip with `TRAINZ_NO_UPDATE`). A newer tag that has a `*win64.zip` asset shows a toast at the bottom-right. × dismisses it for this session. The body opens a dialog; **Install update** downloads the zip, then a hidden PowerShell helper waits for this process, copies the archive folder that contains the exe over `applicationDirPath()`, and starts that exe again. **Later** leaves the toast up. The current build is the published `v4.3.5` release, so the toast stays hidden until a higher tag exists. `check_update` covers version compare, asset pick, and the two QML files.
 
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Packages viewer dock and text well
 

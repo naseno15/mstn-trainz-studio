@@ -241,6 +241,24 @@ static void check_files() {
     assert(mats[0].name == "body.m.pbrmetal");
     assert(mats[0].textures.size() == 1);
     assert(mats[0].textures[0].key == "txAlbedo");
+    {
+        auto onetex = tz;
+        const std::string blend = le("StdOneTexBlend") + le("grill") + std::string("\0\0\0\0\x01", 5) + std::string(16, '\0') + std::string("\0\0\0\x01", 4) + le("texture0") + le("fin.texture");
+        onetex.insert(onetex.begin() + static_cast<std::ptrdiff_t>(tail), blend.begin(), blend.end());
+        const TrainzMesh blended = parse_trainzmesh(onetex.data(), onetex.size());
+        assert(blended.submeshes[0].name == "grill" && blended.submeshes[0].material_type == "StdOneTexBlend");
+        const auto blend_mats = parse_tzmf_materials(onetex.data(), onetex.size());
+        assert(blend_mats.size() == 1 && blend_mats[0].textures[0].value == "fin.texture");
+    }
+    const std::string int_mesh = std::string(EDITING_DIR) + "/kuid 1190880 100073 MSTN KIHA _ ______40/int/int.trainzmesh";
+    if (std::ifstream(int_mesh, std::ios::binary)) {
+        const auto int_bin = read_bin(int_mesh);
+        const auto int_mats = parse_tzmf_materials(int_bin.data(), int_bin.size());
+        assert(int_mats.size() == 26);
+        assert(std::any_of(int_mats.begin(), int_mats.end(), [](const TzMaterial& m) {
+            return m.name == "lightkuay_destsign.m.onetex" && m.type_name == "StdOneTex" && m.textures[0].value == "light_destsign_albedo.texture";
+        }));
+    }
     const std::string kin_path = std::string(EDITING_DIR) + "/kuid 1190880 100144 MSTN KIHA _ ______40/glass/windowcab_scene.kin";
     const std::string mesh_path = std::string(EDITING_DIR) + "/kuid 1190880 100144 MSTN KIHA _ ______40/glass/windowcab.trainzmesh";
     if (std::ifstream(kin_path, std::ios::binary) && std::ifstream(mesh_path, std::ios::binary)) {

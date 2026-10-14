@@ -927,7 +927,7 @@ QJsonArray rgba_bytes(const float* ch) {
 
 int tex_rank(const QString& key) {
     const QString low = key.toLower();
-    if (low == QLatin1String("txalbedo")) return 0;
+    if (low == QLatin1String("txalbedo") || low == QLatin1String("texture0")) return 0;
     if (low == QLatin1String("txenvbrdf")) return 1;
     if (low == QLatin1String("txenvirradiance")) return 2;
     if (low == QLatin1String("txenvradiance")) return 3;
@@ -1192,7 +1192,7 @@ void MeshBridge::publish() {
         mat_owner_.push_back(i);
         for (const TzTex& slot : edit.block.textures) {
             const QString key = QString::fromStdString(slot.key).toLower();
-            if (key.contains(QLatin1String("albedo"))) ++albedo_n;
+            if (key.contains(QLatin1String("albedo")) || key == QLatin1String("texture0")) ++albedo_n;
             else if (key.contains(QLatin1String("normal"))) ++normal_n;
             else if (key.contains(QLatin1String("param"))) ++param_n;
         }
@@ -1839,12 +1839,6 @@ void MeshBridge::setCombo(const QString& key, int index) {
         if (view_) view_->setEnvironment(index);
     } else if (key == QLatin1String("type") && mat_i_ >= 0 && mat_i_ < static_cast<int>(mats_.size())) {
         const char* type_names[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "stdonetex", "glass", "clutter", "foliage"};
-        if (index >= 0 && index < 8) {
-            mats_[static_cast<size_t>(mat_i_)].block.type_name = type_names[index];
-            dirty_ = true;
-        }
-    } else if (key == QLatin1String("type") && mat_i_ >= 0 && mat_i_ < static_cast<int>(mats_.size())) {
-        const char* type_names[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "stdonetex", "glass", "clutter", "foliage"};
         MatEdit& edit = mats_[static_cast<size_t>(mat_i_)];
         bool known = false;
         for (const char* name : type_names) {
@@ -1858,7 +1852,10 @@ void MeshBridge::setCombo(const QString& key, int index) {
             }
             at = index - 1;
         }
-        if (at >= 0 && at < 8) edit.block.type_name = type_names[at];
+        if (at >= 0 && at < 8) {
+            edit.block.type_name = type_names[at];
+            dirty_ = true;
+        }
     }
     publish();
 }

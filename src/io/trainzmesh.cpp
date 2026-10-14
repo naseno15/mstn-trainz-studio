@@ -345,45 +345,53 @@ bool read_le_cstr(const uint8_t* data, size_t size, size_t pos, std::string& out
     return true;
 }
 
-struct MatHit {
-    size_t off = 0;
-    std::string type;
-    std::string name;
-};
+bool is_type_token(const std::string& text) {
+    if (text.empty() || text.size() > 64 || !std::isalpha(static_cast<unsigned char>(text[0]))) return false;
+    return std::all_of(text.begin(), text.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; });
+}
 
-std::vector<MatHit> scan_material_blocks(const uint8_t* data, size_t size) {
-    const char* types[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "stdonetex", "glass", "clutter", "foliage"};
-    std::vector<MatHit> hits;
-    for (size_t i = 0; i + 8 < size; ++i) {
-        std::string type;
-        size_t after = 0;
-        if (!read_le_cstr(data, size, i, type, after)) continue;
-        bool known = false;
-        for (const char* item : types) {
-            if (type == item) known = true;
-        }
-        if (!known) continue;
-        std::string name;
-        size_t cursor = 0;
-        if (!read_le_cstr(data, size, after, name, cursor)) continue;
-        if (name.find(".m.") == std::string::npos) continue;
-        if (cursor + 25 > size) continue;
-        if (std::memcmp(data + cursor, "\0\0\0\0", 4) != 0 || data[cursor + 4] != 1) continue;
-        const uint32_t count = rd_u32be(data + cursor + 21);
-        if (count == 0 || count > 32) continue;
-        hits.push_back({i, type, name});
-        i = after;
+// Material block header: type, name, 00000000 01, colour, BE texture count, then count key/value strings.
+// Any type name is accepted (StdOneTex, StdOneTexBlend, custom shaders); the layout is the check.
+bool read_material_head(const uint8_t* data, size_t size, size_t i, TzMaterial& mat, size_t& after, size_t& end) {
+    if (!read_le_cstr(data, size, i, mat.type_name, after) || !is_type_token(mat.type_name)) return false;
+    size_t cursor = 0;
+    if (!read_le_cstr(data, size, after, mat.name, cursor)) return false;
+    if (cursor + 25 > size) return false;
+    if (std::memcmp(data + cursor, "\0\0\0\0", 4) != 0 || data[cursor + 4] != 1) return false;
+    const uint32_t count = rd_u32be(data + cursor + 21);
+    if (count == 0 || count > 32) return false;
+    mat.type_off = i;
+    mat.name_off = after;
+    mat.color_off = cursor + 5;
+    mat.textures.clear();
+    size_t p = cursor + 25;
+    for (uint32_t n = 0; n < count; ++n) {
+        TzTex slot;
+        size_t next = 0;
+        if (!read_le_cstr(data, size, p, slot.key, next)) return false;
+        slot.value_off = next;
+        if (!read_le_cstr(data, size, next, slot.value, p)) return false;
+        mat.textures.push_back(std::move(slot));
     }
-    return hits;
+    end = p;
+    return true;
 }
 
 void bind_material_names(const uint8_t* data, size_t size, TrainzMesh& mesh) {
-    const std::vector<MatHit> hits = scan_material_blocks(data, size);
+    std::vector<TzMaterial> hits;
+    for (size_t i = 0; i + 8 < size; ++i) {
+        TzMaterial mat;
+        size_t after = 0;
+        size_t end = 0;
+        if (!read_material_head(data, size, i, mat, after, end)) continue;
+        hits.push_back(std::move(mat));
+        i = after;
+    }
     for (SubMesh& sub : mesh.submeshes) {
-        for (const MatHit& hit : hits) {
-            if (hit.off != sub.tail_off) continue;
+        for (const TzMaterial& hit : hits) {
+            if (hit.type_off != sub.tail_off) continue;
             sub.name = hit.name;
-            sub.material_type = hit.type;
+            sub.material_type = hit.type_name;
             break;
         }
     }
@@ -398,46 +406,11 @@ std::vector<TzMaterial> scan_tzmf_materials(const uint8_t* data, size_t size) {
     std::vector<TzMaterial> out;
     if (!data || size < 16) return out;
     for (size_t i = 0; i + 8 < size; ++i) {
-        std::string type;
-        size_t after = 0;
-        if (!read_le_cstr(data, size, i, type, after)) continue;
-        const char* types[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "stdonetex", "glass", "clutter", "foliage"};
-        bool known = false;
-        for (const char* item : types)
-            if (type == item) known = true;
-        if (!known) continue;
-        std::string name;
-        size_t cursor = 0;
-        if (!read_le_cstr(data, size, after, name, cursor)) continue;
-        if (name.find(".m.") == std::string::npos) continue;
-        if (cursor + 25 > size) continue;
-        if (std::memcmp(data + cursor, "\0\0\0\0", 4) != 0 || data[cursor + 4] != 1) continue;
-        const uint32_t count = rd_u32be(data + cursor + 21);
-        if (count == 0 || count > 32) continue;
         TzMaterial mat;
-        mat.type_name = type;
-        mat.name = name;
-        mat.type_off = i;
-        mat.name_off = after;
-        mat.color_off = cursor + 5;
+        size_t after = 0;
+        size_t p = 0;
+        if (!read_material_head(data, size, i, mat, after, p)) continue;
         for (int c = 0; c < 4; ++c) mat.color[c] = rd_f32be(data + mat.color_off + static_cast<size_t>(c) * 4);
-        size_t p = cursor + 25;
-        bool ok = true;
-        for (uint32_t n = 0; n < count; ++n) {
-            TzTex slot;
-            size_t next = 0;
-            if (!read_le_cstr(data, size, p, slot.key, next)) {
-                ok = false;
-                break;
-            }
-            slot.value_off = next;
-            if (!read_le_cstr(data, size, next, slot.value, p)) {
-                ok = false;
-                break;
-            }
-            mat.textures.push_back(std::move(slot));
-        }
-        if (!ok) continue;
         if (p + 4 <= size && rd_u32be(data + p) == 3) {
             p += 4;
             for (int n = 0; n < 4 && p + 4 < size; ++n) {
