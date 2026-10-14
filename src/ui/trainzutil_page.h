@@ -101,7 +101,7 @@ private:
     qint64 modified_at(const QString& kuid) const;
     QString packed_label(const QString& kuid) const;
     QStringList credit_parts(const QString& kuid) const;
-    bool matches(const LibraryAsset& row, const QStringList& words) const;
+    bool matches(int index, const QStringList& words) const;
     void touch(const QString& kuid, const QList<int>& roles);
     void touch_all(const QList<int>& roles);
     void paint_drag(const QString& kuid);
@@ -110,6 +110,7 @@ private:
 
     QList<LibraryAsset> all_;
     QList<int> shown_;
+    mutable QVector<QString> hay_;  // lowercase search text per all_ row; cleared whenever a row or its metadata changes
     QString query_;
     QString sort_key_ = QStringLiteral("modified");
     bool sort_desc_ = true;

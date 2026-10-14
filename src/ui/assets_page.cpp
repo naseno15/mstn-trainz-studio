@@ -609,6 +609,7 @@ void AssetsBridge::setPage(const QString& page) {
     }
     sync_pages();
     emit changed();
+    emit pageOpened(page_);
 }
 
 void AssetsBridge::goHome() { emit homeRequested(); }
@@ -2527,6 +2528,7 @@ AssetsPage::AssetsPage(QWidget* parent) : QWidget(parent) {
     connect(bridge_, &AssetsBridge::meshRequested, this, &AssetsPage::meshRequested);
     connect(bridge_, &AssetsBridge::engineRequested, this, &AssetsPage::engineRequested);
     connect(bridge_, &AssetsBridge::kuidPickRequested, this, &AssetsPage::kuidPickRequested);
+    connect(bridge_, &AssetsBridge::pageOpened, this, &AssetsPage::pageOpened);
     view_ = new QQuickWidget(this);
     view_->setResizeMode(QQuickWidget::SizeRootObjectToView);
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);

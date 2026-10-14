@@ -119,6 +119,14 @@ void style_table(QTableWidget* table) {
     table->setTextElideMode(Qt::ElideRight);
 }
 
+int remove_selected_rows(QTableWidget* table) {
+    std::vector<int> rows;
+    for (const QModelIndex& index : table->selectionModel()->selectedRows()) rows.push_back(index.row());
+    std::sort(rows.rbegin(), rows.rend());
+    for (int row : rows) table->removeRow(row);
+    return rows.empty() ? 0 : rows.back();
+}
+
 int pot_down(int n) {
     if (n <= 1) return 1;
     int v = 1;
@@ -1468,10 +1476,20 @@ void Texmesh::run_action(const QString& action) {
     else if (action == QLatin1String("tex_ve39_fix")) scan_ve39(true);
     else if (action == QLatin1String("open_texture")) check_texture_file();
     else if (action == QLatin1String("scan_folder")) scan_texture_folder();
+    else if (action == QLatin1String("tex_remove") || action == QLatin1String("tex_clear")) {
+        int next = 0;
+        if (action == QLatin1String("tex_clear")) tex_table_->setRowCount(0);
+        else next = remove_selected_rows(tex_table_);
+        if (tex_table_->rowCount() > 0) tex_table_->selectRow(std::min(next, tex_table_->rowCount() - 1));
+        else {
+            static_cast<MapEditor*>(map_view_)->clear();
+            primary_.clear();
+        }
+        refresh_texture();
+    }
     else if (action == QLatin1String("lm_add")) add_meshes({});
     else if (action == QLatin1String("lm_remove")) {
-        const auto rows = lm_table_->selectionModel()->selectedRows();
-        for (int i = rows.size() - 1; i >= 0; --i) lm_table_->removeRow(rows[i].row());
+        remove_selected_rows(lm_table_);
         refresh_mesh();
     } else if (action == QLatin1String("lm_clear")) {
         if (lm_table_ != nullptr) lm_table_->setRowCount(0);

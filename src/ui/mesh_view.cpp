@@ -642,7 +642,7 @@ void MeshView::paint_att_names(const QMatrix4x4& proj, const QMatrix4x4& view) {
     int fbw = 1;
     int fbh = 1;
     fb_size(&fbw, &fbh);
-    const qreal dpr = std::max(qreal(1), devicePixelRatioF());
+    const qreal dpr = devicePixelRatioF();
     const QMatrix4x4 mvp = proj * view * anim_model_;
     auto label_for = [&](const QString& name, bool hot) -> AttLabel {
         const QString key = name + QLatin1Char(hot ? '1' : '0') + QString::number(int(std::lround(dpr * 100)));
@@ -1118,7 +1118,7 @@ void MeshView::initializeGL() {
 }
 
 void MeshView::fb_size(int* w, int* h) const {
-    const qreal dpr = std::max(qreal(1), devicePixelRatioF());
+    const qreal dpr = devicePixelRatioF();
     *w = std::max(1, static_cast<int>(std::lround(width() * dpr)));
     *h = std::max(1, static_cast<int>(std::lround(height() * dpr)));
 }
@@ -1888,7 +1888,7 @@ void MeshView::blur_panels() {
         lvl(i + 1, &pw, &ph);
         glBlitFramebuffer(0, 0, pw, ph, 0, 0, lw, lh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     }
-    const qreal dpr = std::max(qreal(1), devicePixelRatioF());
+    const qreal dpr = devicePixelRatioF();
     glBindFramebuffer(GL_READ_FRAMEBUFFER, blur_fbo_[0]);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, screen);
     glEnable(GL_SCISSOR_TEST);

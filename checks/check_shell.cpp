@@ -1,5 +1,6 @@
 #undef NDEBUG
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 
 #include <QApplication>
@@ -16,6 +17,11 @@
 #include "ui/status_hub.h"
 
 int main(int argc, char** argv) {
+    assert(ui_scale_for(1920, 1080) == 1.0);
+    assert(ui_scale_for(2560, 1440) == 1.0);
+    assert(std::abs(ui_scale_for(1366, 768) - 768.0 / 1080.0) < 1e-9);
+    assert(std::abs(ui_scale_for(1536, 864) - 0.8) < 1e-9);
+    assert(ui_scale_for(640, 480) == 0.5);
     prepare_qt_runtime();
     QApplication app(argc, argv);
     int stages = 0;

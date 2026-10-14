@@ -691,12 +691,14 @@ QString LibraryList::packed_label(const QString& kuid) const {
 }
 
 void LibraryList::add(const LibraryAsset& asset) {
+    hay_.clear();
     all_.removeIf([&](const LibraryAsset& row) { return row.kuid == asset.kuid; });
     all_.push_back(asset);
     rebuild();
 }
 
 void LibraryList::replace(const QList<LibraryAsset>& assets) {
+    hay_.clear();
     credits_.clear();
     measured_.clear();
     picked_.clear();
@@ -711,6 +713,7 @@ void LibraryList::replace(const QList<LibraryAsset>& assets) {
 }
 
 void LibraryList::set_dates(const AssetDates& dates) {
+    hay_.clear();
     installed_ = dates.installed;
     modified_ = dates.modified;
     editing_ = dates.editing;
@@ -741,6 +744,7 @@ void LibraryList::add_ghosts() {
 
 void LibraryList::set_scope(const QStringList& kuids, const QString& title) {
     scopes_.push_back({QSet<QString>(kuids.begin(), kuids.end()), title, picked_});
+    hay_.clear();
     add_ghosts();
     picked_.clear();
     click_anchor_.clear();
@@ -751,6 +755,7 @@ void LibraryList::set_scope(const QStringList& kuids, const QString& title) {
 void LibraryList::pop_scope() {
     if (scopes_.isEmpty()) return;
     picked_ = scopes_.takeLast().picks_before;
+    hay_.clear();
     all_.removeIf([this](const LibraryAsset& row) {
         if (!row.missing) return false;
         for (const Scope& scope : scopes_) {
@@ -765,6 +770,7 @@ void LibraryList::pop_scope() {
 
 void LibraryList::set_owners(const QHash<qint64, QString>& owners) {
     owners_ = owners;
+    hay_.clear();
     if (!query_.isEmpty() || sort_key_ == QLatin1String("author")) {
         rebuild();
         return;
@@ -773,6 +779,7 @@ void LibraryList::set_owners(const QHash<qint64, QString>& owners) {
 }
 
 void LibraryList::merge_meta(const QHash<QString, AssetMeta>& meta) {
+    hay_.clear();
     bool renamed = false;
     for (auto it = meta.begin(); it != meta.end(); ++it) {
         const QString label = label_of(it->author, it->build);
@@ -796,6 +803,7 @@ void LibraryList::merge_meta(const QHash<QString, AssetMeta>& meta) {
 }
 
 void LibraryList::set_credits(const QString& kuid, const QString& text) {
+    hay_.clear();
     credits_.insert(kuid, text);
     const QStringList parts = credit_parts(kuid);
     QString build = parts.size() >= 3 ? parts.last() : builds_.value(kuid);
@@ -826,8 +834,19 @@ QString LibraryList::cell(int row, int column) const {
 }
 
 void LibraryList::filter(const QString& query) {
-    query_ = query.trimmed().toLower();
-    rebuild();
+    const QString next = query.trimmed().toLower();
+    if (next == query_) return;
+    // Typing more of the same query can only drop rows, and shown_ is already sorted.
+    const bool narrow = !query_.isEmpty() && next.startsWith(query_);
+    query_ = next;
+    if (!narrow) {
+        rebuild();
+        return;
+    }
+    const QStringList words = query_.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    beginResetModel();
+    shown_.removeIf([&](int i) { return !matches(i, words); });
+    endResetModel();
 }
 
 void LibraryList::sort_by(const QString& key) {
@@ -1003,11 +1022,16 @@ QVariantMap LibraryList::card(const QString& kuid, const QString& note) const {
     };
 }
 
-bool LibraryList::matches(const LibraryAsset& row, const QStringList& words) const {
-    const QString hay = QStringList{
-        row.name, row.kuid, row.category, category_label(row.category), bits(row).join(QLatin1Char(' ')),
-        credits_.value(row.kuid), author(row), build(row), fmt_mtime(installed_.value(row.kuid)), fmt_mtime(modified_at(row.kuid)),
-    }.join(QLatin1Char(' ')).toLower();
+bool LibraryList::matches(int index, const QStringList& words) const {
+    if (hay_.size() != all_.size()) hay_ = QVector<QString>(all_.size());
+    QString& hay = hay_[index];
+    if (hay.isEmpty()) {
+        const LibraryAsset& row = all_[index];
+        hay = QStringList{
+            row.name, row.kuid, row.category, category_label(row.category), bits(row).join(QLatin1Char(' ')),
+            credits_.value(row.kuid), author(row), build(row), fmt_mtime(installed_.value(row.kuid)), fmt_mtime(modified_at(row.kuid)),
+        }.join(QLatin1Char(' ')).toLower();
+    }
     return std::all_of(words.begin(), words.end(), [&](const QString& word) { return hay.contains(word); });
 }
 
@@ -1018,7 +1042,7 @@ void LibraryList::rebuild() {
     const QSet<QString>* scope = scopes_.isEmpty() ? nullptr : &scopes_.last().kuids;
     for (int i = 0; i < all_.size(); ++i) {
         if (scope && !scope->contains(all_[i].kuid)) continue;
-        if (words.isEmpty() || matches(all_[i], words)) shown_.push_back(i);
+        if (words.isEmpty() || matches(i, words)) shown_.push_back(i);
     }
     const QString key = sort_key_;
     const bool desc = sort_desc_;

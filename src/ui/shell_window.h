@@ -183,5 +183,6 @@ private:
 
 bool chrome_click_dismisses_menu(const QRect& menu, const QRect& title, const QPoint& global);
 
+double ui_scale_for(double desktop_w, double desktop_h);
 void prepare_qt_runtime();
 void apply_ui_font();

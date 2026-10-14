@@ -123,7 +123,8 @@ Item {
                     }
                     Row {
                         id: meshTools
-                        visible: bridge.page === "meshops"
+                        readonly property string prefix: bridge.page === "meshops" ? "lm_" : "tex_"
+                        visible: center.split
                         width: visible ? implicitWidth : 0
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
@@ -132,13 +133,13 @@ Item {
                             width: 128
                             height: 28
                             label: qsTr("Clear selected")
-                            onClicked: bridge.runAction("lm_remove")
+                            onClicked: bridge.runAction(meshTools.prefix + "remove")
                         }
                         RaiseButton {
                             width: 92
                             height: 28
                             label: qsTr("Clear all")
-                            onClicked: bridge.runAction("lm_clear")
+                            onClicked: bridge.runAction(meshTools.prefix + "clear")
                         }
                     }
                 }

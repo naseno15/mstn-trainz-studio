@@ -275,10 +275,28 @@ QPixmap LogoProvider::requestPixmap(const QString& id, QSize* size, const QSize&
     return pix;
 }
 
+double ui_scale_for(double desktop_w, double desktop_h) {
+    if (desktop_w <= 0 || desktop_h <= 0) return 1.0;
+    return std::clamp(std::min(desktop_w / 1920.0, desktop_h / 1080.0), 0.5, 1.0);
+}
+
 void prepare_qt_runtime() {
 #ifdef QT_PREFIX
     qputenv("QT_PLUGIN_PATH", QT_PREFIX "/plugins");
     qputenv("QML_IMPORT_PATH", QT_PREFIX "/qml");
+#endif
+#ifdef Q_OS_WIN
+    // The layout is drawn for a 1920×1080 desktop (logical pixels); a smaller desktop shrinks the whole UI.
+    // ponytail: primary monitor at the system DPI only; a second monitor of another size keeps this factor.
+    if (!qEnvironmentVariableIsSet("QT_SCALE_FACTOR")) {
+        using SetCtx = HANDLE(WINAPI*)(HANDLE);
+        const auto set_ctx = reinterpret_cast<SetCtx>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetThreadDpiAwarenessContext")));
+        // A DPI-unaware thread sees the desktop in logical pixels (physical / Windows scale).
+        const HANDLE old = set_ctx ? set_ctx(reinterpret_cast<HANDLE>(-1)) : nullptr;
+        const double scale = ui_scale_for(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+        if (old) set_ctx(old);
+        if (scale < 1.0) qputenv("QT_SCALE_FACTOR", QByteArray::number(scale, 'f', 3));
+    }
 #endif
     // Desktop GL for the mesh view. Quick stays on the software scene graph:
     // a D3D QQuickWidget in the same HWND paints its transparent center black
@@ -499,11 +517,7 @@ ShellWindow::ShellWindow(QWidget* parent, std::function<void(const QString&, int
 void ShellWindow::ensure_studio(const QString& page) {
     if (page == QLatin1String("trainzutil")) studio_trainz();
     else if (page == QLatin1String("engine")) studio_engine();
-    else if (page == QLatin1String("assets") || page == QLatin1String("texmesh")) {
-        studio_assets();
-        // The KUID picker reads this library. Build it after the Assets page is up, not on the click.
-        if (!trainz_) QTimer::singleShot(0, this, [this] { if (!trainz_) studio_trainz(); });
-    }
+    else if (page == QLatin1String("assets") || page == QLatin1String("texmesh")) studio_assets();
     else if (page == QLatin1String("sounds")) studio_sounds();
     else if (page == QLatin1String("mesh")) studio_mesh();
 }
@@ -584,6 +598,11 @@ AssetsPage* ShellWindow::studio_assets() {
     connect(assets_, &AssetsPage::engineRequested, this, [this](const QString& text, const QString&) {
         studio_engine()->loadCdpText(text);
         bridge_->set_page(QStringLiteral("engine"));
+    });
+    // The Config KUID picker reads the TrainzUtil library. Building that page starts the Launcher probe
+    // and library sync, so only the Config tab warms it (after the tab is up, not on the first click).
+    connect(assets_, &AssetsPage::pageOpened, this, [this](const QString& page) {
+        if (page == QLatin1String("config") && !trainz_) QTimer::singleShot(0, this, [this] { if (!trainz_) studio_trainz(); });
     });
     connect(assets_, &AssetsPage::kuidPickRequested, this, [this](int index, const QString& filter) {
         const QString kuid = studio_trainz()->choose_kuid(filter);

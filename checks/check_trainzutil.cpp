@@ -315,6 +315,21 @@ int main(int argc, char** argv) {
         assert(scoped.summary().contains(QLatin1String("1 not installed")));
         scoped.pop_scope();
         assert(scoped.count() == 2 && scoped.selected_kuids() == QStringList({QStringLiteral("<kuid:1:2>")}));
+        // Narrowing (typing on) and widening (backspace) must match a fresh search.
+        scoped.filter(QStringLiteral("o"));
+        assert(scoped.count() == 2);
+        scoped.filter(QStringLiteral("oo"));
+        assert(scoped.count() == 1 && scoped.cell(0, 1) == QLatin1String("<kuid2:3:4:1>"));
+        scoped.filter(QStringLiteral("oo xyz"));
+        assert(scoped.count() == 0);
+        scoped.filter(QStringLiteral("o"));
+        assert(scoped.count() == 2);
+        LibraryAsset late;
+        late.kuid = QStringLiteral("<kuid:5:5>");
+        late.name = QStringLiteral("Spoon wagon");
+        scoped.add(late);
+        scoped.filter(QStringLiteral("oon"));
+        assert(scoped.count() == 1 && scoped.cell(0, 1) == QLatin1String("<kuid:5:5>"));
     }
     assert(parse_installation_data_path("+ <NULL> : C:\\Trainz Data\\build\n") == QLatin1String("C:\\Trainz Data\\build"));
     assert(parse_installation_data_path("+ <NULL> : <unresolved>\n").isEmpty());

@@ -306,6 +306,7 @@ signals:
     void finderChanged();
     void configViewChanged();
     void kuidPickRequested(int index, const QString& filter);
+    void pageOpened(const QString& page);
     void layoutChanged();
     void homeRequested();
     void meshRequested(const QString& path);
@@ -467,6 +468,7 @@ signals:
     void meshRequested(const QString& path);
     void engineRequested(const QString& text, const QString& label);
     void kuidPickRequested(int index, const QString& filter);
+    void pageOpened(const QString& page);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

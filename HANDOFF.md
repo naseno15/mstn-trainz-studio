@@ -1,5 +1,13 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-14 (Asia/Bangkok) — TrainzUtil only on demand, faster library search
+
+Opening Assets Tools or Texture & Mesh Lods no longer builds the TrainzUtil page, so the Launcher probe and library sync do not start. Only the TrainzUtil page itself, or the Assets **Config** tab (`AssetsBridge::pageOpened("config")`, deferred one tick), builds it. A KUID pick still builds it if it is missing. Library search keeps one lowercase search string per row (`LibraryList::hay_`) and clears it in every mutator that changes rows, dates, owners, meta, or credits. Typing more of the same query filters the current `shown_` (already sorted) and skips the full re-scan and re-sort. `check_trainzutil` covers narrowing, widening, and a row added mid-search.
+
+**Last updated:** 2026-10-14 (Asia/Bangkok) — screen scale, Texture Params clear buttons
+
+The layout is drawn for a 1920×1080 desktop. `prepare_qt_runtime` reads the primary desktop in logical pixels (a DPI-unaware thread's `GetSystemMetrics`) and sets `QT_SCALE_FACTOR` to `ui_scale_for(w, h)` = min(w/1920, h/1080), clamped to 0.5–1. 1366×768 gets 0.711. It never scales up, and a `QT_SCALE_FACTOR` already in the environment wins. The device pixel ratio can now be below 1, so `MeshView` uses `devicePixelRatioF()` unclamped, and the boot × hit box is converted to physical pixels with `ClientToScreen`. Texture Params has Clear selected / Clear all on its list too (`tex_remove` / `tex_clear`). Both pages remove rows through `remove_selected_rows`, which sorts the extended selection first. The static-tree `check_shell` cannot load QML (no plugin import on check targets); run it from `build`.
+
 **Last updated:** 2026-10-13 (Asia/Bangkok) — Scene tab order, middle-drag scroll
 
 On the Mesh Studio Scene tab the Viewport card sits under Mesh Info, above Attachments. Holding the middle button and dragging scrolls the left sidebar, the right Editor dock, and the Settings page at 3× pointer travel (`MiddleScroll.qml`, a middle-button `DragHandler` with `flick` and `gain`). Left clicks still go to the rows.
@@ -38,7 +46,7 @@ The title bar **Help** menu has Check for updates, About Trainz Studio (matte sh
 
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Optional GitHub update
 
-About a second after the window is up, the app asks `https://api.github.com/repos/naseno15/mstn-trainz-studio/releases/latest` (override with `TRAINZ_UPDATE_REPO`, skip with `TRAINZ_NO_UPDATE`). A newer tag that has a `*win64.zip` asset shows a toast at the bottom-right. × dismisses it for this session. The body opens a dialog; **Install update** downloads the zip, then a hidden PowerShell helper waits for this process, copies the archive folder that contains the exe over `applicationDirPath()`, and starts that exe again. **Later** leaves the toast up. The current build is the published `v4.3.2` release, so the toast stays hidden until a higher tag exists. `check_update` covers version compare, asset pick, and the two QML files.
+About a second after the window is up, the app asks `https://api.github.com/repos/naseno15/mstn-trainz-studio/releases/latest` (override with `TRAINZ_UPDATE_REPO`, skip with `TRAINZ_NO_UPDATE`). A newer tag that has a `*win64.zip` asset shows a toast at the bottom-right. × dismisses it for this session. The body opens a dialog; **Install update** downloads the zip, then a hidden PowerShell helper waits for this process, copies the archive folder that contains the exe over `applicationDirPath()`, and starts that exe again. **Later** leaves the toast up. The current build is the published `v4.3.4` release, so the toast stays hidden until a higher tag exists. `check_update` covers version compare, asset pick, and the two QML files.
 
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Packages viewer dock and text well
 

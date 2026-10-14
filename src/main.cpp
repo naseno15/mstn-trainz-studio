@@ -19,6 +19,7 @@
 #include <QVBoxLayout>
 
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <thread>
 
@@ -201,11 +202,16 @@ private:
 
     void publish_hit() {
         if (!close_) return;
-        const QPoint g = close_->mapToGlobal(QPoint(0, 0));
-        hit_l_ = g.x() - 8;
-        hit_t_ = g.y() - 8;
-        hit_r_ = g.x() + close_->width() + 8;
-        hit_b_ = g.y() + close_->height() + 8;
+        // GetCursorPos is in physical pixels; Qt geometry is logical (Windows scale × QT_SCALE_FACTOR).
+        const qreal dpr = close_->devicePixelRatioF();
+        const QPoint local = close_->mapTo(this, QPoint(0, 0));
+        POINT g{LONG(std::lround(local.x() * dpr)), LONG(std::lround(local.y() * dpr))};
+        ClientToScreen(reinterpret_cast<HWND>(winId()), &g);
+        const int pad = int(std::lround(8 * dpr));
+        hit_l_ = g.x - pad;
+        hit_t_ = g.y - pad;
+        hit_r_ = g.x + int(std::lround(close_->width() * dpr)) + pad;
+        hit_b_ = g.y + int(std::lround(close_->height() * dpr)) + pad;
     }
 
     // QML compile blocks the UI thread, so Esc, Alt+F4, and the × still have to be seen from outside the event loop.
