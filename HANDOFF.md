@@ -1,5 +1,9 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-15 (Asia/Bangkok) — TGA read/write everywhere
+
+Neither Qt install (`Qt` or `QtStatic`) has a qtga image plugin, and Qt's own cannot write. `src/ui/tga_image.cpp` is a static Qt image plugin (`TrainzTgaPlugin`, `Q_IMPORT_PLUGIN` in the same file) so every `QImage`, `QImageReader`, `QImage::save`, and QML `Image` handles `.tga`: Texture Editor, Params, Denoiser, Resize → `_prep` as TGA, Mesh Studio textures, thumbnails. It reads 24/32-bit colour and 8-bit grey, raw or RLE, any origin. It writes uncompressed bottom-left TGA: grey stays 8-bit, alpha gives 32-bit, otherwise 24-bit. That file is compiled with `QT_STATICPLUGIN` and no PCH (CMake source properties). Mesh Studio's private `decode_tga` is gone. `check_mesh` round-trips all three depths, decodes an RLE packet, and opens the KIHA40 `label/0.tga` when present.
+
 **Last updated:** 2026-10-15 (Asia/Bangkok) — `.kin` per mesh in multi-mesh scenes
 
 Each `.kin` belongs to one scene file (`HeldKin::file`): the mesh in the `.kin`'s folder whose bytes hold every bone as a whole name (`kin_bones_in_mesh` rejects `r.ats` inside `r.atsleft`). Ties go to `<mesh>_scene.kin`, then `<mesh>.kin`, then `<mesh>*.kin` (`kin_rank`). `bind_anims` runs after both `load_file` and `load_scene`, so dropping atsleft + atsright + ats_box finds both clips; a `.kin` dropped onto a scene binds the same way. Each clip has its own frame and play state. Play/Stop and the Frame slider act on the selected clip only, several meshes can play at once, and one mesh takes one clip at a time (`own_file`). `MeshView::setFileAnims` holds one model matrix per file (`ViewPart::file` / `ViewAtt::file`). Attachments of an animated file move with it. Shadows stay at rest pose. Scene yaw is applied to the motion as well. `check_mesh` covers the KIHA40 ATS meshes when that editing folder exists.

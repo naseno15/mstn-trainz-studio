@@ -7,7 +7,9 @@
 #include <QKeyEvent>
 #include <QDir>
 #include <QFileInfo>
+#include <QColor>
 #include <QImage>
+#include <QImageReader>
 #include <QUrl>
 
 #include "ui/mesh_page.h"
@@ -17,6 +19,32 @@
 int main(int argc, char** argv) {
     prepare_qt_runtime();
     QApplication app(argc, argv);
+    {
+        // Built-in TGA plugin: write, read back, header size, RLE, and a real Trainz label.
+        const QString dir = QDir::temp().filePath(QStringLiteral("trainz_tga_check"));
+        QDir().mkpath(dir);
+        QImage rgba(3, 2, QImage::Format_RGBA8888);
+        for (int y = 0; y < 2; ++y)
+            for (int x = 0; x < 3; ++x) rgba.setPixelColor(x, y, QColor(x * 80, y * 120, 30, 100 + x * 50));
+        const QString a = dir + QStringLiteral("/a.tga");
+        assert(rgba.save(a));
+        assert(QFileInfo(a).size() == 18 + 3 * 2 * 4);
+        assert(QImageReader(a).size() == QSize(3, 2));
+        assert(QImage(a).convertToFormat(QImage::Format_RGBA8888) == rgba);
+        const QImage rgb = rgba.convertToFormat(QImage::Format_RGB888);
+        const QString b = dir + QStringLiteral("/b.tga");
+        assert(rgb.save(b) && QFileInfo(b).size() == 18 + 3 * 2 * 3);
+        assert(QImage(b).convertToFormat(QImage::Format_RGB888) == rgb);
+        const QImage gray = rgba.convertToFormat(QImage::Format_Grayscale8);
+        assert(gray.save(dir + QStringLiteral("/g.tga")) && QImage(dir + QStringLiteral("/g.tga")) == gray);
+        // RLE 24-bit, 2x1, top-left origin: one run packet of two blue pixels.
+        const QByteArray rle("\0\0\x0a\0\0\0\0\0\0\0\0\0\x02\0\x01\0\x18\x20\x81\xff\0\0", 22);
+        const QImage run = QImage::fromData(rle, "tga");
+        assert(run.size() == QSize(2, 1) && run.pixelColor(1, 0) == QColor(0, 0, 255));
+        const QString label = QStringLiteral("c:/trs22/editing/kuid 1190880 100079 MSTN KIHA _ ______40/label/0.tga");
+        if (QFileInfo::exists(label)) assert(!QImage(label).isNull());
+        QDir(dir).removeRecursively();
+    }
     MeshStudioPage page;
     page.show();
     app.processEvents();

@@ -70,70 +70,6 @@ QString fixture_path() {
 #endif
 }
 
-QImage decode_tga(const QByteArray& bytes) {
-    if (bytes.size() < 18) return {};
-    const auto* d = reinterpret_cast<const unsigned char*>(bytes.constData());
-    const int idlen = d[0];
-    const int type = d[2];
-    const int w = d[12] | (d[13] << 8);
-    const int h = d[14] | (d[15] << 8);
-    const int bpp = d[16];
-    const int desc = d[17];
-    if (d[1] != 0 || (type != 2 && type != 10) || (bpp != 24 && bpp != 32) || w < 1 || h < 1) return {};
-    const int pp = bpp / 8;
-    const unsigned char* s = d + 18 + idlen;
-    const unsigned char* end = d + bytes.size();
-    QImage img(w, h, QImage::Format_RGBA8888);
-    if (img.isNull()) return {};
-    auto put = [&](int i, unsigned char b, unsigned char g, unsigned char r, unsigned char a) {
-        const int x = i % w;
-        int y = i / w;
-        if ((desc & 0x20) == 0) y = h - 1 - y;
-        if (y < 0 || y >= h) return;
-        unsigned char* p = img.scanLine(y) + x * 4;
-        p[0] = r;
-        p[1] = g;
-        p[2] = b;
-        p[3] = a;
-    };
-    const int pixels = w * h;
-    if (type == 2) {
-        if (s + static_cast<size_t>(pixels) * pp > end) return {};
-        for (int i = 0; i < pixels; ++i) put(i, s[i * pp], s[i * pp + 1], s[i * pp + 2], pp == 4 ? s[i * pp + 3] : 255);
-        return img;
-    }
-    int i = 0;
-    while (i < pixels && s < end) {
-        const unsigned char packet = *s++;
-        const int count = (packet & 0x7f) + 1;
-        if (packet & 0x80) {
-            if (s + pp > end) break;
-            const unsigned char b = s[0];
-            const unsigned char g = s[1];
-            const unsigned char r = s[2];
-            const unsigned char a = pp == 4 ? s[3] : 255;
-            s += pp;
-            for (int k = 0; k < count && i < pixels; ++k) put(i++, b, g, r, a);
-        } else {
-            for (int k = 0; k < count && i < pixels; ++k) {
-                if (s + pp > end) return img;
-                put(i++, s[0], s[1], s[2], pp == 4 ? s[3] : 255);
-                s += pp;
-            }
-        }
-    }
-    return img;
-}
-
-QImage load_picture(const QString& path) {
-    if (path.endsWith(QLatin1String(".tga"), Qt::CaseInsensitive)) {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) return {};
-        return decode_tga(file.readAll());
-    }
-    return QImage(path);
-}
-
 QString file_if(const QString& path) { return QFileInfo::exists(path) ? path : QString(); }
 
 QString primary_image(const QDir& dir, const QString& stem) {
@@ -186,7 +122,7 @@ TexPixels decode_file(const QString& path, int max_side = 0) {
     TexPixels out;
     out.path = path;
     if (out.path.isEmpty()) return out;
-    QImage picture = load_picture(out.path);
+    QImage picture(out.path);
     if (picture.isNull()) return out;
     if (max_side > 0 && std::max(picture.width(), picture.height()) > max_side)
         picture = picture.scaled(max_side, max_side, Qt::KeepAspectRatio, Qt::SmoothTransformation);

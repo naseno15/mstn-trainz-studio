@@ -35,7 +35,10 @@ set(trainz_ui_sources
     src/ui/wave_player.cpp
     src/ui/mesh_page.cpp
     src/ui/mesh_view.cpp
+    src/ui/tga_image.cpp
 )
+# The TGA image plugin is linked in, not loaded: QT_STATICPLUGIN must be set before qplugin.h, so no PCH here.
+set_source_files_properties(src/ui/tga_image.cpp PROPERTIES COMPILE_DEFINITIONS QT_STATICPLUGIN SKIP_PRECOMPILE_HEADERS ON)
 
 add_library(trainz_io STATIC
     src/io/kuid.cpp
