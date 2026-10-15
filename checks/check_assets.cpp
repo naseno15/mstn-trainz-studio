@@ -7,8 +7,11 @@
 #include <vector>
 
 #include <QApplication>
+#include <QColor>
 #include <QDir>
 #include <QFile>
+#include <QImage>
+#include <QWidget>
 
 #include "io/acs_tree.h"
 #include "io/cdp.h"
@@ -283,6 +286,48 @@ int main(int argc, char** argv) {
     sample[(2 * 4 + 2) * 4 + 0] = 200;
     assert(magic_pick_count(sample, 4, 4, 1, 1, 8, true) >= 2);
     assert(magic_pick_count(sample, 4, 4, 1, 1, 8, true) < 16);
+    {
+        // Texture Params writes what the form shows, and keeps keys it has no field for.
+        const QString dir = QDir::temp().filePath(QStringLiteral("trainz-texparams"));
+        QDir(dir).removeRecursively();
+        QDir().mkpath(dir);
+        QImage img(4, 4, QImage::Format_RGBA8888);
+        img.fill(QColor(200, 100, 50, 128));
+        const QString a = QDir(dir).filePath(QStringLiteral("a.tga"));
+        const QString b = QDir(dir).filePath(QStringLiteral("b_normal.png"));
+        assert(img.save(a) && img.save(b));
+        auto write = [](const QString& path, const QByteArray& text) {
+            QFile f(path);
+            assert(f.open(QIODevice::WriteOnly));
+            f.write(text);
+        };
+        auto read = [](const QString& path) {
+            QFile f(path);
+            assert(f.open(QIODevice::ReadOnly));
+            return QString::fromUtf8(f.readAll());
+        };
+        const QString a_txt = QDir(dir).filePath(QStringLiteral("a.texture.txt"));
+        const QString b_txt = QDir(dir).filePath(QStringLiteral("b_normal.texture.txt"));
+        write(b_txt, "Primary=b_normal.png\nAlphaHint=masked\nUsageHint=parameter\n");
+        QWidget host;
+        Texmesh tex(&host);
+        tex.set_page(QStringLiteral("texture"));
+        tex.drop_paths({a, b});
+        tex.set_field(QStringLiteral("alphaOn"), QStringLiteral("1"));  // no file picked: Primary's own alpha
+        tex.run_action(QStringLiteral("tex_save_all"));
+        assert(read(a_txt).contains(QStringLiteral("Alpha=a.tga\n")));
+        QString bt = read(b_txt);
+        assert(bt.contains(QStringLiteral("AlphaHint=masked\n")) && bt.contains(QStringLiteral("UsageHint=parameter\n")));
+        assert(!bt.contains(QStringLiteral("UsageHint=normal")) && !bt.contains(QStringLiteral("\nAlpha=")));
+        tex.pick_row(1);  // b: its .texture.txt loads into the form, nothing carried over from a
+        tex.set_field(QStringLiteral("compress"), QStringLiteral("dxt5"));
+        tex.run_action(QStringLiteral("tex_save_all"));
+        bt = read(b_txt);
+        assert(bt.contains(QStringLiteral("Compression=dxt5\n")) && bt.contains(QStringLiteral("AlphaHint=masked\n")) && !bt.contains(QStringLiteral("\nAlpha=")));
+        const QString at = read(a_txt);
+        assert(at.contains(QStringLiteral("Alpha=a.tga\n")) && at.contains(QStringLiteral("Compression=dxt5\n")));
+        QDir(dir).removeRecursively();
+    }
     page.setSuite(QStringLiteral("assets"));
     assert(page.pageName() == QLatin1String("packages"));
     page.close();

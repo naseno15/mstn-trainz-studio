@@ -4,6 +4,8 @@
 #include <QObject>
 #include <QString>
 
+#include <string>
+#include <utility>
 #include <vector>
 
 class ParamCanvas;
@@ -74,6 +76,9 @@ private:
     void add_images(const QStringList& paths);
     void add_meshes(const QStringList& paths);
     void select_texture_row(int row);
+    // Primary image changed: load its sibling .texture.txt into the form, or start fresh.
+    void open_primary(const QString& image_path);
+    void load_texture_keys(const std::vector<std::pair<std::string, std::string>>& keys);
     QString texture_text() const;
     void apply_role_hints(const QString& file_name);
     void log_texture(const QString& text);
@@ -137,6 +142,8 @@ private:
     QString usage_;
     QString normal_;
     QString compress_;
+    QString tex_path_;  // .texture.txt the form came from / saves to
+    std::vector<std::pair<std::string, std::string>> tex_extra_;  // keys the form has no field for (AlphaHint, ModifyMap, …)
     bool prep_on_ = true;
     QString prep_map_ = QStringLiteral("auto");
     QString prep_resize_ = QStringLiteral("PoT");

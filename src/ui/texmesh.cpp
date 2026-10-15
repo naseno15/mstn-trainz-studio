@@ -13,6 +13,7 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFile>
+#include <QSaveFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -1388,12 +1389,16 @@ void Texmesh::set_field(const QString& key, const QString& raw) {
         const double v = raw.toDouble(&ok);
         return ok ? v : fallback;
     };
-    if (key == QLatin1String("primary")) primary_ = raw;
-    else if (key == QLatin1String("alpha")) {
+    if (key == QLatin1String("primary")) {
+        if (alpha_on_ && alpha_ == primary_) alpha_ = raw;  // own alpha channel follows the rename
+        primary_ = raw;
+    } else if (key == QLatin1String("alpha")) {
         alpha_ = raw;
         if (!raw.trimmed().isEmpty()) alpha_on_ = true;
     } else if (key == QLatin1String("alphaOn")) {
         alpha_on_ = raw == QLatin1String("1");
+        // Ticked with no file: Trainz takes alpha from the Primary image itself.
+        if (alpha_on_ && alpha_.trimmed().isEmpty()) alpha_ = primary_;
         if (!alpha_on_) alpha_.clear();
     } else if (key == QLatin1String("tile")) tile_ = omit(raw);
     else if (key == QLatin1String("usage")) {
@@ -1603,12 +1608,55 @@ void Texmesh::queue_clear() {
 
 QString Texmesh::texture_text() const {
     std::vector<std::pair<std::string, std::string>> keys{{"Primary", primary_.toStdString()}};
-    if (alpha_on_ && !alpha_.isEmpty()) keys.emplace_back("Alpha", alpha_.toStdString());
+    if (alpha_on_) keys.emplace_back("Alpha", (alpha_.trimmed().isEmpty() ? primary_ : alpha_).toStdString());
     if (!compress_.isEmpty()) keys.emplace_back("Compression", compress_.toStdString());
     if (!normal_.isEmpty()) keys.emplace_back("NormalMapHint", normal_.toStdString());
     if (!tile_.isEmpty()) keys.emplace_back("Tile", tile_.toStdString());
     if (!usage_.isEmpty()) keys.emplace_back("UsageHint", usage_.toStdString());
+    keys.insert(keys.end(), tex_extra_.begin(), tex_extra_.end());
     return QString::fromStdString(format_texture_txt(keys));
+}
+
+void Texmesh::load_texture_keys(const std::vector<std::pair<std::string, std::string>>& keys) {
+    // Missing keys mean "not set", not "keep the last file's value".
+    alpha_.clear();
+    alpha_on_ = false;
+    tile_.clear();
+    usage_.clear();
+    normal_.clear();
+    compress_.clear();
+    tex_extra_.clear();
+    for (const auto& row : keys) {
+        const QString val = QString::fromStdString(row.second);
+        if (row.first == "Primary") primary_ = val;
+        else if (row.first == "Alpha") {
+            alpha_ = val;
+            alpha_on_ = !val.isEmpty();
+        } else if (row.first == "Tile") tile_ = val;
+        else if (row.first == "UsageHint") usage_ = val;
+        else if (row.first == "NormalMapHint") normal_ = val;
+        else if (row.first == "Compression") compress_ = val;
+        else tex_extra_.push_back(row);
+    }
+}
+
+void Texmesh::open_primary(const QString& image_path) {
+    const QFileInfo info(image_path);
+    primary_ = info.fileName();
+    tex_path_ = info.dir().filePath(info.completeBaseName() + QStringLiteral(".texture.txt"));
+    QFile file(tex_path_);
+    if (file.open(QIODevice::ReadOnly)) {
+        load_texture_keys(parse_texture_txt(QString::fromUtf8(file.readAll()).toStdString()));
+        primary_ = info.fileName();
+        return;
+    }
+    // No .texture.txt yet: Tile and Compression stay as set; per-file keys start empty.
+    alpha_.clear();
+    alpha_on_ = false;
+    tex_extra_.clear();
+    usage_.clear();
+    normal_.clear();
+    apply_role_hints(primary_);
 }
 
 void Texmesh::refresh_texture() {
@@ -1666,8 +1714,7 @@ void Texmesh::add_images(const QStringList& paths) {
         tex_table_->setItem(row, 4, new QTableWidgetItem(status));
     }
         if (!images.isEmpty()) {
-        primary_ = QFileInfo(images.first()).fileName();
-        apply_role_hints(primary_);
+        open_primary(images.first());
         static_cast<MapEditor*>(map_view_)->open_path(images.first());
         rebuild_texture_table();
         status_ = QStringLiteral("Texture ← ") + QFileInfo(images.first()).fileName();
@@ -1710,8 +1757,7 @@ void Texmesh::rebuild_texture_table() {
 void Texmesh::select_texture_row(int row) {
     auto* item = tex_table_->item(row, 0);
     if (item == nullptr) return;
-    primary_ = item->text();
-    apply_role_hints(primary_);
+    open_primary(item->data(Qt::UserRole).toString());
     static_cast<MapEditor*>(map_view_)->open_path(item->data(Qt::UserRole).toString());
     refresh_texture();
     emit changed();
@@ -1720,35 +1766,62 @@ void Texmesh::select_texture_row(int row) {
 void Texmesh::log_texture(const QString& text) { tex_log_->setPlainText(text); }
 void Texmesh::log_mesh(const QString& text) { lm_log_->setPlainText(text); }
 
+namespace {
+
+bool write_text(const QString& path, const QString& text) {
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) return false;
+    file.write(text.toUtf8());
+    return file.commit();
+}
+
+}  // namespace
+
 void Texmesh::save_texture_one() {
     if (primary_.isEmpty()) return;
-    QString dir;
-    for (int row = 0; row < tex_table_->rowCount(); ++row) {
-        auto* item = tex_table_->item(row, 0);
-        if (item && item->text() == primary_) dir = QFileInfo(item->data(Qt::UserRole).toString()).absolutePath();
-    }
-    QString path = QFileDialog::getSaveFileName(host_, QStringLiteral("Save texture.txt"), dir.isEmpty() ? primary_ + QStringLiteral(".texture.txt") : QDir(dir).filePath(QFileInfo(primary_).completeBaseName() + QStringLiteral(".texture.txt")), QStringLiteral("texture.txt (*.texture.txt)"));
+    QString start = tex_path_;
+    if (start.isEmpty()) start = QFileInfo(primary_).completeBaseName() + QStringLiteral(".texture.txt");
+    const QString path = QFileDialog::getSaveFileName(host_, QStringLiteral("Save texture.txt"), start, QStringLiteral("texture.txt (*.texture.txt)"));
     if (path.isEmpty()) return;
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
-    file.write(texture_text().toUtf8());
+    if (!write_text(path, texture_text())) {
+        status_ = QStringLiteral("Could not write ") + QFileInfo(path).fileName();
+        log_texture(status_);
+        return;
+    }
+    tex_path_ = path;
     status_ = QStringLiteral("Wrote ") + QFileInfo(path).fileName();
     log_texture(texture_text());
 }
 
 void Texmesh::save_texture_all() {
     int written = 0;
+    QStringList failed;
     for (int row = 0; row < tex_table_->rowCount(); ++row) {
         auto* item = tex_table_->item(row, 0);
         if (item == nullptr) continue;
         const QFileInfo info(item->data(Qt::UserRole).toString());
-        const auto keys = keys_for_image(info.fileName().toStdString(), "", tile_.toStdString(), compress_.toStdString());
-        QFile file(info.dir().filePath(QString::fromStdString(texture_stem(info.fileName().toStdString())) + QStringLiteral(".texture.txt")));
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) continue;
-        file.write(QString::fromStdString(format_texture_txt(keys)).toUtf8());
-        ++written;
+        const QString path = info.dir().filePath(info.completeBaseName() + QStringLiteral(".texture.txt"));
+        QString text;
+        if (path.compare(tex_path_, Qt::CaseInsensitive) == 0) {
+            text = texture_text();  // the image in the form: exactly what the preview shows
+        } else {
+            // Others keep their own keys. Primary, Tile and Compression come from this page;
+            // name-guessed UsageHint / NormalMapHint only fill a gap.
+            std::vector<std::pair<std::string, std::string>> keys;
+            if (QFile old(path); old.open(QIODevice::ReadOnly)) keys = parse_texture_txt(QString::fromUtf8(old.readAll()).toStdString());
+            for (const auto& add : keys_for_image(info.fileName().toStdString(), "", tile_.toStdString(), compress_.toStdString())) {
+                auto hit = std::find_if(keys.begin(), keys.end(), [&](const auto& row) { return row.first == add.first; });
+                const bool page_wins = add.first == "Primary" || add.first == "Tile" || add.first == "Compression";
+                if (hit == keys.end()) keys.push_back(add);
+                else if (page_wins) hit->second = add.second;
+            }
+            text = QString::fromStdString(format_texture_txt(keys));
+        }
+        if (write_text(path, text)) ++written;
+        else failed << info.fileName();
     }
     status_ = QStringLiteral("Wrote ") + QString::number(written) + QStringLiteral(" texture.txt");
+    if (!failed.isEmpty()) status_ += QStringLiteral(" · failed: ") + failed.join(QStringLiteral(", "));
     log_texture(status_);
 }
 
@@ -1880,18 +1953,9 @@ void Texmesh::check_texture_file() {
     const QImage image = load_image(image_path);
     const TextureReport report = check_texture_txt(path.toStdString(), text.toStdString(), image.width(), image.height(), QFileInfo::exists(image_path));
     log_texture(QString::fromStdString(format_texture_report(report)));
-    for (const auto& row : keys) {
-        const QString val = QString::fromStdString(row.second);
-        if (row.first == "Primary") primary_ = val;
-        if (row.first == "Alpha") {
-            alpha_ = val;
-            alpha_on_ = !val.isEmpty();
-        }
-        if (row.first == "Tile") tile_ = val;
-        if (row.first == "UsageHint") usage_ = val;
-        if (row.first == "NormalMapHint") normal_ = val;
-        if (row.first == "Compression") compress_ = val;
-    }
+    primary_.clear();
+    load_texture_keys(keys);
+    tex_path_ = path;
     refresh_texture();
     status_ = QString::fromStdString(report.summary());
 }
