@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
+#include <QUrl>
 
 #include "ui/mesh_page.h"
 #include "ui/mesh_view.h"
@@ -71,6 +72,30 @@ int main(int argc, char** argv) {
     assert(page.sideJson().contains(QStringLiteral("Alpha: ")) && page.sideJson().contains(QStringLiteral("Beta: ")));
     assert(!page.sideJson().contains(QStringLiteral("Gone")));
     assert(page.sideJson().contains(QStringLiteral("2 meshes")));
+    // Several meshes: each .kin binds to the mesh holding its bone, and each plays on its own.
+    const QString ats = QStringLiteral("c:/trs22/editing/kuid 1190880 100112 MSTN KIHA _ ______40/mesh/");
+    if (QFileInfo::exists(ats + QStringLiteral("atsleft_scene.kin"))) {
+        auto* mesh = page.findChild<MeshBridge*>();
+        page.loadScene({ats + QStringLiteral("atsleft.trainzmesh"), ats + QStringLiteral("atsright.trainzmesh"), ats + QStringLiteral("ats_box.trainzmesh")}, {}, {});
+        app.processEvents();
+        const QString side = page.sideJson();
+        assert(side.contains(QStringLiteral("atsleft ▸ atsleft_scene.kin")));
+        assert(side.contains(QStringLiteral("atsright ▸ atsright_scene.kin")));
+        assert(!side.contains(QStringLiteral("ats_box ▸")));
+        mesh->pickList(QStringLiteral("anim"), 0);
+        mesh->clickId(QStringLiteral("play"));
+        mesh->pickList(QStringLiteral("anim"), 1);
+        mesh->clickId(QStringLiteral("play"));
+        assert(page.sideJson().count(QStringLiteral(" ▶")) == 2);
+        mesh->clickId(QStringLiteral("play"));  // stops only the selected clip
+        assert(page.sideJson().count(QStringLiteral(" ▶")) == 1);
+        mesh->clickId(QStringLiteral("clearMesh"));
+        page.loadScene({ats + QStringLiteral("atsleft.trainzmesh"), ats + QStringLiteral("ats_box.trainzmesh")}, {}, {});
+        app.processEvents();
+        assert(page.sideJson().contains(QStringLiteral("atsleft ▸ atsleft_scene.kin")));
+        mesh->dropUrls({QUrl::fromLocalFile(ats + QStringLiteral("atsright_scene.kin")).toString()});
+        assert(!page.sideJson().contains(QStringLiteral("atsright_scene.kin")));  // its bone is not in this scene
+    }
     const QString body = QStringLiteral("c:/trs22/editing/kuid 1125787 100059 MSTN KIHA _ ______40/body/body.trainzmesh");
     if (QFileInfo::exists(body)) {
         page.loadFile(body);

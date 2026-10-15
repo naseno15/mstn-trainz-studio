@@ -3,6 +3,7 @@
 #include "bin.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 
@@ -74,10 +75,18 @@ bool kin_bones_in_mesh(const KinClip& clip, const uint8_t* mesh, size_t mesh_siz
         if (missing) *missing = clip.bones.empty() ? std::string() : clip.bones.front();
         return false;
     }
+    const uint8_t* end = mesh + mesh_size;
+    auto name_char = [](uint8_t c) { return std::isalnum(c) || c == '_' || c == '.' || c == '-'; };
     for (const std::string& bone : clip.bones) {
         if (bone.empty()) continue;
-        const auto* hit = std::search(mesh, mesh + mesh_size, bone.begin(), bone.end());
-        if (hit == mesh + mesh_size) {
+        // Whole name only: "r.ats" must not match inside "r.atsleft".
+        const uint8_t* hit = mesh;
+        while ((hit = std::search(hit, end, bone.begin(), bone.end())) != end) {
+            const uint8_t* after = hit + bone.size();
+            if (after == end || !name_char(*after)) break;
+            ++hit;
+        }
+        if (hit == end) {
             if (missing) *missing = bone;
             return false;
         }

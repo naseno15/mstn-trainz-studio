@@ -20,5 +20,5 @@ struct KinClip {
 
 // JIRF .kin: BONE names plus one FRAM (pos, quat, scale) per bone per frame.
 KinClip parse_kin(const uint8_t* data, size_t size);
-// Every bone name must occur in the mesh bytes. missing receives the first absent name.
+// Every bone name must occur in the mesh bytes as a whole name. missing receives the first absent name.
 bool kin_bones_in_mesh(const KinClip& clip, const uint8_t* mesh, size_t mesh_size, std::string* missing);

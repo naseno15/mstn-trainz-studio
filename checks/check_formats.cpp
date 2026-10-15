@@ -276,6 +276,16 @@ static void check_files() {
         assert(!kin_bones_in_mesh(foreign, mesh_bin.data(), mesh_bin.size(), &missing));
         assert(missing == "r.not-on-this-mesh");
     }
+    {
+        KinClip prefix;
+        prefix.ok = true;
+        prefix.bones = {"r.ats"};
+        const std::string bones("\x09r.atsleft\0\x0Ar.atsright\0", 23);
+        std::string missing;
+        assert(!kin_bones_in_mesh(prefix, reinterpret_cast<const uint8_t*>(bones.data()), bones.size(), &missing));
+        prefix.bones = {"r.atsright"};
+        assert(kin_bones_in_mesh(prefix, reinterpret_cast<const uint8_t*>(bones.data()), bones.size(), &missing));
+    }
     std::vector<uint8_t> att_bin;
     const std::string att_name = "a.bog0";
     att_bin.push_back(static_cast<uint8_t>(att_name.size()));

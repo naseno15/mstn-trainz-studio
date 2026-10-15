@@ -197,7 +197,7 @@ private:
     void sync_highlight();
     void focus_selection();
     void report_load(const QString& stage, int pct);
-    void bind_anims(const QString& mesh_path);
+    void bind_anims();
     void add_kin(const QString& path);
     void apply_frame();
     void stop_anim();
@@ -249,12 +249,19 @@ private:
     struct HeldKin {
         QString path;
         KinClip clip;
+        int file = 0;  // scene file whose bones it moves
+        int frame = 0;
+        bool playing = false;
+        double time = 0;  // seconds into the clip while playing
     };
     std::vector<HeldKin> clips_;
-    int anim_i_ = 0;
-    int frame_ = 0;
-    bool playing_ = false;
+    int anim_i_ = 0;              // clip shown in the Motion tab
+    QList<int> file_clip_;        // per scene file: clip posing it, -1 none
+    QList<double> scene_yaws_;    // per scene file: load_scene yaw (radians)
     QTimer* anim_timer_ = nullptr;
+    QElapsedTimer anim_clock_;
+    int kin_owner(const QString& kin_path, const KinClip& clip, std::vector<QByteArray>& bytes, const QString& same_dir, std::string* missing);
+    void own_file(int clip);
     bool info_open_ = true;
     bool two_sided_ = false;
     bool face_ = false;

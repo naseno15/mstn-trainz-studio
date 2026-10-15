@@ -632,9 +632,31 @@ void MeshView::setAttNames(bool on) {
     update();
 }
 
-void MeshView::setAnimMatrix(const QMatrix4x4& model) {
-    anim_model_ = model;
+void MeshView::setFileAnims(std::vector<QMatrix4x4> per_file) {
+    file_anim_ = std::move(per_file);
+    atts_dirty_ = true;
     update();
+}
+
+QMatrix4x4 MeshView::anim_for(int file) const {
+    return file >= 0 && file < static_cast<int>(file_anim_.size()) ? file_anim_[static_cast<size_t>(file)] : QMatrix4x4();
+}
+
+ViewAtt MeshView::posed(const ViewAtt& att) const {
+    const QMatrix4x4 m = anim_for(att.file);
+    if (m.isIdentity()) return att;
+    ViewAtt out = att;
+    const QVector3D p = m.map(QVector3D(att.pos[0], att.pos[1], att.pos[2]));
+    out.pos[0] = p.x();
+    out.pos[1] = p.y();
+    out.pos[2] = p.z();
+    for (int axis = 0; axis < 3; ++axis) {
+        const QVector3D d = m.mapVector(QVector3D(att.orient[axis * 3], att.orient[axis * 3 + 1], att.orient[axis * 3 + 2]));
+        out.orient[axis * 3] = d.x();
+        out.orient[axis * 3 + 1] = d.y();
+        out.orient[axis * 3 + 2] = d.z();
+    }
+    return out;
 }
 
 void MeshView::paint_att_names(const QMatrix4x4& proj, const QMatrix4x4& view) {
@@ -643,7 +665,7 @@ void MeshView::paint_att_names(const QMatrix4x4& proj, const QMatrix4x4& view) {
     int fbh = 1;
     fb_size(&fbw, &fbh);
     const qreal dpr = devicePixelRatioF();
-    const QMatrix4x4 mvp = proj * view * anim_model_;
+    const QMatrix4x4 mvp = proj * view;
     auto label_for = [&](const QString& name, bool hot) -> AttLabel {
         const QString key = name + QLatin1Char(hot ? '1' : '0') + QString::number(int(std::lround(dpr * 100)));
         if (att_labels_.contains(key)) return att_labels_.value(key);
@@ -696,7 +718,7 @@ void MeshView::paint_att_names(const QMatrix4x4& proj, const QMatrix4x4& view) {
     glBindVertexArray(label_vao_);
     const float gap = float(std::lround(4 * dpr));
     for (size_t i = 0; i < atts_.size(); ++i) {
-        const ViewAtt& att = atts_[i];
+        const ViewAtt att = posed(atts_[i]);
         if (att.name.isEmpty()) continue;
         if (att.file >= 0 && att.file < static_cast<int>(att_on_.size()) && !att_on_[static_cast<size_t>(att.file)]) continue;
         const QVector3D clip = mvp.map(QVector3D(att.pos[0], att.pos[1], att.pos[2]));
@@ -871,7 +893,7 @@ int MeshView::pick_att(const QPoint& pos, int* axis_hit) const {
     QMatrix4x4 proj, view;
     proj.perspective(fov_, std::max(0.1f, float(width()) / float(height())), near_p, far_p);
     view.lookAt(eye, QVector3D(target_[0], target_[1], target_[2]), QVector3D(0, 0, 1));
-    const QMatrix4x4 mvp = proj * view * anim_model_;
+    const QMatrix4x4 mvp = proj * view;
     const QPointF cursor(pos);
     // Drawn axes are 2px. A few pixels of slop, not a sphere around the point.
     const float slop = move_tool_ ? 6.f : 3.f;
@@ -893,7 +915,7 @@ int MeshView::pick_att(const QPoint& pos, int* axis_hit) const {
     float best_px = slop;
     const float length = std::max(0.12f, radius_ * 0.08f);
     for (size_t i = 0; i < atts_.size(); ++i) {
-        const ViewAtt& att = atts_[i];
+        const ViewAtt att = posed(atts_[i]);
         if (att.file >= 0 && att.file < static_cast<int>(att_on_.size()) && !att_on_[static_cast<size_t>(att.file)]) continue;
         const float len = length * (static_cast<int>(i) == att_sel_ ? 1.6f : 1.f);
         const QVector3D origin(att.pos[0], att.pos[1], att.pos[2]);
@@ -934,7 +956,8 @@ bool MeshView::mouse_ray(const QPoint& pos, QVector3D* origin, QVector3D* dir, Q
     proj.perspective(fov_, std::max(0.1f, float(width()) / float(height())), near_p, far_p);
     view.lookAt(eye, target, QVector3D(0, 0, 1));
     bool ok = false;
-    const QMatrix4x4 inv = (proj * view * anim_model_).inverted(&ok);
+    const QMatrix4x4 model = drag_att_ >= 0 && drag_att_ < static_cast<int>(atts_.size()) ? anim_for(atts_[static_cast<size_t>(drag_att_)].file) : QMatrix4x4();
+    const QMatrix4x4 inv = (proj * view * model).inverted(&ok);
     if (!ok) return false;
     const float nx = 2.f * float(pos.x()) / float(width()) - 1.f;
     const float ny = 1.f - 2.f * float(pos.y()) / float(height());
@@ -943,7 +966,7 @@ bool MeshView::mouse_ray(const QPoint& pos, QVector3D* origin, QVector3D* dir, Q
     if (std::abs(a.w()) < 1e-9f || std::abs(b.w()) < 1e-9f) return false;
     *origin = a.toVector3D() / a.w();
     *dir = (b.toVector3D() / b.w() - *origin).normalized();
-    *forward = (anim_model_.inverted().mapVector(target - eye)).normalized();
+    *forward = (model.inverted().mapVector(target - eye)).normalized();
     return true;
 }
 
@@ -1516,7 +1539,7 @@ void MeshView::rebuild_atts() {
     const float length = std::max(0.12f, radius_ * 0.08f);
     const float rgb[3][3] = {{0.95f, 0.22f, 0.18f}, {0.22f, 0.82f, 0.28f}, {0.28f, 0.48f, 0.95f}};
     for (size_t i = 0; i < atts_.size(); ++i) {
-        const ViewAtt& att = atts_[i];
+        const ViewAtt att = posed(atts_[i]);
         if (att.file >= 0 && att.file < static_cast<int>(att_on_.size()) && !att_on_[static_cast<size_t>(att.file)]) continue;
         const bool hot = static_cast<int>(i) == att_sel_;
         const float len = length * (hot ? 1.6f : 1.f);
@@ -1582,7 +1605,7 @@ void MeshView::draw_atts(const QMatrix4x4& proj, const QMatrix4x4& view) {
     glDisable(GL_CULL_FACE);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glUseProgram(line_prog_);
-    const QMatrix4x4 mvp = proj * view * anim_model_;
+    const QMatrix4x4 mvp = proj * view;
     glUniformMatrix4fv(glGetUniformLocation(line_prog_, "u_mvp"), 1, GL_FALSE, mvp.constData());
     glBindVertexArray(att_vao_);
     glLineWidth(2.f);
@@ -1671,10 +1694,15 @@ void MeshView::paintGL() {
     const bool use_maps = shade_ >= 3;
     if (wire) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     glUseProgram(mesh_prog_);
-    QMatrix4x4 model = anim_model_;
-    const QMatrix4x4 mvp = proj * view * model;
-    glUniformMatrix4fv(glGetUniformLocation(mesh_prog_, "u_mvp"), 1, GL_FALSE, mvp.constData());
-    glUniformMatrix4fv(glGetUniformLocation(mesh_prog_, "u_model"), 1, GL_FALSE, model.constData());
+    const int mvp_loc = glGetUniformLocation(mesh_prog_, "u_mvp");
+    const int model_loc = glGetUniformLocation(mesh_prog_, "u_model");
+    auto bind_model = [&](int file) {
+        const QMatrix4x4 model = anim_for(file);
+        const QMatrix4x4 mvp = proj * view * model;
+        glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, mvp.constData());
+        glUniformMatrix4fv(model_loc, 1, GL_FALSE, model.constData());
+    };
+    bind_model(0);
     glUniform3f(glGetUniformLocation(mesh_prog_, "u_cam_pos"), eye.x(), eye.y(), eye.z());
     const float amb = (moon_ && !sun_) ? 0.045f : sun_ ? 0.16f : env.ambient;
     glUniform1f(glGetUniformLocation(mesh_prog_, "u_ambient"), amb);
@@ -1780,6 +1808,7 @@ void MeshView::paintGL() {
             glEnable(GL_CULL_FACE);
             glCullFace(GL_BACK);
         }
+        bind_model(p < parts_.size() ? parts_[p].file : 0);
         const PartMaps maps = p < part_maps_.size() ? part_maps_[p] : PartMaps{};
         glUniform1f(has_n, use_maps && maps.normal ? 1.f : 0.f);
         glUniform1f(has_p, use_maps && maps.parameter ? 1.f : 0.f);
@@ -1794,7 +1823,7 @@ void MeshView::paintGL() {
     }
     if (glow_prog_ != 0 && std::find(highlight_.begin(), highlight_.end(), 1) != highlight_.end()) {
         glUseProgram(glow_prog_);
-        glUniformMatrix4fv(glGetUniformLocation(glow_prog_, "u_mvp"), 1, GL_FALSE, mvp.constData());
+        const int glow_mvp = glGetUniformLocation(glow_prog_, "u_mvp");
         glUniform4f(glGetUniformLocation(glow_prog_, "u_color"), 1.f, 0.35f, 0.12f, 0.55f);
         glDisable(GL_CULL_FACE);
         glEnable(GL_BLEND);
@@ -1804,6 +1833,8 @@ void MeshView::paintGL() {
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         for (size_t p = 0; p < part_count_.size() && p < highlight_.size(); ++p) {
             if (!highlight_[p] || (p < shown_.size() && !shown_[p])) continue;
+            const QMatrix4x4 glow = proj * view * anim_for(p < parts_.size() ? parts_[p].file : 0);
+            glUniformMatrix4fv(glow_mvp, 1, GL_FALSE, glow.constData());
             glDrawElements(GL_TRIANGLES, part_count_[p], GL_UNSIGNED_INT, reinterpret_cast<void*>(static_cast<uintptr_t>(part_first_[p] * sizeof(unsigned))));
         }
         glPolygonMode(GL_FRONT_AND_BACK, wire ? GL_LINE : GL_FILL);

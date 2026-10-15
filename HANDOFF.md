@@ -1,5 +1,9 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-15 (Asia/Bangkok) — `.kin` per mesh in multi-mesh scenes
+
+Each `.kin` belongs to one scene file (`HeldKin::file`): the mesh in the `.kin`'s folder whose bytes hold every bone as a whole name (`kin_bones_in_mesh` rejects `r.ats` inside `r.atsleft`). Ties go to `<mesh>_scene.kin`, then `<mesh>.kin`, then `<mesh>*.kin` (`kin_rank`). `bind_anims` runs after both `load_file` and `load_scene`, so dropping atsleft + atsright + ats_box finds both clips; a `.kin` dropped onto a scene binds the same way. Each clip has its own frame and play state. Play/Stop and the Frame slider act on the selected clip only, several meshes can play at once, and one mesh takes one clip at a time (`own_file`). `MeshView::setFileAnims` holds one model matrix per file (`ViewPart::file` / `ViewAtt::file`). Attachments of an animated file move with it. Shadows stay at rest pose. Scene yaw is applied to the motion as well. `check_mesh` covers the KIHA40 ATS meshes when that editing folder exists.
+
 **Last updated:** 2026-10-15 (Asia/Bangkok) — every trainzmesh material is listed
 
 `.trainzmesh` material blocks are found by layout only (`read_material_head`: identifier type, name, `00000000 01`, colour, BE count 1–32, then every key/value string). There is no type whitelist and no `.m.` name rule. The old list was lowercase and compared case-sensitively, so `StdOneTex` / `StdOneTexBlend` blocks (lights, dest signs, stickers, status) were dropped. Part naming (`bind_material_names`) and `parse_tzmf_materials` share that reader. `texture0` counts as the albedo slot. The Type combo has one handler that respects an unknown type prepended at index 0. `check_formats` covers a `StdOneTexBlend` block with no `.m.` and the real KIHA40 `int.trainzmesh` (26 materials).
@@ -30,7 +34,7 @@ Undo / redo (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, Edit menu) goes through `page_verb`
 
 The axis triad floats at the top-left of the mesh viewport. Drag orbits. Clicking an axis flies the camera onto that axis. `LogoProvider` crops `assets/mstn_logo_white.png` to the ink and every sidebar, Home, and About uses that mark at the column width.
 
-Dropping a mesh lists `.kin` files in the same folder whose bone names are inside that mesh (`windowcab.trainzmesh` → `windowcab_scene.kin`, bone `r.fuckyou`). Play and the frame slider move a one-bone part from frame 0. A dropped `.kin` whose bones are not in the mesh is reported and not kept.
+Dropping a mesh lists `.kin` files in the same folder whose bone names are inside that mesh (`windowcab.trainzmesh` → `windowcab_scene.kin`, bone `r.fuckyou`). Play and the frame slider move a one-bone part from frame 0. A dropped `.kin` whose bones are not in any loaded mesh is reported and not kept. (Multi-mesh: see 2026-10-15.)
 
 **Last updated:** 2026-10-12 (Asia/Bangkok) — attachment pick and names
 

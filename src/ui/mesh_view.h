@@ -42,6 +42,7 @@ struct ViewPart {
     int prm_h = 0;
     bool two_sided = false;
     QString material;
+    int file = 0;  // scene file index; picks the per-file animation matrix
 };
 
 int studio_softbox_peak();
@@ -73,7 +74,8 @@ public:
     void setPartTwo(int index, bool on);
     void setFaceOrient(bool on);
     void setAttNames(bool on);
-    void setAnimMatrix(const QMatrix4x4& model);
+    // One model matrix per scene file (index = ViewPart::file / ViewAtt::file). Missing entries are identity.
+    void setFileAnims(std::vector<QMatrix4x4> per_file);
     void setShown(int index, bool on);
     void setHighlight(std::vector<uint8_t> on);
     void resetCamera();
@@ -184,7 +186,9 @@ private:
     bool two_sided_ = false;
     bool face_orient_ = false;
     bool att_names_ = false;
-    QMatrix4x4 anim_model_;
+    std::vector<QMatrix4x4> file_anim_;
+    QMatrix4x4 anim_for(int file) const;
+    ViewAtt posed(const ViewAtt& att) const;
     bool guides_dirty_ = true;
     float yaw_ = 35.f;
     float pitch_ = 25.f;
