@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 
 // Update sheet. Opens on the GitHub check, then lists releases you can expand.
 Item {
@@ -35,13 +36,15 @@ Item {
         Behavior on rise { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
         Behavior on scale { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
         Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+        Behavior on height { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
-        Column {
+        // The release list takes whatever height is left, so progress and errors never push the buttons out.
+        ColumnLayout {
             anchors.fill: parent
             spacing: 10
 
             Row {
-                width: parent.width
+                Layout.fillWidth: true
                 spacing: 12
                 Rectangle {
                     width: 40
@@ -102,14 +105,14 @@ Item {
 
             Text {
                 visible: !upd.checking && upd.version.length > 0
-                width: parent.width
+                Layout.fillWidth: true
                 text: qsTr("Latest release") + "  " + upd.version
                 color: upd.dark ? "#d5d8e0" : "#1d1d1f"
                 font.pixelSize: 13
             }
             Text {
                 visible: !upd.checking && upd.commitSha.length > 0
-                width: parent.width
+                Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 text: qsTr("Latest commit") + "  " + upd.commitSha + "  ·  " + upd.commitWhen + "\n" + upd.commitTitle
                 color: upd.dark ? "#a8b0bc" : "#5c6570"
@@ -117,7 +120,7 @@ Item {
             }
             Text {
                 visible: upd.newer && !upd.busy
-                width: parent.width
+                Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 text: qsTr("This copy will close, replace the files in this folder, and open again.")
                 color: upd.dark ? "#d5d8e0" : "#1d1d1f"
@@ -125,7 +128,7 @@ Item {
             }
             Text {
                 visible: upd.newer
-                width: parent.width
+                Layout.fillWidth: true
                 text: upd.folder
                 elide: Text.ElideMiddle
                 color: upd.dark ? "#8b93a1" : "#5c6570"
@@ -135,8 +138,9 @@ Item {
             Flickable {
                 id: scroller
                 visible: !upd.checking && upd.releases.length > 0
-                width: parent.width
-                height: Math.max(120, card.height - 250)
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 60
                 contentHeight: list.height
                 clip: true
                 flickableDirection: Flickable.VerticalFlick
@@ -212,50 +216,83 @@ Item {
                 }
             }
 
-            Rectangle {
-                visible: upd.busy
-                width: parent.width
-                height: 4
-                radius: 2
-                color: Qt.rgba(0.5, 0.5, 0.5, 0.22)
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: !scroller.visible
+            }
+
+            // Download panel: slides open while busy (bar + label), height reserved in the layout.
+            Item {
+                id: progress
+                Layout.fillWidth: true
+                Layout.preferredHeight: upd.busy ? 30 : 0
+                opacity: upd.busy ? 1 : 0
+                visible: Layout.preferredHeight > 0.5
+                clip: true
+                Behavior on Layout.preferredHeight { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
                 Rectangle {
-                    width: upd.pct >= 0 ? parent.width * upd.pct / 100 : parent.width * 0.3
-                    height: parent.height
+                    id: track
+                    width: parent.width
+                    height: 4
                     radius: 2
-                    color: "#ff5a1f"
+                    color: Qt.rgba(0.5, 0.5, 0.5, 0.22)
+                    clip: true
+                    Rectangle {
+                        visible: upd.pct >= 0
+                        width: track.width * Math.max(0, upd.pct) / 100
+                        height: parent.height
+                        radius: 2
+                        color: "#ff5a1f"
+                        Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                    }
+                    Rectangle {
+                        id: sweep
+                        visible: upd.pct < 0
+                        width: track.width * 0.3
+                        height: parent.height
+                        radius: 2
+                        color: "#ff5a1f"
+                        NumberAnimation on x {
+                            from: -track.width * 0.3
+                            to: track.width
+                            duration: 1100
+                            loops: Animation.Infinite
+                            running: upd.busy && upd.pct < 0
+                        }
+                    }
+                }
+                Text {
+                    y: track.height + 8
+                    text: upd.pct >= 0 ? qsTr("Downloading update…") + "  " + upd.pct + "%" : qsTr("Downloading update…")
+                    color: upd.dark ? "#a8b0bc" : "#5c6570"
+                    font.pixelSize: 12
                 }
             }
             Text {
-                visible: upd.busy
-                text: upd.pct >= 0 ? qsTr("Downloading update…") + "  " + upd.pct + "%" : qsTr("Downloading update…")
-                color: upd.dark ? "#a8b0bc" : "#5c6570"
-                font.pixelSize: 12
-            }
-            Text {
                 visible: upd.error.length > 0
-                width: parent.width
+                Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 text: qsTr(upd.error)
                 color: "#ff453a"
                 font.pixelSize: 12
             }
 
-            Item { width: 1; height: 1 }
-
-            Row {
-                width: parent.width
+            RowLayout {
+                Layout.fillWidth: true
                 spacing: 8
                 RaiseButton {
-                    label: upd.newer ? qsTr("Later") : qsTr("Close")
-                    width: 120
+                    label: upd.busy ? qsTr("Cancel") : upd.newer ? qsTr("Later") : qsTr("Close")
+                    Layout.preferredWidth: 120
                     onClicked: upd.later()
                 }
-                Item { width: Math.max(0, parent.width - 120 - (upd.newer ? 188 : 0)); height: 1 }
+                Item { Layout.fillWidth: true }
                 RaiseButton {
                     visible: upd.newer
-                    label: qsTr("Install update")
+                    label: upd.busy ? qsTr("Downloading…") : qsTr("Install update")
                     accent: true
-                    width: upd.newer ? 180 : 0
+                    Layout.preferredWidth: 180
                     enabled: !upd.busy && !upd.checking
                     onClicked: upd.install()
                 }
