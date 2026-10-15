@@ -27,6 +27,8 @@ struct MatEdit {
     TzMaterial block;
     bool two = false;
     int gizmo = -1;
+    int file = 0;   // scene file the block belongs to
+    QString label;  // scene list prefix; empty in single-file mode
 };
 
 struct MeshRow {
@@ -212,7 +214,9 @@ private:
     QList<int> part_file_;                // file index of every row in rows_
     int sel_file_ = 0;
     QStringList scene_paths_;  // every file currently in the scene (drops append to this)
-    QByteArray file_bytes_;
+    std::vector<QByteArray> file_bytes_;  // per scene file, as read or last saved
+    std::vector<ViewAtt> att_base_;      // att_rows_ as read or last saved: Save leaves untouched ones alone
+    void save_files(bool ask);
     bool dirty_ = false;
     QString tip_;
     QString shortcut_;

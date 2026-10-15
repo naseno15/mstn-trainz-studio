@@ -15,8 +15,11 @@
 #include "ui/mesh_page.h"
 #include "ui/mesh_view.h"
 #include "ui/shell_window.h"
+#include "ui/status_hub.h"
 
 int main(int argc, char** argv) {
+    QString ats = QStringLiteral("c:/trs22/editing/kuid 1190880 100112 MSTN KIHA _ ______40/mesh/");
+    if (!QFileInfo::exists(ats)) ats = QStringLiteral("c:/trs22/backups/26-10-15/kuid 1190880 100112 MSTN KIHA _ ______40/mesh/");
     prepare_qt_runtime();
     QApplication app(argc, argv);
     {
@@ -81,6 +84,55 @@ int main(int argc, char** argv) {
         mesh->undoEdit();
         assert(!mesh->dockJson().contains(QStringLiteral("undo_probe")));
     }
+    {
+        // Save writes the edit into a copy, keeps a .bak, and says so on the status line.
+        const QString dir = QDir::temp().filePath(QStringLiteral("trainz_save_check"));
+        QDir(dir).removeRecursively();
+        QDir().mkpath(dir);
+        const QString copy = dir + QStringLiteral("/tri.trainzmesh");
+        assert(QFile::copy(QFileInfo(fixture).absoluteFilePath(), copy));
+        page.loadFile(copy);
+        app.processEvents();
+        auto* mesh = page.findChild<MeshBridge*>();
+        assert(mesh->dockJson().contains(QStringLiteral("\"saveOn\":true")));
+        mesh->clickId(QStringLiteral("save"));
+        assert(QFileInfo::exists(copy + QStringLiteral(".bak")));
+        assert(StatusHub::instance()->text() == QStringLiteral("Saved tri.trainzmesh"));
+        // Several meshes: Save stays on, writes only the file whose material changed, then reports no changes.
+        if (QFileInfo::exists(ats + QStringLiteral("atsleft.trainzmesh"))) {
+            const QString left = dir + QStringLiteral("/atsleft.trainzmesh"), box = dir + QStringLiteral("/ats_box.trainzmesh");
+            assert(QFile::copy(ats + QStringLiteral("atsleft.trainzmesh"), left) && QFile::copy(ats + QStringLiteral("ats_box.trainzmesh"), box));
+            page.loadScene({left, box}, {}, {});
+            app.processEvents();
+            assert(mesh->dockJson().contains(QStringLiteral("\"saveOn\":true")));
+            assert(page.sideJson().contains(QStringLiteral("atsleft.trainzmesh: ")));
+            mesh->setText(QStringLiteral("matName"), QStringLiteral("save_probe"));
+            mesh->clickId(QStringLiteral("save"));
+            assert(StatusHub::instance()->text() == QStringLiteral("Saved atsleft.trainzmesh"));
+            auto read = [](const QString& path) {
+                QFile file(path);
+                return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+            };
+            const QByteArray once = read(left);
+            assert(once.contains("save_probe") && once.size() != read(left + QStringLiteral(".bak")).size());
+            assert(!QFileInfo::exists(box + QStringLiteral(".bak")));
+            // The rename resized the file; a second edit + Save must land on the moved offsets.
+            mesh->clickId(QStringLiteral("save"));
+            assert(StatusHub::instance()->text().startsWith(QStringLiteral("No changes to save")));
+            mesh->setText(QStringLiteral("matName"), QStringLiteral("save_probe_2"));
+            mesh->clickId(QStringLiteral("save"));
+            const QByteArray twice = read(left);
+            const int a = once.indexOf("save_probe"), b = twice.indexOf("save_probe_2");
+            assert(a > 4 && b == a && twice.left(a - 4) == once.left(a - 4) && twice.mid(b + 12) == once.mid(a + 10));
+            page.loadScene({left, box}, {}, {});
+            app.processEvents();
+            assert(page.sideJson().contains(QStringLiteral("atsleft.trainzmesh: save_probe_2")));
+            mesh->clickId(QStringLiteral("clearMesh"));
+        }
+        page.loadFile(QFileInfo(fixture).absoluteFilePath());
+        app.processEvents();
+        QDir(dir).removeRecursively();
+    }
     assert(studio_softbox_peak() == 255);
     const QImage frame = page.grabView();
     assert(!frame.isNull());
@@ -101,7 +153,6 @@ int main(int argc, char** argv) {
     assert(!page.sideJson().contains(QStringLiteral("Gone")));
     assert(page.sideJson().contains(QStringLiteral("2 meshes")));
     // Several meshes: each .kin binds to the mesh holding its bone, and each plays on its own.
-    const QString ats = QStringLiteral("c:/trs22/editing/kuid 1190880 100112 MSTN KIHA _ ______40/mesh/");
     if (QFileInfo::exists(ats + QStringLiteral("atsleft_scene.kin"))) {
         auto* mesh = page.findChild<MeshBridge*>();
         page.loadScene({ats + QStringLiteral("atsleft.trainzmesh"), ats + QStringLiteral("atsright.trainzmesh"), ats + QStringLiteral("ats_box.trainzmesh")}, {}, {});

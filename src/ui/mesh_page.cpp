@@ -201,6 +201,7 @@ QString meta_path_for(const QString& mesh);
 QByteArray replace_le_string(QByteArray data, int off, const QByteArray& text);
 void write_be_f32(QByteArray& data, int off, float value);
 void write_le_f32(QByteArray& data, int off, float value);
+void quat_from_orient(ViewAtt& gizmo);
 
 }  // namespace
 
@@ -357,6 +358,7 @@ void MeshBridge::attach(MeshView* view, QWidget* chrome) {
         if (part < 0 || part >= static_cast<int>(rows_.size())) return;
         const MeshRow& row = rows_[static_cast<size_t>(part)];
         for (int i = 0; i < static_cast<int>(mats_.size()); ++i) {
+            if (mats_[static_cast<size_t>(i)].file != part_file_.value(part)) continue;
             const QString name = QString::fromStdString(mats_[static_cast<size_t>(i)].block.name);
             if (name.compare(row.material, Qt::CaseInsensitive) != 0 && name.compare(row.name, Qt::CaseInsensitive) != 0) continue;
             mat_i_ = i;
@@ -589,7 +591,7 @@ void MeshBridge::load_file(const QString& path) {
         view_->setAttachments(std::move(gizmos));
     }
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    file_bytes_ = bytes;
+    file_bytes_ = {bytes};
     dirty_ = false;
     path_ = path;
     bind_anims();
@@ -643,6 +645,9 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
         std::vector<ViewPart> parts;
         QStringList albedo_path;
         std::vector<ImAttachment> atts;
+        std::vector<TzAttachment> tz_atts;  // .trainzmesh only, parallel to atts: offsets + file quats
+        std::vector<TzMaterial> blocks;
+        QByteArray bytes;
         bool ok = false;
     };
     std::vector<Parsed> parsed(static_cast<size_t>(total));
@@ -674,7 +679,9 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
                     }
                 } else {
                     const TrainzMesh mesh = parse_trainzmesh(data, static_cast<size_t>(bytes.size()));
-                    for (const TzAttachment& att : parse_trainzmesh_attachments(data, static_cast<size_t>(bytes.size()))) {
+                    out.tz_atts = parse_trainzmesh_attachments(data, static_cast<size_t>(bytes.size()));
+                    out.blocks = parse_tzmf_materials(data, static_cast<size_t>(bytes.size()));
+                    for (const TzAttachment& att : out.tz_atts) {
                         ImAttachment row;
                         row.name = att.name;
                         std::memcpy(row.pos, att.pos, sizeof(row.pos));
@@ -715,6 +722,7 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             }
             }
             for (const QString& a : albedo) out.albedo_path << resolve_texture(path, a);
+            out.bytes = bytes;
             out.ok = true;
         },
         [&](int done) { report_load(QStringLiteral("Reading meshes %1 / %2").arg(done).arg(total), 4 + (40 * done) / total); });
@@ -761,10 +769,22 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             continue;
         }
         att_count_ += static_cast<int>(p.atts.size());
-        for (const ImAttachment& att : p.atts) {
+        const QString label = f < labels.size() ? labels[f] : QFileInfo(paths[f]).fileName();
+        const QHash<QString, bool> faces = read_two_map(meta_path_for(paths[f]));
+        for (const TzMaterial& block : p.blocks) {
+            MatEdit edit;
+            edit.block = block;
+            edit.file = f;
+            edit.label = label;
+            edit.two = two_for(faces, QString::fromStdString(block.name));
+            mats_.push_back(std::move(edit));
+        }
+        for (size_t a = 0; a < p.atts.size(); ++a) {
+            const ImAttachment& att = p.atts[a];
             MatEdit edit;
             edit.block.name = att.name;
             edit.gizmo = static_cast<int>(gizmos.size());
+            edit.file = f;
             mats_.push_back(std::move(edit));
             if (!bounds_set_) {
                 for (int k = 0; k < 3; ++k) bmin_[k] = bmax_[k] = att.pos[k];
@@ -780,9 +800,13 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             std::memcpy(gizmo.pos, att.pos, sizeof(gizmo.pos));
             std::memcpy(gizmo.orient, att.orient, sizeof(gizmo.orient));
             gizmo.name = QString::fromStdString(att.name);
+            if (a < p.tz_atts.size()) {
+                gizmo.off = static_cast<int>(p.tz_atts[a].off);
+                if (yaws.value(f, 0.0) == 0.0) std::memcpy(gizmo.quat, p.tz_atts[a].quat, sizeof(gizmo.quat));
+                else quat_from_orient(gizmo);
+            }
             gizmos.push_back(gizmo);
         }
-        const QString label = f < labels.size() ? labels[f] : QFileInfo(paths[f]).fileName();
         for (size_t i = 0; i < p.parts.size(); ++i) {
             ViewPart& row = p.parts[i];
             const int at = unique.indexOf(p.albedo_path[static_cast<int>(i)]);
@@ -794,14 +818,18 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
             MeshRow meta;
             meta.name = label + QStringLiteral(": ") + row.name;
             meta.material = row.material;
+            meta.albedo = p.albedo_path[static_cast<int>(i)];
             meta.verts = static_cast<int>(row.positions.size() / 3);
             meta.tris = static_cast<int>(row.indices.size() / 3);
             meta.tex_file = at >= 0 ? pixels[static_cast<size_t>(at)].path : QString();
             rows_.push_back(meta);
             part_file_.push_back(f);
-            MatEdit edit;
-            edit.block.name = meta.name.toStdString();
-            mats_.push_back(std::move(edit));
+            if (p.blocks.empty()) {
+                MatEdit edit;
+                edit.block.name = meta.name.toStdString();
+                edit.file = f;
+                mats_.push_back(std::move(edit));
+            }
             for (size_t v = 0; v + 2 < row.positions.size(); v += 3) {
                 for (int k = 0; k < 3; ++k) {
                     const float x = row.positions[v + static_cast<size_t>(k)];
@@ -826,7 +854,8 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
         view_->setAttachments(std::move(gizmos));
     }
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    file_bytes_.clear();
+    file_bytes_.assign(static_cast<size_t>(total), {});
+    for (int f = 0; f < total; ++f) file_bytes_[static_cast<size_t>(f)] = std::move(parsed[static_cast<size_t>(f)].bytes);
     dirty_ = false;
     path_.clear();
     bind_anims();
@@ -940,6 +969,17 @@ void write_le_f32(QByteArray& data, int off, float value) {
     if (off >= 0 && off + 4 <= data.size()) std::memcpy(data.data() + off, &value, 4);
 }
 
+void quat_from_orient(ViewAtt& gizmo) {
+    QMatrix3x3 rot;
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c) rot(r, c) = gizmo.orient[r * 3 + c];
+    const QQuaternion q = QQuaternion::fromRotationMatrix(rot);
+    gizmo.quat[0] = q.x();
+    gizmo.quat[1] = q.y();
+    gizmo.quat[2] = q.z();
+    gizmo.quat[3] = q.scalar();
+}
+
 bool tex_locked(const QString& key, const QString& value) {
     const QString low = key.toLower();
     return value.startsWith(QLatin1Char('$')) || low.contains(QLatin1String("env"));
@@ -948,18 +988,10 @@ bool tex_locked(const QString& key, const QString& value) {
 }  // namespace
 
 void MeshBridge::note_atts(std::vector<ViewAtt>& gizmos) {
-    for (ViewAtt& gizmo : gizmos) {
-        if (gizmo.off >= 0) continue;
-        QMatrix3x3 rot;
-        for (int r = 0; r < 3; ++r)
-            for (int c = 0; c < 3; ++c) rot(r, c) = gizmo.orient[r * 3 + c];
-        const QQuaternion q = QQuaternion::fromRotationMatrix(rot);
-        gizmo.quat[0] = q.x();
-        gizmo.quat[1] = q.y();
-        gizmo.quat[2] = q.z();
-        gizmo.quat[3] = q.scalar();
-    }
+    for (ViewAtt& gizmo : gizmos)
+        if (gizmo.off < 0) quat_from_orient(gizmo);
     att_rows_ = gizmos;
+    att_base_ = gizmos;
     att_count_ = static_cast<int>(gizmos.size());
     att_i_ = -1;
     att_edit_ = ViewAtt{};
@@ -1127,8 +1159,9 @@ void MeshBridge::publish() {
     for (int i = 0; i < static_cast<int>(mats_.size()); ++i) {
         const MatEdit& edit = mats_[static_cast<size_t>(i)];
         const bool on = i == mat_i_;
-        materials.append(QJsonObject{{QStringLiteral("name"), QString::fromStdString(edit.block.name)}, {QStringLiteral("on"), on}});
-        mats.append(QJsonObject{{QStringLiteral("t"), QString::fromStdString(edit.block.name)}, {QStringLiteral("a"), QString()}, {QStringLiteral("on"), on}, {QStringLiteral("d"), 0}});
+        const QString shown = edit.label.isEmpty() ? QString::fromStdString(edit.block.name) : edit.label + QStringLiteral(": ") + QString::fromStdString(edit.block.name);
+        materials.append(QJsonObject{{QStringLiteral("name"), shown}, {QStringLiteral("on"), on}});
+        mats.append(QJsonObject{{QStringLiteral("t"), shown}, {QStringLiteral("a"), QString()}, {QStringLiteral("on"), on}, {QStringLiteral("d"), 0}});
         mat_owner_.push_back(i);
         for (const TzTex& slot : edit.block.textures) {
             const QString key = QString::fromStdString(slot.key).toLower();
@@ -1259,7 +1292,7 @@ void MeshBridge::publish() {
         {QStringLiteral("mode"), mode},
         {QStringLiteral("title"), page_ == QLatin1String("attachs") ? QStringLiteral("Attachs Editor") : QStringLiteral("Meshes Editor")},
         {QStringLiteral("tip"), page_ == QLatin1String("attachs") ? QStringLiteral("Pick on the left · edit here · Save") : QStringLiteral("Pick on the left · edit here · Save")},
-        {QStringLiteral("saveOn"), !path_.isEmpty()},
+        {QStringLiteral("saveOn"), !scene_paths_.isEmpty()},
         {QStringLiteral("mat"),
          QJsonObject{
              {QStringLiteral("on"), has},
@@ -1366,10 +1399,9 @@ int MeshBridge::kin_owner(const QString& kin_path, const KinClip& clip, std::vec
     for (int f = 0; f < scene_paths_.size(); ++f) {
         if (!same_dir.isEmpty() && QFileInfo(scene_paths_[f]).absolutePath().compare(same_dir, Qt::CaseInsensitive) != 0) continue;
         QByteArray& data = bytes[static_cast<size_t>(f)];
-        if (data.isEmpty()) {
-            if (!scene_) data = file_bytes_;
-            else if (QFile file(scene_paths_[f]); file.open(QIODevice::ReadOnly)) data = file.readAll();
-        }
+        if (data.isEmpty() && static_cast<size_t>(f) < file_bytes_.size()) data = file_bytes_[static_cast<size_t>(f)];
+        if (data.isEmpty())
+            if (QFile file(scene_paths_[f]); file.open(QIODevice::ReadOnly)) data = file.readAll();
         if (!kin_bones_in_mesh(clip, reinterpret_cast<const uint8_t*>(data.constData()), static_cast<size_t>(data.size()), missing)) continue;
         const int rank = kin_rank(kin_path, scene_paths_[f]);
         if (rank < best_rank) {
@@ -1437,7 +1469,7 @@ void MeshBridge::bind_anims() {
 }
 
 void MeshBridge::add_kin(const QString& path) {
-    if (scene_paths_.isEmpty() || (!scene_ && file_bytes_.isEmpty())) {
+    if (scene_paths_.isEmpty() || file_bytes_.empty()) {
         post_status(QStringLiteral("Open a mesh first — %1 was not kept").arg(QFileInfo(path).fileName()));
         return;
     }
@@ -1656,6 +1688,7 @@ void MeshBridge::clickId(const QString& id) {
         shortcut_.clear();
         rows_.clear();
         mats_.clear();
+        file_bytes_.clear();
         path_.clear();
         welcome_ = true;
         editor_open_ = false;
@@ -1676,15 +1709,69 @@ void MeshBridge::clickId(const QString& id) {
         publish();
         return;
     } else if (id == QLatin1String("save") || id == QLatin1String("saveAs")) {
-        QString dest = path_;
-        if (id == QLatin1String("saveAs") || dest.isEmpty()) {
-            dest = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Save mesh"), path_, QStringLiteral("Mesh (*.trainzmesh *.im)"));
-            if (dest.isEmpty()) return;
+        save_files(id == QLatin1String("saveAs"));
+    }
+}
+
+// Save writes every scene .trainzmesh (Save As: the selected one) and always reports the outcome.
+void MeshBridge::save_files(bool ask) {
+    auto tell = [](const QString& title, const QString& detail) {
+        post_status(title + QStringLiteral(" — ") + detail);
+        StatusHub::instance()->notify(QStringLiteral("info"), title, detail);
+    };
+    if (scene_paths_.isEmpty() || loading_) {
+        tell(QStringLiteral("Nothing to save"), QStringLiteral("open a mesh first"));
+        return;
+    }
+    file_bytes_.resize(static_cast<size_t>(scene_paths_.size()));
+    QList<int> files;
+    if (ask) files << std::clamp(scene_ ? sel_file_ : 0, 0, static_cast<int>(scene_paths_.size()) - 1);
+    else
+        for (int f = 0; f < scene_paths_.size(); ++f) files << f;
+    QStringList saved, preview, failed;
+    for (const int f : files) {
+        const QString src = scene_paths_[f];
+        const bool tz = src.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive);
+        QString dest = src;
+        if (ask) {
+            dest = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Save %1 as").arg(QFileInfo(src).fileName()), src, tz ? QStringLiteral("Trainz mesh (*.trainzmesh)") : QStringLiteral("Mesh (*.im *.fbx)"));
+            if (dest.isEmpty()) {
+                post_status(QStringLiteral("Save As cancelled"));
+                return;
+            }
         }
-        if (!file_bytes_.isEmpty() && dest.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive)) {
-            QByteArray data = file_bytes_;
+        const QString name = QFileInfo(dest).fileName();
+        const QByteArray& before = file_bytes_[static_cast<size_t>(f)];
+        bool wrote = false;
+        if (tz && !before.isEmpty()) {
+            QByteArray data = before;
+            // Offsets come from the bytes as they are now: an earlier save may have resized a string.
+            const auto* raw = reinterpret_cast<const uint8_t*>(before.constData());
+            std::vector<TzMaterial> now_blocks;
+            std::vector<TzAttachment> now_atts;
+            try {
+                now_blocks = parse_tzmf_materials(raw, static_cast<size_t>(before.size()));
+                now_atts = parse_trainzmesh_attachments(raw, static_cast<size_t>(before.size()));
+            } catch (const std::exception&) {
+                failed << name;
+                continue;
+            }
+            std::vector<TzMaterial> blocks;
             for (const MatEdit& edit : mats_) {
-                const TzMaterial& block = edit.block;
+                if (edit.file != f || edit.gizmo >= 0 || edit.block.name_off == 0 || blocks.size() >= now_blocks.size()) continue;
+                const TzMaterial& at = now_blocks[blocks.size()];
+                TzMaterial block = edit.block;
+                block.name_off = at.name_off;
+                block.type_off = at.type_off;
+                block.color_off = at.color_off;
+                block.emissive_off = at.emissive_off;
+                block.specular_off = at.specular_off;
+                block.spec_power_off = at.spec_power_off;
+                if (block.textures.size() > at.textures.size()) block.textures.resize(at.textures.size());
+                for (size_t t = 0; t < block.textures.size(); ++t) block.textures[t].value_off = at.textures[t].value_off;
+                blocks.push_back(std::move(block));
+            }
+            for (const TzMaterial& block : blocks) {
                 if (block.color_off) {
                     for (int c = 0; c < 4; ++c) write_be_f32(data, static_cast<int>(block.color_off) + c * 4, block.color[c]);
                 }
@@ -1694,10 +1781,31 @@ void MeshBridge::clickId(const QString& id) {
                     for (int c = 0; c < 4; ++c) write_le_f32(data, block.specular_off + c * 4, block.specular[c]);
                 if (block.spec_power_off >= 0) write_le_f32(data, block.spec_power_off, block.spec_power);
             }
-            for (const ViewAtt& att : att_rows_) {
-                if (att.off < 0) continue;
-                for (int c = 0; c < 3; ++c) write_be_f32(data, att.off + c * 4, att.pos[c]);
-                for (int c = 0; c < 4; ++c) write_be_f32(data, att.off + 12 + c * 4, att.quat[c]);
+            // load_scene spun a yawed file about Z; spin back, and leave untouched attachments as read.
+            const double yaw = scene_yaws_.value(f, 0.0);
+            const float yc = static_cast<float>(std::cos(-yaw)), ys = static_cast<float>(std::sin(-yaw));
+            auto unspin = [&](float& x, float& y) {
+                const float nx = x * yc - y * ys;
+                y = x * ys + y * yc;
+                x = nx;
+            };
+            size_t att_k = 0;
+            for (size_t i = 0; i < att_rows_.size(); ++i) {
+                ViewAtt att = att_rows_[i];
+                if (att.file != f || att.off < 0 || att_k >= now_atts.size()) continue;
+                att.off = static_cast<int>(now_atts[att_k++].off);
+                const ViewAtt* base = i < att_base_.size() ? &att_base_[i] : nullptr;
+                const bool moved = !base || std::memcmp(base->pos, att.pos, sizeof(att.pos)) != 0;
+                const bool turned = !base || std::memcmp(base->quat, att.quat, sizeof(att.quat)) != 0;
+                if (yaw != 0.0) {
+                    unspin(att.pos[0], att.pos[1]);
+                    for (int axis = 0; axis < 3; ++axis) unspin(att.orient[axis * 3], att.orient[axis * 3 + 1]);
+                    quat_from_orient(att);
+                }
+                if (moved)
+                    for (int c = 0; c < 3; ++c) write_be_f32(data, att.off + c * 4, att.pos[c]);
+                if (turned)
+                    for (int c = 0; c < 4; ++c) write_be_f32(data, att.off + 12 + c * 4, att.quat[c]);
             }
             struct Patch {
                 int off;
@@ -1705,43 +1813,50 @@ void MeshBridge::clickId(const QString& id) {
             };
             std::vector<Patch> patches;
             auto queue = [&](size_t off, const std::string& now) {
-                if (off + 4 > static_cast<size_t>(file_bytes_.size())) return;
+                if (off + 4 > static_cast<size_t>(before.size())) return;
                 quint32 n = 0;
-                std::memcpy(&n, file_bytes_.constData() + off, 4);
-                if (off + 4 + n > static_cast<size_t>(file_bytes_.size()) || n < 1) return;
-                const QByteArray old(file_bytes_.constData() + off + 4, static_cast<int>(n - 1));
+                std::memcpy(&n, before.constData() + off, 4);
+                if (off + 4 + n > static_cast<size_t>(before.size()) || n < 1) return;
+                const QByteArray old(before.constData() + off + 4, static_cast<int>(n - 1));
                 const QByteArray next = QByteArray::fromStdString(now);
                 if (old == next) return;
                 patches.push_back({static_cast<int>(off), next});
             };
-            for (const MatEdit& edit : mats_) {
-                queue(edit.block.name_off, edit.block.name);
-                queue(edit.block.type_off, edit.block.type_name);
-                for (const TzTex& tex : edit.block.textures) queue(tex.value_off, tex.value);
+            for (const TzMaterial& block : blocks) {
+                queue(block.name_off, block.name);
+                queue(block.type_off, block.type_name);
+                for (const TzTex& tex : block.textures) queue(tex.value_off, tex.value);
             }
             std::sort(patches.begin(), patches.end(), [](const Patch& a, const Patch& b) { return a.off > b.off; });
             for (const Patch& patch : patches) data = replace_le_string(data, patch.off, patch.text);
-            const QString bak = dest + QStringLiteral(".bak");
-            if (!QFileInfo::exists(bak)) QFile::copy(dest, bak);
-            QFile out(dest);
-            if (!out.open(QIODevice::WriteOnly)) {
-                shortcut_ = QStringLiteral("Save failed");
-                post_status(QStringLiteral("Save failed — cannot write ") + QFileInfo(dest).fileName());
-                emit changed();
-                return;
+            if (ask || !scene_ || data != before) {
+                const QString bak = dest + QStringLiteral(".bak");
+                if (!QFileInfo::exists(bak)) QFile::copy(dest, bak);
+                QSaveFile out(dest);
+                if (!out.open(QIODevice::WriteOnly) || out.write(data) != data.size() || !out.commit()) {
+                    failed << name;
+                    continue;
+                }
+                file_bytes_[static_cast<size_t>(f)] = data;
+                for (size_t i = 0; i < att_rows_.size() && i < att_base_.size(); ++i)
+                    if (att_rows_[i].file == f) att_base_[i] = att_rows_[i];
+                wrote = true;
             }
-            out.write(data);
-            file_bytes_ = data;
         }
+        // Two-sided flags live in the .meta beside the mesh (any format). Save As starts from the source's flags.
+        const QString meta_path = meta_path_for(dest);
         QString meta_text;
-        QFile meta_in(meta_path_for(dest));
+        QFile meta_in(QFileInfo::exists(meta_path) ? meta_path : meta_path_for(src));
         if (meta_in.open(QIODevice::ReadOnly)) meta_text = QString::fromUtf8(meta_in.readAll());
+        const QString meta_was = QFileInfo::exists(meta_path) ? meta_text : QString();
         for (const MatEdit& edit : mats_) {
+            if (edit.file != f || edit.gizmo >= 0 || (scene_ && edit.block.name_off == 0)) continue;
             const QString name = QString::fromStdString(edit.block.name);
             if (name.isEmpty()) continue;
             const QString flag = edit.two ? QStringLiteral("1") : QStringLiteral("0");
             int at = meta_text.indexOf(name);
             if (at < 0) {
+                if (!edit.two) continue;
                 if (!meta_text.contains(QLatin1String("materials"))) meta_text += QStringLiteral("\nmaterials\n{\n}\n");
                 const int close = meta_text.lastIndexOf(QLatin1Char('}'));
                 meta_text.insert(std::max(0, close), QStringLiteral("  %1\n  {\n    two-sided %2\n  }\n").arg(name, flag));
@@ -1760,14 +1875,34 @@ void MeshBridge::clickId(const QString& id) {
             while (value_end < meta_text.size() && !meta_text[value_end].isSpace() && meta_text[value_end] != QLatin1Char('}')) ++value_end;
             meta_text.replace(value, value_end - value, flag);
         }
-        QFile meta_out(meta_path_for(dest));
-        if (meta_out.open(QIODevice::WriteOnly | QIODevice::Truncate)) meta_out.write(meta_text.toUtf8());
-        path_ = dest;
-        dirty_ = false;
-        shortcut_ = QFileInfo(dest).fileName() + QStringLiteral(" saved");
-        post_status(QStringLiteral("Saved ") + QFileInfo(dest).fileName());
-        publish();
+        if (meta_text != meta_was) {
+            QSaveFile meta_out(meta_path);
+            const QByteArray meta_bytes = meta_text.toUtf8();
+            if (!meta_out.open(QIODevice::WriteOnly) || meta_out.write(meta_bytes) != meta_bytes.size() || !meta_out.commit()) {
+                failed << QFileInfo(meta_path).fileName();
+                continue;
+            }
+            wrote = true;
+        }
+        if (!tz) preview << name;
+        if (!wrote) continue;
+        saved << name;
+        if (ask) {
+            scene_paths_[f] = dest;
+            if (!scene_) path_ = dest;
+        }
     }
+    if (failed.isEmpty()) dirty_ = false;
+    if (!saved.isEmpty()) {
+        shortcut_ = saved.join(QStringLiteral(", ")) + QStringLiteral(" saved");
+        post_status(QStringLiteral("Saved ") + saved.join(QStringLiteral(", ")) + (preview.isEmpty() ? QString() : QStringLiteral(" · %1: two-sided flags only").arg(preview.join(QStringLiteral(", ")))));
+    }
+    if (!failed.isEmpty()) post_status(QStringLiteral("Save failed — cannot write ") + failed.join(QStringLiteral(", ")));
+    else if (saved.isEmpty() && !preview.isEmpty())
+        tell(QStringLiteral("Not saved"), preview.join(QStringLiteral(", ")) + QStringLiteral(" is preview only — Save writes .trainzmesh files (and two-sided flags)"));
+    else if (saved.isEmpty())
+        tell(QStringLiteral("No changes to save"), QStringLiteral("every mesh already matches its file"));
+    publish();
 }
 void MeshBridge::setChecked(const QString& key, bool on) {
     const auto undo = qScopeGuard([this, before = snap()] { record(before); });
@@ -2005,6 +2140,7 @@ void MeshBridge::sync_highlight() {
     std::vector<uint8_t> on(rows_.size(), 0);
     for (size_t i = 0; i < rows_.size(); ++i) {
         const MeshRow& row = rows_[i];
+        if (part_file_.value(static_cast<int>(i)) != mats_[static_cast<size_t>(mat_i_)].file) continue;
         const bool named = !name.isEmpty() && (row.name.compare(name, Qt::CaseInsensitive) == 0 || row.material.compare(name, Qt::CaseInsensitive) == 0);
         on[i] = named || (!row.albedo.isEmpty() && stems.contains(stem(row.albedo))) ? 1 : 0;
     }
