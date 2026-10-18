@@ -72,6 +72,13 @@ int main(int argc, char** argv) {
     {
         auto* mesh = page.findChild<MeshBridge*>();
         assert(mesh);
+        assert(mesh_tex_map_label(QStringLiteral("txalbedo")) == QLatin1String("Albedo"));
+        assert(mesh_tex_map_label(QStringLiteral("texture0")) == QLatin1String("Albedo"));
+        assert(mesh_tex_map_label(QStringLiteral("txEnvBRDF")) == QLatin1String("Env BRDF"));
+        assert(mesh_tex_map_label(QStringLiteral("bEnvIrradiance")) == QLatin1String("Env Irradiance"));
+        assert(mesh_tex_map_label(QStringLiteral("txEnvRadiance")) == QLatin1String("Env Radiance"));
+        assert(mesh_texture_slot_ref(QStringLiteral("C:/x/halser_gauge.texture.txt")) == QLatin1String("halser_gauge.texture"));
+        assert(mesh_texture_slot_ref(QStringLiteral("body.tga")) == QLatin1String("body.tga"));
         const QString was = mesh->dockJson();
         mesh->setText(QStringLiteral("matName"), QStringLiteral("undo_probe"));
         assert(mesh->dockJson().contains(QStringLiteral("undo_probe")));

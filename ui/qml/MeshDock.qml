@@ -98,15 +98,22 @@ Item {
                         checked: dock.mat.two === true
                         onToggled: bridge.setChecked("two", !dock.mat.two)
                     }
-                    Field { label: "Vertices"; live: dock.mat.vfmt || "—"; lock: true; onCommit: function (t) {} }
+                    Field { label: qsTr("Vertex Format"); live: dock.mat.vfmt || "—"; lock: true; onCommit: function (t) {} }
                 }
                 Card {
                     title: qsTr("Textures")
+                    Text {
+                        width: parent.width
+                        text: qsTr("Prefer .texture.txt (saved as .texture). Images are ok if they sit beside the mesh.")
+                        color: dock.mute
+                        font.pixelSize: 10
+                        wrapMode: Text.Wrap
+                    }
                     Row {
                         width: parent.width
                         height: 16
-                        Text { width: 88; text: "Map"; color: dock.mute; font.pixelSize: 11 }
-                        Text { text: "File"; color: dock.mute; font.pixelSize: 11 }
+                        Text { width: 100; text: qsTr("Map"); color: dock.mute; font.pixelSize: 11 }
+                        Text { text: qsTr("File"); color: dock.mute; font.pixelSize: 11 }
                     }
                     Repeater {
                         model: dock.mat.tex || []
@@ -116,7 +123,7 @@ Item {
                             height: 48
                             Field {
                                 width: parent.width - 28
-                                label: (typeof modelData.k === "string" ? qsTr(modelData.k) : modelData.k)
+                                label: qsTr((modelData.lab || modelData.k) || "")
                                 live: modelData.v || ""
                                 onCommit: function (t) { bridge.setText("tex:" + modelData.k, t) }
                             }
@@ -136,10 +143,10 @@ Item {
                 }
                 Card {
                     title: qsTr("Color")
-                    Rgba { which: "color"; title: "Material Color"; ch: dock.mat.color || [0, 0, 0, 255]; pick: "color" }
-                    Rgba { which: "emis"; title: "matEmissive"; ch: dock.mat.emis || [0, 0, 0, 255]; pick: "emisPick" }
-                    Rgba { which: "spec"; title: "matSpecular"; ch: dock.mat.specC || [0, 0, 0, 255]; pick: "specPick" }
-                    Field { label: "specPower"; live: String(dock.mat.spec || 0); onCommit: function (t) { bridge.setSpin("spec", Number(t)) } }
+                    Rgba { which: "color"; title: qsTr("Material Color"); ch: dock.mat.color || [0, 0, 0, 255]; pick: "color" }
+                    Rgba { which: "emis"; title: qsTr("Emissive"); ch: dock.mat.emis || [0, 0, 0, 255]; pick: "emisPick" }
+                    Rgba { which: "spec"; title: qsTr("Specular"); ch: dock.mat.specC || [0, 0, 0, 255]; pick: "specPick" }
+                    Field { label: qsTr("Specular Power"); live: String(dock.mat.spec || 0); onCommit: function (t) { bridge.setSpin("spec", Number(t)) } }
                 }
             }
 

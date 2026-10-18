@@ -56,6 +56,8 @@ public:
     void setParts(std::vector<ViewPart> parts);
     void setAttachments(std::vector<ViewAtt> atts);
     void updateAttachment(int index, const ViewAtt& att);
+    // map: 0 albedo, 1 normal, 2 parameters. Updates GPU maps without reframing the camera.
+    void setPartPixels(int index, int map, const std::vector<unsigned char>& rgba, int w, int h);
     void setAttFileShown(int file, bool on);
     void setAttSelected(int index);
     // Move tool: left-drag an attachment. On an axis line: along that axis. On the origin: in the view plane. Esc cancels.

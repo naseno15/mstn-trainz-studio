@@ -23,6 +23,10 @@ class MeshView;
 class QQuickWidget;
 class QTimer;
 
+// Mesh Editor texture UI: friendly Map labels + pick path → slot ref.
+QString mesh_tex_map_label(const QString& key);
+QString mesh_texture_slot_ref(const QString& path);
+
 struct MatEdit {
     TzMaterial block;
     bool two = false;
@@ -198,6 +202,10 @@ private:
     void note_atts(std::vector<ViewAtt>& gizmos);
     void sync_highlight();
     void focus_selection();
+    QString mesh_path_for(int file) const;
+    std::vector<int> parts_for_mat(int mat_i) const;
+    void apply_mat_tex_preview(int mat_i, const QString& slot, const QString& value, const std::vector<int>& parts);
+    void refresh_mat_tex_previews(int mat_i);
     void report_load(const QString& stage, int pct);
     void bind_anims();
     void add_kin(const QString& path);

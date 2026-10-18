@@ -1,5 +1,13 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-18 (Asia/Bangkok) — Meshes Editor texture pick updates Live preview
+
+Changing an Albedo / Normal / Parameters slot (browse or type) reloads that image onto matching parts via `MeshView::setPartPixels` (no camera reframe). Resolve still looks beside the mesh (`name.texture` → sibling `.texture.txt` Primary). Missing images keep the old preview and say so on the status line. Undo re-applies the current material's maps.
+
+**Last updated:** 2026-10-18 (Asia/Bangkok) — Meshes Editor texture labels + pick
+
+Texture browse prefers `.texture.txt` / `.texture` (images still allowed). Picking `foo.texture.txt` stores `foo.texture` in the mesh slot. Map column shows friendly names (Albedo, Env BRDF / Irradiance / Radiance, Normal, Parameters); Color uses Emissive / Specular / Specular Power; Vertices is Vertex Format. Raw Trainz keys stay in the file. `check_mesh` covers `mesh_tex_map_label` / `mesh_texture_slot_ref`.
+
 **Last updated:** 2026-10-15 (Asia/Bangkok) — Mesh Studio Save / Save As always save or say why
 
 Save used to grey out as soon as two meshes were open (`saveOn` was `!path_.isEmpty()`, and scene mode clears `path_`), so clicks did nothing. Scene mode was preview only. Now `load_scene` keeps each file's bytes (`file_bytes_` is one per scene file), its real `tzmf` material blocks (`MatEdit::file` plus a list prefix in `label`), and its attachment offsets. `MeshBridge::save_files(ask)` writes every scene `.trainzmesh` whose bytes or `.meta` two-sided flags changed. Single-file Save always writes. Save As writes the selected file and points the scene at the new path. `.bak` is made on first write, and both the mesh and the `.meta` go through `QSaveFile`. Offsets are re-read from the current bytes on every save and paired by index. They used to be the load-time offsets, so a rename that resized a string made the next Save write floats at stale offsets. Yawed Preview Asset files are spun back, and attachments matching `att_base_` stay untouched. `.im` / `.fbx` only get `.meta` flags. Every outcome gets a toast: Saved, Save failed, Not saved (preview only), or No changes to save. `check_mesh` covers both modes on temp copies. The ATS checks fall back to `backups/26-10-15/…` now that the asset left `editing/`.

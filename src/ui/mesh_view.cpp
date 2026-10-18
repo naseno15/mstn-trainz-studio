@@ -513,6 +513,26 @@ MeshView::MeshView(QWidget* parent) : QOpenGLWidget(parent) {
     connect(coast_, &QTimer::timeout, this, [this] { coast(); });
 }
 
+void MeshView::setPartPixels(int index, int map, const std::vector<unsigned char>& rgba, int w, int h) {
+    if (index < 0 || index >= static_cast<int>(parts_.size()) || map < 0 || map > 2) return;
+    ViewPart& part = parts_[static_cast<size_t>(index)];
+    if (map == 0) {
+        part.rgba = rgba;
+        part.tex_w = w;
+        part.tex_h = h;
+    } else if (map == 1) {
+        part.nrgba = rgba;
+        part.nrm_w = w;
+        part.nrm_h = h;
+    } else {
+        part.prgba = rgba;
+        part.prm_w = w;
+        part.prm_h = h;
+    }
+    upload_pending_ = true;
+    update();
+}
+
 void MeshView::setParts(std::vector<ViewPart> parts) {
     parts_ = std::move(parts);
     highlight_.clear();

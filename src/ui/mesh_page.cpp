@@ -896,14 +896,15 @@ QJsonArray rgba_bytes(const float* ch) {
 
 int tex_rank(const QString& key) {
     const QString low = key.toLower();
-    if (low == QLatin1String("txalbedo") || low == QLatin1String("texture0")) return 0;
-    if (low == QLatin1String("txenvbrdf")) return 1;
-    if (low == QLatin1String("txenvirradiance")) return 2;
-    if (low == QLatin1String("txenvradiance")) return 3;
-    if (low == QLatin1String("txnormal")) return 4;
-    if (low == QLatin1String("txparameters")) return 5;
+    if (low == QLatin1String("txalbedo") || low == QLatin1String("texture0") || low == QLatin1String("texdiffuse") || low == QLatin1String("diffuse") || low == QLatin1String("albedo")) return 0;
+    if (low.contains(QLatin1String("envbrdf"))) return 1;
+    if (low.contains(QLatin1String("envirradiance"))) return 2;
+    if (low.contains(QLatin1String("envradiance"))) return 3;
+    if (low == QLatin1String("txnormal") || low == QLatin1String("normal")) return 4;
+    if (low == QLatin1String("txparameters") || low == QLatin1String("parameters") || low == QLatin1String("param")) return 5;
     return 10;
 }
+
 
 QHash<QString, bool> read_two_map(const QString& path) {
     QHash<QString, bool> out;
@@ -987,6 +988,26 @@ bool tex_locked(const QString& key, const QString& value) {
 
 }  // namespace
 
+QString mesh_tex_map_label(const QString& key) {
+    const QString low = key.toLower();
+    if (low == QLatin1String("txalbedo") || low == QLatin1String("texture0") || low == QLatin1String("texdiffuse") || low == QLatin1String("diffuse") || low == QLatin1String("albedo"))
+        return QStringLiteral("Albedo");
+    if (low == QLatin1String("txnormal") || low == QLatin1String("normal")) return QStringLiteral("Normal");
+    if (low == QLatin1String("txparameters") || low == QLatin1String("parameters") || low == QLatin1String("param")) return QStringLiteral("Parameters");
+    if (low.contains(QLatin1String("envbrdf"))) return QStringLiteral("Env BRDF");
+    if (low.contains(QLatin1String("envirradiance"))) return QStringLiteral("Env Irradiance");
+    if (low.contains(QLatin1String("envradiance"))) return QStringLiteral("Env Radiance");
+    if (low.contains(QLatin1String("emissive"))) return QStringLiteral("Emissive Map");
+    if (low.contains(QLatin1String("specular")) || low.contains(QLatin1String("specmap"))) return QStringLiteral("Specular Map");
+    return key;
+}
+
+QString mesh_texture_slot_ref(const QString& path) {
+    QString name = QFileInfo(path).fileName();
+    if (name.endsWith(QLatin1String(".texture.txt"), Qt::CaseInsensitive)) name.chop(4);
+    return name;
+}
+
 void MeshBridge::note_atts(std::vector<ViewAtt>& gizmos) {
     for (ViewAtt& gizmo : gizmos)
         if (gizmo.off < 0) quat_from_orient(gizmo);
@@ -1053,6 +1074,7 @@ void MeshBridge::restore(const EditSnap& state) {
         }
     }
     dirty_ = true;
+    if (mat_i_ >= 0) refresh_mat_tex_previews(mat_i_);
     sync_highlight();
     publish();
 }
@@ -1283,7 +1305,12 @@ void MeshBridge::publish() {
     std::stable_sort(ordered.begin(), ordered.end(), [](const TexLine& a, const TexLine& b) { return a.rank < b.rank; });
     QJsonArray tex;
     for (const TexLine& slot : ordered) {
-        tex.append(QJsonObject{{QStringLiteral("k"), slot.key}, {QStringLiteral("v"), slot.value}, {QStringLiteral("lock"), tex_locked(slot.key, slot.value)}});
+        tex.append(QJsonObject{
+            {QStringLiteral("k"), slot.key},
+            {QStringLiteral("lab"), mesh_tex_map_label(slot.key)},
+            {QStringLiteral("v"), slot.value},
+            {QStringLiteral("lock"), tex_locked(slot.key, slot.value)},
+        });
     }
     const QString mode = page_ == QLatin1String("attachs") ? QStringLiteral("attachs") : page_ == QLatin1String("meshes") ? QStringLiteral("meshes") : QString();
     double euler[3] = {};
@@ -1650,11 +1677,12 @@ void MeshBridge::clickId(const QString& id) {
         info_open_ = !info_open_;
         publish();
     } else if (id.startsWith(QLatin1String("texBrowse:"))) {
-        // Start in the folder the mesh was loaded from.
+        // Trainz mesh slots reference name.texture (from sibling .texture.txt + Primary image).
         const QString dir = path_.isEmpty() ? QString() : QFileInfo(path_).absolutePath();
-        const QString file = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Pick texture"), dir,
-                                                          QStringLiteral("Texture (*.texture *.tga *.png *.dds *.jpg);;All (*)"));
-        if (!file.isEmpty()) setText(QStringLiteral("tex:") + id.mid(10), QFileInfo(file).fileName());
+        const QString file = QFileDialog::getOpenFileName(
+            nullptr, QStringLiteral("Pick Trainz texture"), dir,
+            QStringLiteral("Trainz texture (*.texture.txt *.texture);;Images (*.tga *.png *.dds *.jpg);;All (*)"));
+        if (!file.isEmpty()) setText(QStringLiteral("tex:") + id.mid(10), mesh_texture_slot_ref(file));
         return;
     } else if (id == QLatin1String("open") || id == QLatin1String("folder")) browse();
     else if (id.startsWith(QLatin1String("file:"))) {
@@ -2024,11 +2052,19 @@ void MeshBridge::setText(const QString& key, const QString& text) {
     }
     else if (key.startsWith(QLatin1String("tex:"))) {
         const QString slot = key.mid(4);
+        // Resolve parts before the slot value changes (stem match still uses the old albedo).
+        const std::vector<int> parts = parts_for_mat(mat_i_);
+        bool changed = false;
         for (TzTex& tex : edit.block.textures) {
             if (QString::fromStdString(tex.key) == slot) {
                 tex.value = text.toStdString();
                 dirty_ = true;
+                changed = true;
             }
+        }
+        if (changed) {
+            apply_mat_tex_preview(mat_i_, slot, text, parts);
+            sync_highlight();
         }
     } else return;
     publish();
@@ -2124,26 +2160,99 @@ void MeshBridge::focus_selection() {
     view_->setAttSelected(-1);
     view_->flyToHighlight();
 }
-void MeshBridge::sync_highlight() {
-    if (!view_ || mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size())) return;
-    const TzMaterial& block = mats_[static_cast<size_t>(mat_i_)].block;
-    const QString name = QString::fromStdString(block.name);
+QString MeshBridge::mesh_path_for(int file) const {
+    if (scene_ && file >= 0 && file < scene_paths_.size()) return scene_paths_[file];
+    return path_;
+}
+
+std::vector<int> MeshBridge::parts_for_mat(int mat_i) const {
+    std::vector<int> out;
+    if (mat_i < 0 || mat_i >= static_cast<int>(mats_.size())) return out;
+    const MatEdit& edit = mats_[static_cast<size_t>(mat_i)];
+    if (edit.gizmo >= 0) return out;
+    const QString name = QString::fromStdString(edit.block.name);
     auto stem = [](QString s) {
         s = QFileInfo(s.trimmed()).fileName().toLower();
         return s.section(QLatin1Char('.'), 0, 0);
     };
     QSet<QString> stems;
-    for (const TzTex& tex : block.textures) {
+    for (const TzTex& tex : edit.block.textures) {
         const QString s = stem(QString::fromStdString(tex.value));
         if (!s.isEmpty() && !s.startsWith(QLatin1Char('$'))) stems.insert(s);
     }
-    std::vector<uint8_t> on(rows_.size(), 0);
-    for (size_t i = 0; i < rows_.size(); ++i) {
-        const MeshRow& row = rows_[i];
-        if (part_file_.value(static_cast<int>(i)) != mats_[static_cast<size_t>(mat_i_)].file) continue;
+    std::vector<int> file_parts;
+    for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
+        if (part_file_.value(i) != edit.file) continue;
+        file_parts.push_back(i);
+        const MeshRow& row = rows_[static_cast<size_t>(i)];
         const bool named = !name.isEmpty() && (row.name.compare(name, Qt::CaseInsensitive) == 0 || row.material.compare(name, Qt::CaseInsensitive) == 0);
-        on[i] = named || (!row.albedo.isEmpty() && stems.contains(stem(row.albedo))) ? 1 : 0;
+        if (named || (!row.albedo.isEmpty() && stems.contains(stem(row.albedo)))) out.push_back(i);
     }
+    // One-part mesh with a loose material name: still preview on that part.
+    if (out.empty() && file_parts.size() == 1) out = file_parts;
+    return out;
+}
+
+void MeshBridge::apply_mat_tex_preview(int mat_i, const QString& slot, const QString& value, const std::vector<int>& parts) {
+    if (!view_ || parts.empty() || mat_i < 0 || mat_i >= static_cast<int>(mats_.size())) return;
+    const QString low = slot.toLower();
+    if (value.startsWith(QLatin1Char('$')) || low.contains(QLatin1String("env"))) return;
+    int map = 0;
+    if (low == QLatin1String("txnormal") || low == QLatin1String("normal"))
+        map = 1;
+    else if (low == QLatin1String("txparameters") || low == QLatin1String("parameters") || low == QLatin1String("param"))
+        map = 2;
+    else if (!(low == QLatin1String("txalbedo") || low == QLatin1String("texture0") || low == QLatin1String("texdiffuse") || low == QLatin1String("diffuse") || low == QLatin1String("albedo")))
+        map = 0;  // unknown editable slot → albedo for Live preview
+    const QString mesh = mesh_path_for(mats_[static_cast<size_t>(mat_i)].file);
+    const TexPixels pix = decode_named(mesh, value);
+    if (pix.rgba.empty()) {
+        post_status(QStringLiteral("Texture set for Save, but no image found beside the mesh for “") + value + QStringLiteral("”"));
+        return;
+    }
+    for (int i : parts) {
+        if (i < 0 || i >= static_cast<int>(rows_.size())) continue;
+        if (map == 0) {
+            rows_[static_cast<size_t>(i)].albedo = value;
+            rows_[static_cast<size_t>(i)].tex_file = pix.path;
+        }
+        view_->setPartPixels(i, map, pix.rgba, pix.w, pix.h);
+    }
+    post_status(QStringLiteral("Preview · ") + QFileInfo(pix.path).fileName());
+}
+
+void MeshBridge::refresh_mat_tex_previews(int mat_i) {
+    if (!view_ || mat_i < 0 || mat_i >= static_cast<int>(mats_.size())) return;
+    const std::vector<int> parts = parts_for_mat(mat_i);
+    if (parts.empty()) return;
+    const QString mesh = mesh_path_for(mats_[static_cast<size_t>(mat_i)].file);
+    for (const TzTex& tex : mats_[static_cast<size_t>(mat_i)].block.textures) {
+        const QString key = QString::fromStdString(tex.key);
+        const QString value = QString::fromStdString(tex.value);
+        const QString low = key.toLower();
+        if (value.startsWith(QLatin1Char('$')) || low.contains(QLatin1String("env"))) continue;
+        int map = 0;
+        if (low == QLatin1String("txnormal") || low == QLatin1String("normal")) map = 1;
+        else if (low == QLatin1String("txparameters") || low == QLatin1String("parameters") || low == QLatin1String("param")) map = 2;
+        const TexPixels pix = decode_named(mesh, value);
+        if (pix.rgba.empty()) continue;
+        for (int i : parts) {
+            if (i < 0 || i >= static_cast<int>(rows_.size())) continue;
+            if (map == 0) {
+                rows_[static_cast<size_t>(i)].albedo = value;
+                rows_[static_cast<size_t>(i)].tex_file = pix.path;
+            }
+            view_->setPartPixels(i, map, pix.rgba, pix.w, pix.h);
+        }
+    }
+}
+
+void MeshBridge::sync_highlight() {
+    if (!view_ || mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size())) return;
+    const std::vector<int> parts = parts_for_mat(mat_i_);
+    std::vector<uint8_t> on(rows_.size(), 0);
+    for (int i : parts)
+        if (i >= 0 && i < static_cast<int>(on.size())) on[static_cast<size_t>(i)] = 1;
     view_->setHighlight(std::move(on));
 }
 void MeshBridge::toggleMesh(int index, int column) {
