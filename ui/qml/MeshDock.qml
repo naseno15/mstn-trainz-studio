@@ -52,6 +52,11 @@ Item {
         }
     }
 
+    // Flush any focused Field before Save / Save As (clicking the button may not blur TextInput).
+    function flushFields() {
+        forceActiveFocus()
+    }
+
     Flickable {
         id: scroller
         anchors.top: head.bottom
@@ -239,7 +244,10 @@ Item {
                 glyph: bridge.saveGlyph
                 fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                 tip: qsTr("Save")
-                onClicked: bridge.clickId("save")
+                onClicked: {
+                    dock.flushFields()
+                    Qt.callLater(function () { bridge.clickId("save") })
+                }
             }
             RaiseButton {
                 width: 36
@@ -248,7 +256,10 @@ Item {
                 glyph: bridge.saveGlyph
                 fontName: mi.name.length > 0 ? mi.name : bridge.iconFont
                 tip: qsTr("Save As")
-                onClicked: bridge.clickId("saveAs")
+                onClicked: {
+                    dock.flushFields()
+                    Qt.callLater(function () { bridge.clickId("saveAs") })
+                }
             }
         }
     }
@@ -339,12 +350,18 @@ Item {
     }
 
     component Field: Item {
+        id: field
         property string label: ""
         property string live: ""
         property bool lock: false
+        property string draft: ""
         signal commit(string text)
         width: parent ? parent.width : 200
         height: label.length > 0 ? 48 : 32
+        function flush() {
+            if (lock || !input.activeFocus) return
+            if (draft !== live) commit(draft)
+        }
         Text {
             id: lab
             visible: label.length > 0
@@ -402,20 +419,31 @@ Item {
                 selectByMouse: !lock
                 readOnly: lock
                 clip: true
-                text: input.activeFocus ? input.text : live
-                onEditingFinished: if (!lock) commit(text)
-                onAccepted: input.focus = false
+                // Draft while typing: the old live↔text binding wiped the edit on blur before commit.
+                text: activeFocus ? field.draft : field.live
+                onActiveFocusChanged: {
+                    if (activeFocus) {
+                        field.draft = field.live
+                    } else if (!field.lock && field.draft !== field.live) {
+                        field.commit(field.draft)
+                    }
+                }
+                onTextEdited: field.draft = text
+                onAccepted: focus = false
             }
         }
     }
 
     component Rgba: Column {
+        id: rgba
         property string which: ""
         property string title: ""
         property var ch: [0, 0, 0, 255]
         property string pick: ""
+        property var draft: [0, 0, 0, 255]
         width: parent.width
         spacing: 4
+        onChChanged: draft = [ch[0] || 0, ch[1] || 0, ch[2] || 0, ch[3] || 0]
         Text { text: title; color: dock.mute; font.pixelSize: 11 }
         Row {
             spacing: 4
@@ -460,9 +488,25 @@ Item {
                             verticalAlignment: TextInput.AlignVCenter
                             color: dock.ink
                             font.pixelSize: 11
-                            text: activeFocus ? text : String((ch && ch[index]) || 0)
                             validator: IntValidator { bottom: 0; top: 255 }
-                            onEditingFinished: bridge.setChannel(which, index, Number(text))
+                            // Same draft pattern as Field — blur used to wipe the typed value before setChannel.
+                            text: activeFocus ? String(rgba.draft[index] || 0) : String((ch && ch[index]) || 0)
+                            onActiveFocusChanged: {
+                                if (activeFocus) {
+                                    var d = [rgba.draft[0], rgba.draft[1], rgba.draft[2], rgba.draft[3]]
+                                    d[index] = (ch && ch[index]) || 0
+                                    rgba.draft = d
+                                } else {
+                                    bridge.setChannel(which, index, Number(rgba.draft[index]) || 0)
+                                }
+                            }
+                            onTextEdited: {
+                                var d = [rgba.draft[0], rgba.draft[1], rgba.draft[2], rgba.draft[3]]
+                                var v = parseInt(text, 10)
+                                d[index] = isFinite(v) ? Math.max(0, Math.min(255, v)) : 0
+                                rgba.draft = d
+                            }
+                            onAccepted: focus = false
                         }
                     }
                 }

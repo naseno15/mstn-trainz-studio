@@ -1,5 +1,17 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-18 (Asia/Bangkok) — Color / Type edit + save
+
+RGBA channel boxes use the same draft/commit pattern as Name. Colour swatches open `QColorDialog` (`color` / `emisPick` / `specPick`). Type chips match case-insensitively and write `StdOneTex` (not a duplicate `stdonetex`). Material Color / Emissive / Specular / Specular Power / Type are written on Save when the block has those offsets (StdOneTex on halser has them). Live Lit still shades from textures — colour edits are for the file, not a full material re-shade in the viewport.
+
+**Last updated:** 2026-10-18 (Asia/Bangkok) — Meshes Editor fields commit before Save
+
+The Name / texture / spin Fields kept a live↔text binding that reset the typed value on blur before `commit`, and Save often never stole focus from the TextInput, so renames never reached `setText` / the file. Fields now keep a draft, commit on blur from that draft, and Save / Save As `forceActiveFocus` + `Qt.callLater` so the write sees the new name.
+
+**Last updated:** 2026-10-18 (Asia/Bangkok) — Orphan material pick warns
+
+Picking a material with no matching part (name / albedo stem) posts ““…˝ is not on any geometry”. Attachment rows stay quiet. Changing a texture on an orphan material still saves the slot but says the preview is unchanged.
+
 **Last updated:** 2026-10-18 (Asia/Bangkok) — Meshes Editor texture pick updates Live preview
 
 Changing an Albedo / Normal / Parameters slot (browse or type) reloads that image onto matching parts via `MeshView::setPartPixels` (no camera reframe). Resolve still looks beside the mesh (`name.texture` → sibling `.texture.txt` Primary). Missing images keep the old preview and say so on the status line. Undo re-applies the current material's maps.

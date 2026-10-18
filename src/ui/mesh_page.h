@@ -202,6 +202,7 @@ private:
     void note_atts(std::vector<ViewAtt>& gizmos);
     void sync_highlight();
     void focus_selection();
+    void note_mat_geo();  // status when the picked material is not on any part
     QString mesh_path_for(int file) const;
     std::vector<int> parts_for_mat(int mat_i) const;
     void apply_mat_tex_preview(int mat_i, const QString& slot, const QString& value, const std::vector<int>& parts);

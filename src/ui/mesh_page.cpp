@@ -28,6 +28,7 @@
 #include <QImage>
 #include <QImageReader>
 #include <QThreadPool>
+#include <QColorDialog>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHash>
@@ -1280,13 +1281,15 @@ void MeshBridge::publish() {
     const bool has = mat_i_ >= 0 && mat_i_ < static_cast<int>(mats_.size());
     const MatEdit blank;
     const MatEdit& cur = has ? mats_[static_cast<size_t>(mat_i_)] : blank;
-    const char* type_names[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "stdonetex", "glass", "clutter", "foliage"};
+    // Trainz casing as written in .trainzmesh (StdOneTex, not stdonetex).
+    const char* type_names[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "StdOneTex", "glass", "clutter", "foliage"};
     QJsonArray types;
     int type_i = 0;
     bool type_found = false;
+    const QString cur_type = QString::fromStdString(cur.block.type_name);
     for (int i = 0; i < 8; ++i) {
         types.append(QString::fromLatin1(type_names[i]));
-        if (cur.block.type_name == type_names[i]) {
+        if (cur_type.compare(QLatin1String(type_names[i]), Qt::CaseInsensitive) == 0) {
             type_i = i;
             type_found = true;
         }
@@ -1738,6 +1741,22 @@ void MeshBridge::clickId(const QString& id) {
         return;
     } else if (id == QLatin1String("save") || id == QLatin1String("saveAs")) {
         save_files(id == QLatin1String("saveAs"));
+    } else if (id == QLatin1String("color") || id == QLatin1String("emisPick") || id == QLatin1String("specPick")) {
+        if (mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size())) return;
+        const auto undo = qScopeGuard([this, before = snap()] { record(before); });
+        TzMaterial& block = mats_[static_cast<size_t>(mat_i_)].block;
+        float* dest = id == QLatin1String("color") ? block.color : id == QLatin1String("emisPick") ? block.emissive : block.specular;
+        const QString title = id == QLatin1String("color") ? QStringLiteral("Material Color") : id == QLatin1String("emisPick") ? QStringLiteral("Emissive") : QStringLiteral("Specular");
+        const QColor start(byte_of(dest[0]), byte_of(dest[1]), byte_of(dest[2]), byte_of(dest[3]));
+        const QColor picked = QColorDialog::getColor(start, nullptr, title, QColorDialog::ShowAlphaChannel);
+        if (!picked.isValid()) return;
+        dest[0] = picked.red() / 255.f;
+        dest[1] = picked.green() / 255.f;
+        dest[2] = picked.blue() / 255.f;
+        dest[3] = picked.alpha() / 255.f;
+        dirty_ = true;
+        post_status(title + QStringLiteral(" set · Save to write the file"));
+        publish();
     }
 }
 
@@ -2021,11 +2040,12 @@ void MeshBridge::setCombo(const QString& key, int index) {
         env_i_ = index;
         if (view_) view_->setEnvironment(index);
     } else if (key == QLatin1String("type") && mat_i_ >= 0 && mat_i_ < static_cast<int>(mats_.size())) {
-        const char* type_names[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "stdonetex", "glass", "clutter", "foliage"};
+        const char* type_names[] = {"pbrmetal", "pbrmetalmasked", "pbrmetaldetail", "pbrmetalspec", "StdOneTex", "glass", "clutter", "foliage"};
         MatEdit& edit = mats_[static_cast<size_t>(mat_i_)];
+        const QString cur_type = QString::fromStdString(edit.block.type_name);
         bool known = false;
         for (const char* name : type_names) {
-            if (edit.block.type_name == name) known = true;
+            if (cur_type.compare(QLatin1String(name), Qt::CaseInsensitive) == 0) known = true;
         }
         int at = index;
         if (!known && !edit.block.type_name.empty()) {
@@ -2038,6 +2058,7 @@ void MeshBridge::setCombo(const QString& key, int index) {
         if (at >= 0 && at < 8) {
             edit.block.type_name = type_names[at];
             dirty_ = true;
+            post_status(QStringLiteral("Type → %1 · Save to write the file").arg(QString::fromLatin1(type_names[at])));
         }
     }
     publish();
@@ -2063,7 +2084,13 @@ void MeshBridge::setText(const QString& key, const QString& text) {
             }
         }
         if (changed) {
-            apply_mat_tex_preview(mat_i_, slot, text, parts);
+            if (parts.empty() && edit.gizmo < 0) {
+                QString shown = QString::fromStdString(edit.block.name).trimmed();
+                if (shown.isEmpty()) shown = QStringLiteral("(unnamed)");
+                post_status(QStringLiteral("Texture set for Save, but “%1” is not on any geometry — preview unchanged").arg(shown));
+            } else {
+                apply_mat_tex_preview(mat_i_, slot, text, parts);
+            }
             sync_highlight();
         }
     } else return;
@@ -2136,6 +2163,7 @@ void MeshBridge::pickList(const QString& list, int index) {
         mat_i_ = index;
         sync_highlight();
         focus_selection();
+        note_mat_geo();
     } else if (list == QLatin1String("atts") && index >= 0 && index < static_cast<int>(att_rows_.size())) {
         pick_att(index);
         if (view_) view_->setAttSelected(index);
@@ -2148,6 +2176,7 @@ void MeshBridge::pickMat(int index) {
     mat_i_ = mat_owner_[static_cast<size_t>(index)];
     sync_highlight();
     focus_selection();
+    note_mat_geo();
     publish();
 }
 void MeshBridge::focus_selection() {
@@ -2180,17 +2209,27 @@ std::vector<int> MeshBridge::parts_for_mat(int mat_i) const {
         const QString s = stem(QString::fromStdString(tex.value));
         if (!s.isEmpty() && !s.startsWith(QLatin1Char('$'))) stems.insert(s);
     }
-    std::vector<int> file_parts;
     for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
         if (part_file_.value(i) != edit.file) continue;
-        file_parts.push_back(i);
         const MeshRow& row = rows_[static_cast<size_t>(i)];
         const bool named = !name.isEmpty() && (row.name.compare(name, Qt::CaseInsensitive) == 0 || row.material.compare(name, Qt::CaseInsensitive) == 0);
         if (named || (!row.albedo.isEmpty() && stems.contains(stem(row.albedo)))) out.push_back(i);
     }
-    // One-part mesh with a loose material name: still preview on that part.
-    if (out.empty() && file_parts.size() == 1) out = file_parts;
     return out;
+}
+
+void MeshBridge::note_mat_geo() {
+    if (mat_i_ < 0 || mat_i_ >= static_cast<int>(mats_.size())) return;
+    const MatEdit& edit = mats_[static_cast<size_t>(mat_i_)];
+    if (edit.gizmo >= 0) return;  // attachment row, not a mesh material
+    if (rows_.empty()) {
+        post_status(QStringLiteral("No geometry loaded"));
+        return;
+    }
+    if (!parts_for_mat(mat_i_).empty()) return;
+    QString name = QString::fromStdString(edit.block.name).trimmed();
+    if (name.isEmpty()) name = QStringLiteral("(unnamed)");
+    post_status(QStringLiteral("“%1” is not on any geometry").arg(name));
 }
 
 void MeshBridge::apply_mat_tex_preview(int mat_i, const QString& slot, const QString& value, const std::vector<int>& parts) {
