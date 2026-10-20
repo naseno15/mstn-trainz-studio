@@ -1286,6 +1286,13 @@ void Texmesh::drop_paths(const QStringList& paths) {
 }
 
 void Texmesh::pick_row(int row) {
+    // Parameter queue is a QListWidget; texture/meshops use the tables.
+    if (page_ == QLatin1String("parameter")) {
+        if (param_queue_ == nullptr || row < 0 || row >= param_queue_->count()) return;
+        param_queue_->setCurrentRow(row);  // opens via currentRowChanged
+        emit changed();
+        return;
+    }
     QTableWidget* table = page_ == QLatin1String("meshops") ? lm_table_ : tex_table_;
     if (table == nullptr || row < 0 || row >= table->rowCount()) return;
     table->selectRow(row);
@@ -1317,7 +1324,7 @@ QString Texmesh::form_blocks() const {
     } else if (page_ == QLatin1String("parameter")) {
         QJsonArray tail{jbuttons({{QStringLiteral("paramUndo"), QStringLiteral("Undo")}, {QStringLiteral("paramRedo"), QStringLiteral("Redo")}, {QStringLiteral("paramRevert"), QStringLiteral("Revert")}}, false), jnote(param_path_.isEmpty() ? QStringLiteral("No map") : QFileInfo(param_path_).fileName() + QStringLiteral("  ") + QString::number(param_image_.width()) + QLatin1Char('x') + QString::number(param_image_.height())), jbuttons({{QStringLiteral("paramSave"), QStringLiteral("Save (overwrite)")}}, true)};
         if (form_tab_ == 1) {
-            rows = {jnote(param_path_), jsection(QStringLiteral("OVERLAY")), jpills(QStringLiteral("ovMode"), QStringLiteral("Mode"), {QStringLiteral("multiply"), QStringLiteral("add"), QStringLiteral("replace")}, ov_mode_), jpills(QStringLiteral("ovSrc"), QStringLiteral("Source"), {QStringLiteral("gray"), QStringLiteral("R"), QStringLiteral("G"), QStringLiteral("B"), QStringLiteral("A")}, ov_src_), jfield(QStringLiteral("ovOpacity"), QStringLiteral("Opacity"), QString::number(ov_opacity_)), jbuttons({{QStringLiteral("paramOverlay"), QStringLiteral("Overlay image…")}}, false), jnote(QStringLiteral("Paint → Stamp uses this mode, source, and opacity."))};
+            rows = {jnote(param_path_), jsection(QStringLiteral("OVERLAY")), jpills(QStringLiteral("ovMode"), QStringLiteral("Mode"), {QStringLiteral("multiply"), QStringLiteral("add"), QStringLiteral("replace")}, ov_mode_), jpills(QStringLiteral("ovSrc"), QStringLiteral("Sample from stamp"), {QStringLiteral("gray"), QStringLiteral("R"), QStringLiteral("G"), QStringLiteral("B"), QStringLiteral("A")}, ov_src_), jfield(QStringLiteral("ovOpacity"), QStringLiteral("Opacity"), QString::number(ov_opacity_)), jbuttons({{QStringLiteral("paramOverlay"), QStringLiteral("Overlay image…")}}, false), jnote(QStringLiteral("Writes into Adjust → CHANNELS (ticks). Sample = which stamp channel to read. Or drop a grey image on a channel box below."))};
         } else if (form_tab_ == 2) {
             rows = {jnote(param_path_), jpills(QStringLiteral("paintTool"), QStringLiteral("Tool"), {QStringLiteral("Brush"), QStringLiteral("Stamp"), QStringLiteral("Magic")}, paint_tool_), jsection(QStringLiteral("BRUSH")), jfield(QStringLiteral("brush"), QStringLiteral("Radius"), QString::number(brush_)), jfield(QStringLiteral("paintVal"), QStringLiteral("Value"), QString::number(paint_val_)), jfield(QStringLiteral("hard"), QStringLiteral("Hardness"), QString::number(hard_)), jsection(QStringLiteral("MAGIC")), jfield(QStringLiteral("tol"), QStringLiteral("Tolerance"), QString::number(tol_)), jcheck(QStringLiteral("contig"), QStringLiteral("Contiguous"), contig_), jsection(QStringLiteral("STAMP")), jnote(stamp_note_), jbuttons({{QStringLiteral("paramStamp"), QStringLiteral("Apply stamp")}, {QStringLiteral("paramStampCancel"), QStringLiteral("Cancel")}}, true), jbuttons({{QStringLiteral("paramClearSel"), QStringLiteral("Clear select")}}, false)};
         } else if (form_tab_ == 3) {
