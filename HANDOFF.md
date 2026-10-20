@@ -1,8 +1,16 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-20 (Asia/Bangkok) — Material Color in Live viewport
+
+Material Color drives the viewport in Material / Lit / Albedo (not Solid/Wireframe clay). No albedo → flat `u_flat_color` from the mat; with albedo → texture × colour. Load paints `ViewPart::color` from matching mats; channel / swatch edits and undo call `apply_mat_color_preview`. StdZeroTex like `arrow.trainzmesh` / `red.m.m.notex` shows red live.
+
+**Last updated:** 2026-10-20 (Asia/Bangkok) — Texture Editor Overlay vs CHANNELS + queue pick
+
+Overlay **Sample from stamp** (gray/R/G/B/A) only chooses which channel to *read* from the stamp. Destination channels are the Adjust → CHANNELS ticks (`ch_r_`…`ch_a_`, all on by default) — that is why Overlay looked like it painted the whole map. Dropping a grey image onto a channel box still replaces that one channel. `pick_row` on the parameter page now sets `param_queue_` current row (Maps list clicks open that image).
+
 **Last updated:** 2026-10-18 (Asia/Bangkok) — Color / Type edit + save
 
-RGBA channel boxes use the same draft/commit pattern as Name. Colour swatches open `QColorDialog` (`color` / `emisPick` / `specPick`). Type chips match case-insensitively and write `StdOneTex` (not a duplicate `stdonetex`). Material Color / Emissive / Specular / Specular Power / Type are written on Save when the block has those offsets (StdOneTex on halser has them). Live Lit still shades from textures — colour edits are for the file, not a full material re-shade in the viewport.
+RGBA channel boxes use the same draft/commit pattern as Name. Colour swatches open `QColorDialog` (`color` / `emisPick` / `specPick`). Type chips match case-insensitively and write `StdOneTex` (not a duplicate `stdonetex`). Material Color / Emissive / Specular / Specular Power / Type are written on Save when the block has those offsets (StdOneTex on halser has them).
 
 **Last updated:** 2026-10-18 (Asia/Bangkok) — Meshes Editor fields commit before Save
 
@@ -122,7 +130,7 @@ Packages fills the three columns: the left queue takes a CDP, tzarc, zip, or fol
 
 Opening Smart TrainzUtil probes the Launcher, then lists installed assets (`filterbystatus I`). The sidebar **Data** button opens the folder from `getinstallationdatapath`. **Refresh** and **Scan** run that probe again; the status line changes to “Checking Launcher…” while it runs. The Launcher must be open with Advanced debug tools on, or the status line says so and the table stays empty.
 
-**Root:** `c:\trs22\trainz_studio_cpp\` (this repo). Python leftovers stay in `c:\trs22\trainz_studio\`. These are separate directories. Do not junction them.  
+**Root:** `c:\trs22\trainz_studio_cpp\` (this repo). The Python `trainz_studio/` tree was removed; this directory is the only Trainz Studio source.  
 **Exe:** `build\trainz_studio_cpp.exe` (Windows GUI — double-click does not open a terminal)  
 **QML:** `ui/qml` via `QML_DIR`  
 **Toolchain:** Qt `C:\Users\Naito\Qt`, MinGW `C:\Users\Naito\Qt\Tools\mingw1310_64`, CMake from Python 3.12, Ninja `Python312\Scripts\ninja.exe`  
@@ -172,7 +180,7 @@ Mesh Lods, Texture Params, Texture Editor, and Texture Denoiser share a 260px ri
 
 A compile definition that only one check needs (such as `FIXTURE_DIR`) belongs on that check target, not on `trainz_ui`.
 
-## TrainzUtil parity (Python trainzutil_host.py / trainz_install.py)
+## TrainzUtil
 - Library: the loading sheet waits on the Content Manager list only. Modified/Size fill in from the content index after the rows are up; author names follow from the cache. The cache stamp is a decimal string in ~/.cache/trainz_studio/tu-archive-meta.json (a JSON number cannot hold a nanosecond mtime, so a numeric stamp reopened every archive on each launch). Type codes -> names (trainz_meta.cpp category_label).
 - View Detail: picks drive sidebar cards (cover, deps, credits, status). Tools: Inspect/Export/Each CDP/Tuner (-> Engine page, save commits back)/Packages (-> Assets)/Edit/Submit/Validate/Backups/GameScript. Export and Each CDP fill the right Progress list (`N of M`) the same way Validate does.
 - GameScript page (nav id `encrypt`): TrainzUtil `encrypt` writes `.gse` beside `.gs` by asking the running game. Container is 16 bytes: `u32` version 2, `u32` 0, `u32` payload size, `u32` 0. Payload is a packed image under a per-byte XOR (one literal edit flips one ciphertext byte by the plaintext xor; repetitive text packs smaller first). Not chump, tzarc, or lzss. No decrypt command. Fixture pair: `checks/fixtures/gamescript/alsthom_mainlib.gs` + `.gse`.
