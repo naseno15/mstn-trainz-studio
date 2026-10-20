@@ -195,7 +195,8 @@ vec3 sampleEnv(vec3 d, float roughness) {
     return c;
 }
 void main() {
-    vec4 albedo = (u_use_tex > 0.5) ? texture(u_albedo, v_uv) : vec4(u_flat_color, 1.0);
+    vec4 albedo = (u_use_tex > 0.5) ? texture(u_albedo, v_uv) : vec4(1.0);
+    albedo.rgb *= u_flat_color;
     if (albedo.a < 0.04) discard;
     float roughness = 0.55;
     float metallic = 0.0;
@@ -530,6 +531,15 @@ void MeshView::setPartPixels(int index, int map, const std::vector<unsigned char
         part.prm_h = h;
     }
     upload_pending_ = true;
+    update();
+}
+
+void MeshView::setPartColor(int index, float r, float g, float b) {
+    if (index < 0 || index >= static_cast<int>(parts_.size())) return;
+    ViewPart& part = parts_[static_cast<size_t>(index)];
+    part.color[0] = r;
+    part.color[1] = g;
+    part.color[2] = b;
     update();
 }
 
@@ -1813,7 +1823,8 @@ void MeshView::paintGL() {
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, sun_tex_);
     glUniform1f(glGetUniformLocation(mesh_prog_, "u_use_tex"), 1.f);
-    glUniform3f(glGetUniformLocation(mesh_prog_, "u_flat_color"), 0.72f, 0.74f, 0.78f);
+    const int flat_loc = glGetUniformLocation(mesh_prog_, "u_flat_color");
+    glUniform3f(flat_loc, 0.72f, 0.74f, 0.78f);
     const int two_loc = glGetUniformLocation(mesh_prog_, "u_two_sided");
     glUniform1f(glGetUniformLocation(mesh_prog_, "u_face"), face_orient_ ? 1.f : 0.f);
     const int has_n = glGetUniformLocation(mesh_prog_, "u_has_normal");
@@ -1833,6 +1844,9 @@ void MeshView::paintGL() {
         glUniform1f(has_n, use_maps && maps.normal ? 1.f : 0.f);
         glUniform1f(has_p, use_maps && maps.parameter ? 1.f : 0.f);
         glUniform1f(glGetUniformLocation(mesh_prog_, "u_use_tex"), !clay && maps.albedo ? 1.f : 0.f);
+        // Solid/Wireframe stay clay; Material/Lit use Material Color (and tint albedo when present).
+        if (clay) glUniform3f(flat_loc, 0.72f, 0.74f, 0.78f);
+        else if (p < parts_.size()) glUniform3f(flat_loc, parts_[p].color[0], parts_[p].color[1], parts_[p].color[2]);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, use_maps && maps.normal ? maps.normal : white_tex_);
         glActiveTexture(GL_TEXTURE2);

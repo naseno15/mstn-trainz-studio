@@ -43,6 +43,7 @@ struct ViewPart {
     bool two_sided = false;
     QString material;
     int file = 0;  // scene file index; picks the per-file animation matrix
+    float color[3] = {0.72f, 0.74f, 0.78f};  // Material Color; clay default until a mat binds
 };
 
 int studio_softbox_peak();
@@ -58,6 +59,7 @@ public:
     void updateAttachment(int index, const ViewAtt& att);
     // map: 0 albedo, 1 normal, 2 parameters. Updates GPU maps without reframing the camera.
     void setPartPixels(int index, int map, const std::vector<unsigned char>& rgba, int w, int h);
+    void setPartColor(int index, float r, float g, float b);
     void setAttFileShown(int file, bool on);
     void setAttSelected(int index);
     // Move tool: left-drag an attachment. On an axis line: along that axis. On the origin: in the view plane. Esc cancels.

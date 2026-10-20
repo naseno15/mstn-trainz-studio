@@ -586,6 +586,7 @@ void MeshBridge::load_file(const QString& path) {
     }
     report_load(QStringLiteral("Uploading mesh…"), 98);
     part_file_.assign(rows_.size(), 0);
+    paint_drawn_colors(drawn);
     note_atts(gizmos);
     if (view_) {
         view_->setParts(std::move(drawn));
@@ -849,6 +850,7 @@ void MeshBridge::load_scene(const QStringList& paths, const QStringList& labels,
         }
     }
     report_load(QStringLiteral("Uploading %1 parts to the GPU").arg(drawn.size()), 96);
+    paint_drawn_colors(drawn);
     note_atts(gizmos);
     if (view_) {
         view_->setParts(std::move(drawn));
@@ -1076,6 +1078,7 @@ void MeshBridge::restore(const EditSnap& state) {
     }
     dirty_ = true;
     if (mat_i_ >= 0) refresh_mat_tex_previews(mat_i_);
+    for (int m = 0; m < static_cast<int>(mats_.size()); ++m) apply_mat_color_preview(m);
     sync_highlight();
     publish();
 }
@@ -1755,6 +1758,7 @@ void MeshBridge::clickId(const QString& id) {
         dest[2] = picked.blue() / 255.f;
         dest[3] = picked.alpha() / 255.f;
         dirty_ = true;
+        if (id == QLatin1String("color")) apply_mat_color_preview(mat_i_);
         post_status(title + QStringLiteral(" set · Save to write the file"));
         publish();
     }
@@ -2152,6 +2156,7 @@ void MeshBridge::setChannel(const QString& which, int index, double value) {
     if (!dest) return;
     dest[index] = static_cast<float>(value) / 255.f;
     dirty_ = true;
+    if (which == QLatin1String("color")) apply_mat_color_preview(mat_i_);
     publish();
 }
 void MeshBridge::pickList(const QString& list, int index) {
@@ -2216,6 +2221,24 @@ std::vector<int> MeshBridge::parts_for_mat(int mat_i) const {
         if (named || (!row.albedo.isEmpty() && stems.contains(stem(row.albedo)))) out.push_back(i);
     }
     return out;
+}
+
+void MeshBridge::paint_drawn_colors(std::vector<ViewPart>& drawn) const {
+    for (int m = 0; m < static_cast<int>(mats_.size()); ++m) {
+        const float* c = mats_[static_cast<size_t>(m)].block.color;
+        for (int i : parts_for_mat(m)) {
+            if (i < 0 || i >= static_cast<int>(drawn.size())) continue;
+            drawn[static_cast<size_t>(i)].color[0] = c[0];
+            drawn[static_cast<size_t>(i)].color[1] = c[1];
+            drawn[static_cast<size_t>(i)].color[2] = c[2];
+        }
+    }
+}
+
+void MeshBridge::apply_mat_color_preview(int mat_i) {
+    if (!view_ || mat_i < 0 || mat_i >= static_cast<int>(mats_.size())) return;
+    const float* c = mats_[static_cast<size_t>(mat_i)].block.color;
+    for (int i : parts_for_mat(mat_i)) view_->setPartColor(i, c[0], c[1], c[2]);
 }
 
 void MeshBridge::note_mat_geo() {

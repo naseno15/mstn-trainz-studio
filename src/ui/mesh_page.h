@@ -206,6 +206,8 @@ private:
     QString mesh_path_for(int file) const;
     std::vector<int> parts_for_mat(int mat_i) const;
     void apply_mat_tex_preview(int mat_i, const QString& slot, const QString& value, const std::vector<int>& parts);
+    void apply_mat_color_preview(int mat_i);
+    void paint_drawn_colors(std::vector<ViewPart>& drawn) const;
     void refresh_mat_tex_previews(int mat_i);
     void report_load(const QString& stage, int pct);
     void bind_anims();
