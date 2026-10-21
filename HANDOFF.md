@@ -1,5 +1,9 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-22 (Asia/Bangkok) — Terminal commands on the same exe
+
+`trainz_studio_cpp.exe` with no command still opens the window. Static and the day-to-day build are that same target. A known first argument runs headless and exits before the boot dialog and `session.lock`: `help`, `version`, `kuid`, `mesh`, `cdp`, `tzarc`, `chump`, `zip`, `texture`, `wav`, `engine`, `lm`, `kin`. Redirected stdout and stderr go out with WriteFile. With no redirect the parent console is attached. cmd.exe keeps the exit code. PowerShell may leave `$LASTEXITCODE` empty for this GUI-subsystem exe; `Start-Process -Wait -PassThru` shows `ExitCode`. `list_tzarc` reads the directory without inflating every member. `check_cli` covers dispatch plus the mesh, CDP, tzarc, and wav fixtures.
+
 **Last updated:** 2026-10-22 (Asia/Bangkok) — Mesh drop after Clear
 
 Clear meshes puts the full-page drop target back (the chrome mask used to stay holed, so a drop on the empty view never arrived). A drop on the welcome screen replaces the scene. A file that does not open is not kept in the scene list, so the next `.fbx` cannot reload the previous `.fbx` + `.trainzmesh` set. The viewport itself accepts drops while a mesh is open.
