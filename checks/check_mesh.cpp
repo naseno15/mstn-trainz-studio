@@ -224,6 +224,33 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "page center lit %d\n", shown);
     assert(shown > 40);
+    {
+        // Clear must drop the previous set. A failed .trainzmesh must not come back when the next file is an .fbx.
+        auto* mesh = page.findChild<MeshBridge*>();
+        const QString tm = QFileInfo(fixture).absoluteFilePath();
+        const QString fbx = QFileInfo(fixture).dir().filePath(QStringLiteral("tri.fbx"));
+        assert(QFileInfo::exists(fbx));
+        mesh->dropUrls({QUrl::fromLocalFile(fbx).toString(), QUrl::fromLocalFile(tm).toString()});
+        app.processEvents();
+        assert(page.sideJson().contains(QStringLiteral("tri.fbx")));
+        assert(page.sideJson().contains(QStringLiteral("tri.trainzmesh")));
+        mesh->clickId(QStringLiteral("clearMesh"));
+        app.processEvents();
+        assert(!page.sideJson().contains(QStringLiteral("tri.fbx")));
+        assert(!page.sideJson().contains(QStringLiteral("tri.trainzmesh")));
+        mesh->dropUrls({QUrl::fromLocalFile(tm).toString()});
+        app.processEvents();
+        assert(page.sideJson().contains(QStringLiteral("tri.trainzmesh")));
+        assert(!page.sideJson().contains(QStringLiteral("tri.fbx")));
+        mesh->clickId(QStringLiteral("clearMesh"));
+        mesh->dropUrls({QUrl::fromLocalFile(QDir::temp().filePath(QStringLiteral("missing.trainzmesh"))).toString()});
+        app.processEvents();
+        mesh->dropUrls({QUrl::fromLocalFile(fbx).toString()});
+        app.processEvents();
+        assert(page.sideJson().contains(QStringLiteral("tri.fbx")));
+        assert(!page.sideJson().contains(QStringLiteral("missing.trainzmesh")));
+        assert(!page.sideJson().contains(QStringLiteral("tri.trainzmesh")));
+    }
     page.close();
     std::printf("check_mesh: ok\n");
     return 0;
