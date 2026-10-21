@@ -72,7 +72,7 @@ target_include_directories(trainz_ui PUBLIC src)
 target_compile_definitions(trainz_ui PUBLIC ${trainz_qml_define} ${trainz_qt_define} TRAINZ_STUDIO_VERSION="${PROJECT_VERSION}")
 target_precompile_headers(trainz_ui PRIVATE src/ui/qt_pch.h)
 
-qt_add_executable(trainz_studio_cpp src/main.cpp)
+qt_add_executable(trainz_studio_cpp src/main.cpp src/cli.cpp)
 target_link_libraries(trainz_studio_cpp PRIVATE trainz_ui)
 set_target_properties(trainz_studio_cpp PROPERTIES WIN32_EXECUTABLE TRUE)
 
@@ -112,6 +112,11 @@ endfunction()
 
 add_executable(check_boot checks/check_boot.cpp)
 target_link_libraries(check_boot PRIVATE Qt6::Core Qt6::Widgets)
+
+add_executable(check_cli checks/check_cli.cpp src/cli.cpp)
+target_link_libraries(check_cli PRIVATE trainz_io)
+target_include_directories(check_cli PRIVATE src)
+target_compile_definitions(check_cli PRIVATE FIXTURE_DIR="${CMAKE_SOURCE_DIR}/checks/fixtures" TRAINZ_STUDIO_VERSION="${PROJECT_VERSION}")
 
 add_executable(check_formats checks/check_formats.cpp)
 target_link_libraries(check_formats PRIVATE trainz_io)
