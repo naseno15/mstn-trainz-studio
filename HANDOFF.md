@@ -1,5 +1,9 @@
 # MSTN Trainz Studio C++ — continuation handoff
 
+**Last updated:** 2026-10-22 (Asia/Bangkok) — Mesh drop after Clear
+
+Clear meshes puts the full-page drop target back (the chrome mask used to stay holed, so a drop on the empty view never arrived). A drop on the welcome screen replaces the scene. A file that does not open is not kept in the scene list, so the next `.fbx` cannot reload the previous `.fbx` + `.trainzmesh` set. The viewport itself accepts drops while a mesh is open.
+
 **Last updated:** 2026-10-20 (Asia/Bangkok) — Material Color in Live viewport
 
 Material Color drives the viewport in Material / Lit / Albedo (not Solid/Wireframe clay). No albedo → flat `u_flat_color` from the mat; with albedo → texture × colour. Load paints `ViewPart::color` from matching mats; channel / swatch edits and undo call `apply_mat_color_preview`. StdZeroTex like `arrow.trainzmesh` / `red.m.m.notex` shows red live.
