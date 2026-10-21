@@ -32,8 +32,11 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHash>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMimeData>
 #include <QRegion>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -386,6 +389,9 @@ void MeshBridge::load_file(const QString& path) {
     loading_ = true;
     load_steps_ = 0;
     load_name_ = QFileInfo(path).fileName();
+    const QStringList kept_paths = scene_paths_;
+    const bool kept_scene = scene_;
+    const QList<double> kept_yaws = scene_yaws_;
     scene_ = false;
     scene_paths_ = {path};
     scene_yaws_.clear();
@@ -396,10 +402,16 @@ void MeshBridge::load_file(const QString& path) {
     };
     report_load(QStringLiteral("Opening mesh…"), 4);
     QFile file(path);
+    // A file that never opens must not stay in scene_paths_. The next drop appends to that list,
+    // which is how a failed .trainzmesh made the following .fbx reload the previous set.
     if (!file.open(QIODevice::ReadOnly)) {
+        scene_paths_ = kept_paths;
+        scene_ = kept_scene;
+        scene_yaws_ = kept_yaws;
         tip_ = QStringLiteral("Could not open mesh");
         post_status(tip_ + QStringLiteral(" ") + load_name_);
         stop();
+        publish();
         return;
     }
     report_load(QStringLiteral("Reading file…"), 12);
@@ -535,12 +547,37 @@ void MeshBridge::load_file(const QString& path) {
             }
         }
     } catch (const std::exception& error) {
+        // Parse already wiped the in-memory scene. Drop the GPU copy too, or the old set stays on screen.
+        scene_ = false;
+        scene_paths_.clear();
+        scene_yaws_.clear();
+        file_shows_.clear();
+        file_attl_.clear();
+        part_file_.clear();
+        rows_.clear();
+        mats_.clear();
+        file_bytes_.clear();
+        path_.clear();
+        welcome_ = true;
+        editor_open_ = false;
+        shortcut_.clear();
+        bounds_set_ = false;
         att_count_ = 0;
         att_rows_.clear();
         att_i_ = -1;
-        if (view_) view_->setAttachments({});
+        stop_anim();
+        clips_.clear();
+        file_clip_.clear();
+        if (view_) {
+            view_->setFileAnims({});
+            view_->setParts({});
+            view_->setAttachments({});
+        }
         tip_ = QString::fromUtf8(error.what());
+        post_status(load_name_ + QStringLiteral(" — ") + tip_);
         stop();
+        publish();
+        reveal_view();
         return;
     }
     QStringList names;
@@ -1554,16 +1591,26 @@ void MeshBridge::dropUrls(const QVariantList& urls) {
         post_status(QStringLiteral("Still loading — drop again when it finishes"));
         return;
     }
-    // Drops append to the scene. ponytail: 2+ files load through the read-only scene preview
+    // Drops append while a scene is open. ponytail: 2+ files load through the read-only scene preview
     // (no per-mesh editing, whole scene reloads each drop); upgrade = incremental part append.
+    // Welcome / empty is a new scene: appending here reloaded the FBX+trainzmesh set after Clear.
+    auto local_path = [](const QString& raw) {
+        const QUrl url(raw);
+        return QFileInfo(url.isLocalFile() ? url.toLocalFile() : raw).absoluteFilePath();
+    };
+    auto listed = [](const QStringList& all, const QString& path) {
+        for (const QString& have : all)
+            if (QFileInfo(have).absoluteFilePath().compare(path, Qt::CaseInsensitive) == 0) return true;
+        return false;
+    };
     QStringList ok;
     QStringList kins;
     int skipped = 0;
     for (const QVariant& value : urls) {
-        const QUrl url(value.toString());
-        const QString path = url.isLocalFile() ? url.toLocalFile() : value.toString();
-        if (path.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) ok << path;
-        else if (path.endsWith(QLatin1String(".kin"), Qt::CaseInsensitive)) kins << path;
+        const QString path = local_path(value.toString());
+        if (path.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".im"), Qt::CaseInsensitive) || path.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) {
+            if (!listed(ok, path)) ok << path;
+        } else if (path.endsWith(QLatin1String(".kin"), Qt::CaseInsensitive)) kins << path;
         else ++skipped;
     }
     if (ok.isEmpty() && kins.isEmpty()) {
@@ -1571,8 +1618,13 @@ void MeshBridge::dropUrls(const QVariantList& urls) {
         return;
     }
     if (!ok.isEmpty()) {
-        QStringList all = scene_paths_;
-        for (const QString& p : ok) if (!all.contains(p)) all << p;
+        QStringList all;
+        if (welcome_ || scene_paths_.isEmpty()) all = ok;
+        else {
+            all = scene_paths_;
+            for (const QString& p : ok)
+                if (!listed(all, p)) all << p;
+        }
         if (all.size() == 1) load_file(all.first());
         else {
             QStringList labels;
@@ -1741,6 +1793,7 @@ void MeshBridge::clickId(const QString& id) {
             view_->setAttachments({});
         }
         publish();
+        reveal_view();
         return;
     } else if (id == QLatin1String("save") || id == QLatin1String("saveAs")) {
         save_files(id == QLatin1String("saveAs"));
@@ -2372,6 +2425,7 @@ void MeshBridge::refresh_nav() {
 MeshStudioPage::MeshStudioPage(QWidget* parent) : QWidget(parent) {
     load_material_icons();
     gl_ = new MeshView(this);
+    gl_->setAcceptDrops(true);
     bridge_ = new MeshBridge(this);
     connect(bridge_, &MeshBridge::homeRequested, this, &MeshStudioPage::homeRequested);
     view_ = new QQuickWidget(this);
@@ -2386,6 +2440,7 @@ MeshStudioPage::MeshStudioPage(QWidget* parent) : QWidget(parent) {
     view_->setSource(res_url(qml_file()));
     view_->raise();
     view_->installEventFilter(this);
+    gl_->installEventFilter(this);
     qApp->installEventFilter(this);
     if (QLabel* hud = gl_->findChild<QLabel*>()) {
         hud->setParent(this);
@@ -2442,7 +2497,17 @@ bool MeshStudioPage::filter_tab(QEvent* event) {
 }
 
 bool MeshStudioPage::eventFilter(QObject* watched, QEvent* event) {
-    Q_UNUSED(watched);
+    if (watched == gl_ && bridge_ && (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove || event->type() == QEvent::Drop)) {
+        auto* drop = static_cast<QDropEvent*>(event);
+        if (!drop->mimeData() || !drop->mimeData()->hasUrls()) return false;
+        if (event->type() == QEvent::Drop) {
+            QVariantList urls;
+            for (const QUrl& url : drop->mimeData()->urls()) urls << url.toString();
+            bridge_->dropUrls(urls);
+        }
+        drop->acceptProposedAction();
+        return true;
+    }
     if (filter_tab(event)) return true;
     if (watched == view_ && gl_ && (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
         auto* key = static_cast<QKeyEvent*>(event);
