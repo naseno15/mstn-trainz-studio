@@ -1,7 +1,12 @@
+#include "cli.h"
 #include "ui/app_update.h"
 #include "ui/crash_report.h"
 #include "ui/feedback.h"
 #include "ui/shell_window.h"
+
+#include <cstdio>
+#include <iostream>
+#include <streambuf>
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -268,7 +273,72 @@ private:
 
 }  // namespace
 
+namespace {
+
+// GUI-subsystem printf ignores an inherited pipe. WriteFile hits the handle the parent passed.
+class HandleBuf : public std::streambuf {
+public:
+    explicit HandleBuf(HANDLE handle) : handle_(handle) {}
+
+protected:
+    int_type overflow(int_type ch) override {
+        if (ch == traits_type::eof()) return traits_type::not_eof(ch);
+        const char byte = static_cast<char>(ch);
+        DWORD wrote = 0;
+        if (!write(&byte, 1, wrote)) return traits_type::eof();
+        return ch;
+    }
+
+    std::streamsize xsputn(const char* data, std::streamsize count) override {
+        if (count <= 0) return 0;
+        DWORD wrote = 0;
+        if (!write(data, static_cast<DWORD>(count), wrote)) return 0;
+        return static_cast<std::streamsize>(wrote);
+    }
+
+private:
+    bool write(const char* data, DWORD count, DWORD& wrote) {
+        if (!handle_ || handle_ == INVALID_HANDLE_VALUE) return false;
+        return WriteFile(handle_, data, count, &wrote, nullptr) != FALSE;
+    }
+
+    HANDLE handle_ = nullptr;
+};
+
+// ponytail: one GUI-subsystem exe, so a double-click has no console. A redirected stdout is written
+// with WriteFile. Otherwise the parent console is attached. cmd.exe keeps the exit code. PowerShell
+// may leave $LASTEXITCODE empty; Start-Process -PassThru still has ExitCode.
+// Upgrade path: none while the shipped file stays a single static exe.
+bool redirected_stdio() {
+    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!out || out == INVALID_HANDLE_VALUE) return false;
+    const DWORD kind = GetFileType(out);
+    return kind == FILE_TYPE_DISK || kind == FILE_TYPE_PIPE;
+}
+
+void bind_parent_console() {
+    if (!AttachConsole(ATTACH_PARENT_PROCESS) && GetLastError() != ERROR_ACCESS_DENIED) AllocConsole();
+    std::freopen("CONOUT$", "w", stdout);
+    std::freopen("CONOUT$", "w", stderr);
+    std::freopen("CONIN$", "r", stdin);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
+    if (studio_cli_command(argc, argv)) {
+        if (redirected_stdio()) {
+            HandleBuf out_buf(GetStdHandle(STD_OUTPUT_HANDLE));
+            HandleBuf err_buf(GetStdHandle(STD_ERROR_HANDLE));
+            std::ostream out(&out_buf);
+            std::ostream err(&err_buf);
+            return studio_cli(argc, argv, out, err);
+        }
+        bind_parent_console();
+        return studio_cli(argc, argv, std::cout, std::cerr);
+    }
     prepare_qt_runtime();
     QApplication app(argc, argv);
     apply_ui_font();
