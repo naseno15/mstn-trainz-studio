@@ -98,7 +98,7 @@ The title bar **Help** menu has Check for updates, About Trainz Studio (matte sh
 
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Optional GitHub update
 
-About a second after the window is up, the app asks `https://api.github.com/repos/naseno15/mstn-trainz-studio/releases/latest` (override with `TRAINZ_UPDATE_REPO`, skip with `TRAINZ_NO_UPDATE`). A newer tag that has a `*win64.zip` asset shows a toast at the bottom-right. × dismisses it for this session. The body opens a dialog; **Install update** downloads the zip, then a hidden PowerShell helper waits for this process, copies the archive folder that contains the exe over `applicationDirPath()`, and starts that exe again. **Later** leaves the toast up. The current build is the published `v4.4.2` release, so the toast stays hidden until a higher tag exists. `check_update` covers version compare, asset pick, and the two QML files.
+About a second after the window is up, the app asks `https://api.github.com/repos/naseno15/mstn-trainz-studio/releases/latest` (override with `TRAINZ_UPDATE_REPO`, skip with `TRAINZ_NO_UPDATE`). A newer tag that has a `*win64.zip` asset shows a toast at the bottom-right. × dismisses it for this session. The body opens a dialog; **Install update** downloads the zip, then a hidden PowerShell helper waits for this process, copies the archive folder that contains the exe over `applicationDirPath()`, and starts that exe again. **Later** leaves the toast up. The current build is the published `v4.4.3` release, so the toast stays hidden until a higher tag exists. `check_update` covers version compare, asset pick, and the two QML files.
 
 **Last updated:** 2026-10-11 (Asia/Bangkok) — Packages viewer dock and text well
 
