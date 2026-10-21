@@ -64,6 +64,22 @@ Home, Mesh Studio, Sounds Studio, Engine Tuner, Assets Tools, Texture & Mesh Lod
 
 ---
 
+## Terminal
+
+Same exe. No command opens the window. A command runs and exits:
+
+```
+trainz_studio_cpp.exe help
+trainz_studio_cpp.exe mesh body.trainzmesh
+trainz_studio_cpp.exe cdp pack.cdp
+```
+
+`help` · `version` · `kuid` · `mesh` · `cdp` · `tzarc` · `chump` · `zip` · `texture` · `wav` · `engine` · `lm` · `kin`
+
+`mesh` reads `.trainzmesh`, `.im`, and `.fbx`. `cdp` lists assets, or prints one config when you pass a kuid. `tzarc` lists the archive, or prints a text member.
+
+---
+
 ## Studios — what works now
 
 Accent colour in the app: **`#ff5a1f`**. Panels sit on graphite (`#12161c` / `#1a1e26`).
@@ -198,6 +214,8 @@ Do **not** build target `all` for UI work — it also links every `check_*` exe.
 
 ดับเบิลคลิก exe → รอ boot card → หน้า **Home** → กดการ์ดสตูดิโอ  
 เมนู **Theme** (สว่าง/มืด) · **Lang** (EN / ไทย / 日本語 / Indonesia)
+
+เรียกจากเทอร์มินัลได้โดยไม่เปิดหน้าต่าง เป็น exe ตัวเดียวกัน เช่น `trainz_studio_cpp.exe help` หรือ `trainz_studio_cpp.exe mesh body.trainzmesh`
 
 ### สตูดิโอทำอะไรได้บ้าง (เวอร์ชันปัจจุบัน)
 
