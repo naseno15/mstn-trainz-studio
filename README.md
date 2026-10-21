@@ -39,8 +39,8 @@ That build is a **single static exe**. You do not need a Qt install to run it.
 
 | | |
 |---|---|
-| Current | **v4.4.3** |
-| Asset | `TrainzStudio-4.4.3-win64.zip` |
+| Current | **v4.4.4** |
+| Asset | `TrainzStudio-4.4.4-win64.zip` |
 | OS | Windows 10 / 11 x64 |
 
 **In-app update:** Help → Check for updates. When a newer tag with a `*win64.zip` exists, a toast offers **Install update** (downloads, replaces the folder, relaunches).
