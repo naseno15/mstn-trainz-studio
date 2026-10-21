@@ -271,6 +271,14 @@ std::string lower_slash(std::string s) {
 
 }  // namespace
 
+std::vector<TzarcEntry> list_tzarc(const uint8_t* data, size_t size) {
+    Archive archive(data, size);
+    std::vector<TzarcEntry> out;
+    out.reserve(archive.entries().size());
+    for (const Entry& entry : archive.entries()) out.push_back({entry.name, entry.size});
+    return out;
+}
+
 std::vector<uint8_t> read_tzarc_config(const uint8_t* data, size_t size) {
     Archive archive(data, size);
     return archive.read(config_entry(archive.entries()));

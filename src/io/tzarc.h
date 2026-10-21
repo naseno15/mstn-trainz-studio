@@ -6,6 +6,13 @@
 #include <utility>
 #include <vector>
 
+struct TzarcEntry {
+    std::string name;
+    uint64_t size = 0;
+};
+
+// Directory only. v2 inflates the chunks that hold the directory, not every file.
+std::vector<TzarcEntry> list_tzarc(const uint8_t* data, size_t size);
 std::vector<uint8_t> read_tzarc_config(const uint8_t* data, size_t size);
 // First entry whose path, or else base name, matches a name in order. Empty when none.
 std::vector<std::pair<std::string, std::vector<uint8_t>>> read_tzarc_all(const uint8_t* data, size_t size);
