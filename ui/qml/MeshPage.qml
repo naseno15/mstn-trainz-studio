@@ -43,9 +43,11 @@ Item {
     Connections {
         target: bridge
         function onChanged() {
-            if (pieLatch.open === bridge.pieOpen)
+            var welcome = bridge.welcome
+            if (pieLatch.open === bridge.pieOpen && pieLatch.welcome === welcome)
                 return
             pieLatch.open = bridge.pieOpen
+            pieLatch.welcome = welcome
             root.publish()
         }
     }
@@ -53,6 +55,7 @@ Item {
     QtObject {
         id: pieLatch
         property bool open: false
+        property bool welcome: true
     }
 
     onWidthChanged: publish()
@@ -73,10 +76,11 @@ Item {
         }
     }
 
-    // Welcome paints a full-page mask, so file drops land here — not on the window.
+    // Above the welcome card so a drop on the empty view still lands here.
+    // DropArea takes no mouse buttons, so clicks pass through to the buttons under it.
     DropZone {
         anchors.fill: parent
-        z: 1
+        z: 40
         onFilesDropped: function (drop) {
             var urls = []
             if (drop.hasUrls) {
