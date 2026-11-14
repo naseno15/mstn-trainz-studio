@@ -2,7 +2,14 @@
 
 #include "bin.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#else
+#include <iconv.h>
+#endif
 
 namespace {
 
@@ -345,12 +352,67 @@ bool utf8_ok(const uint8_t* data, size_t size) {
     return true;
 }
 
-std::string wide_to_utf8(const wchar_t* text, int wlen) {
-    if (wlen <= 0) return {};
-    int n = WideCharToMultiByte(CP_UTF8, 0, text, wlen, nullptr, 0, nullptr, nullptr);
-    std::string out(static_cast<size_t>(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text, wlen, out.data(), n, nullptr, nullptr);
+void append_utf8(std::string& out, uint32_t cp) {
+    if (cp < 0x80) out.push_back(static_cast<char>(cp));
+    else if (cp < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+std::string utf16_to_utf8(const uint16_t* text, int wlen) {
+    std::string out;
+    out.reserve(static_cast<size_t>(wlen) * 3);
+    for (int i = 0; i < wlen; ++i) {
+        uint32_t cp = text[i];
+        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < wlen) {
+            const uint16_t low = text[i + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                ++i;
+            }
+        }
+        append_utf8(out, cp);
+    }
     return out;
+}
+
+std::string cp932_to_utf8(const uint8_t* data, size_t size) {
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(data), static_cast<int>(size), nullptr, 0);
+    if (wlen <= 0) return {};
+    std::vector<wchar_t> wide(static_cast<size_t>(wlen));
+    MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(data), static_cast<int>(size), wide.data(), wlen);
+    std::vector<uint16_t> u16(static_cast<size_t>(wlen));
+    for (int i = 0; i < wlen; ++i) u16[static_cast<size_t>(i)] = static_cast<uint16_t>(wide[static_cast<size_t>(i)]);
+    return utf16_to_utf8(u16.data(), wlen);
+#else
+    // ponytail: iconv CP932/Shift_JIS; fails → empty so caller can fall back to ASCII+replacement.
+    iconv_t cd = iconv_open("UTF-8", "CP932");
+    if (cd == reinterpret_cast<iconv_t>(-1)) cd = iconv_open("UTF-8", "SHIFT_JIS");
+    if (cd == reinterpret_cast<iconv_t>(-1)) return {};
+    size_t in_left = size;
+    auto* in = reinterpret_cast<char*>(const_cast<uint8_t*>(data));
+    std::string out(size * 4 + 4, '\0');
+    size_t out_left = out.size();
+    char* out_ptr = out.data();
+    if (iconv(cd, &in, &in_left, &out_ptr, &out_left) == static_cast<size_t>(-1)) {
+        iconv_close(cd);
+        return {};
+    }
+    iconv_close(cd);
+    out.resize(out.size() - out_left);
+    return out;
+#endif
 }
 
 }  // namespace
@@ -399,15 +461,15 @@ std::string decode_asset_text(const uint8_t* data, size_t size) {
     if (size == 0) return {};
     if (size >= 2 && ((data[0] == 0xFF && data[1] == 0xFE) || (data[0] == 0xFE && data[1] == 0xFF))) {
         int wlen = static_cast<int>(size / 2);
-        bool be = data[0] == 0xFE;
-        std::vector<wchar_t> wide(static_cast<size_t>(wlen));
+        const bool be = data[0] == 0xFE;
+        std::vector<uint16_t> wide(static_cast<size_t>(wlen));
         for (int i = 0; i < wlen; ++i) {
-            uint8_t a = data[i * 2];
-            uint8_t b = data[i * 2 + 1];
-            wide[static_cast<size_t>(i)] = static_cast<wchar_t>(be ? ((a << 8) | b) : ((b << 8) | a));
+            const uint8_t a = data[i * 2];
+            const uint8_t b = data[i * 2 + 1];
+            wide[static_cast<size_t>(i)] = static_cast<uint16_t>(be ? ((a << 8) | b) : ((b << 8) | a));
         }
-        int start = wide[0] == 0xFEFF ? 1 : 0;
-        return wide_to_utf8(wide.data() + start, wlen - start);
+        const int start = wide[0] == 0xFEFF ? 1 : 0;
+        return utf16_to_utf8(wide.data() + start, wlen - start);
     }
     const uint8_t* body = data;
     size_t body_size = size;
@@ -416,12 +478,7 @@ std::string decode_asset_text(const uint8_t* data, size_t size) {
         body_size -= 3;
     }
     if (utf8_ok(body, body_size)) return std::string(reinterpret_cast<const char*>(body), body_size);
-    int wlen = MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(data), static_cast<int>(size), nullptr, 0);
-    if (wlen > 0) {
-        std::vector<wchar_t> wide(static_cast<size_t>(wlen));
-        MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(data), static_cast<int>(size), wide.data(), wlen);
-        return wide_to_utf8(wide.data(), wlen);
-    }
+    if (const std::string sjis = cp932_to_utf8(data, size); !sjis.empty()) return sjis;
     std::string out;
     out.reserve(size);
     for (size_t i = 0; i < size; ++i) {

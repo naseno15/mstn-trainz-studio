@@ -172,7 +172,7 @@ Texture & Mesh Lods → Mesh Lods / Texture Params → preview → Save.
 
 ## Build from source (developers)
 
-Windows · Qt 6 · MinGW · CMake · Ninja. Day-to-day:
+**Windows** · Qt 6 · MinGW · CMake · Ninja. Day-to-day:
 
 ```powershell
 powershell -File fast.ps1
@@ -182,6 +182,15 @@ powershell -File fast.ps1
 |---|---|
 | Shared Qt | `build\trainz_studio_cpp.exe` |
 | Static (release-style) | `powershell -File fast_static.ps1` → `build-static\trainz_studio_cpp.exe` |
+
+**macOS** · Qt 6 · CMake · Ninja:
+
+```bash
+./fast.sh
+# → build-macos/trainz_studio_cpp
+```
+
+TrainzUtil / Content Manager / createCDP / in-app update install are **Windows-only** and stay hidden or disabled on macOS. See [`MACOS.md`](MACOS.md).
 
 Do **not** build target `all` for UI work — it also links every `check_*` exe. Details, layout, and known behaviour live in [`HANDOFF.md`](HANDOFF.md).
 

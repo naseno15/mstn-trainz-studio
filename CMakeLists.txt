@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(trainz_studio_cpp VERSION 4.4.4 LANGUAGES C CXX)
+project(trainz_studio_cpp VERSION 4.4.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,12 +61,18 @@ add_library(trainz_io STATIC
     third_party/puff/puff.c
 )
 target_include_directories(trainz_io PUBLIC src third_party/puff third_party/ufbx)
+if(APPLE)
+  target_link_libraries(trainz_io PUBLIC iconv)
+endif()
 set_source_files_properties(third_party/ufbx/ufbx.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 add_library(trainz_ui OBJECT ${trainz_ui_sources})
 target_link_libraries(trainz_ui PUBLIC trainz_io Qt6::Core Qt6::Widgets Qt6::Quick Qt6::OpenGLWidgets Qt6::QuickWidgets Qt6::Network)
 if(WIN32)
-    target_link_libraries(trainz_ui PUBLIC winmm)
+  target_link_libraries(trainz_ui PUBLIC winmm)
+elseif(APPLE)
+  # ponytail: AudioQueue for Sounds Studio on macOS (wave_player.cpp). Upgrade: Qt Multimedia.
+  target_link_libraries(trainz_ui PUBLIC "-framework AudioToolbox")
 endif()
 target_include_directories(trainz_ui PUBLIC src)
 target_compile_definitions(trainz_ui PUBLIC ${trainz_qml_define} ${trainz_qt_define} TRAINZ_STUDIO_VERSION="${PROJECT_VERSION}")
@@ -93,7 +99,8 @@ set_source_files_properties(${studio_font} PROPERTIES QT_RESOURCE_ALIAS fonts/Ma
 set_source_files_properties(${studio_logo} PROPERTIES QT_RESOURCE_ALIAS logo/mstn_logo_white.png)
 qt_add_resources(trainz_studio_cpp studio PREFIX /studio FILES ${studio_qml} ${studio_i18n} ${studio_font} ${studio_logo})
 
-# Static Qt (tools/build_qt_static.ps1): one exe, no DLLs.
+# Static Qt (tools/build_qt_static.ps1 on Windows): one exe, no DLLs.
+# On macOS the portable pack is a .app via macdeployqt (fast_pack_macos.sh) — not TRAINZ_STATIC.
 if(TRAINZ_STATIC)
     qt_import_qml_plugins(trainz_studio_cpp)
     # CrashDialog blurs with MultiEffect. The static import scan misses QtQuick.Effects, so the sheet never loads.
@@ -102,7 +109,26 @@ if(TRAINZ_STATIC)
     endif()
     target_link_libraries(trainz_studio_cpp PRIVATE Qt6::effectsplugin)
     target_sources(trainz_studio_cpp PRIVATE $<TARGET_OBJECTS:Qt6::effectsplugin_init>)
-    target_link_options(trainz_studio_cpp PRIVATE -static -static-libgcc -static-libstdc++)
+    if(WIN32)
+        target_link_options(trainz_studio_cpp PRIVATE -static -static-libgcc -static-libstdc++)
+    endif()
+endif()
+
+if(APPLE AND TRAINZ_MAC_BUNDLE)
+    set(trainz_mac_icon "${CMAKE_SOURCE_DIR}/assets/TrainzStudio.icns")
+    set_target_properties(trainz_studio_cpp PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "Trainz Studio"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mstn.trainzstudio"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_ICON_FILE TrainzStudio
+        OUTPUT_NAME "TrainzStudio"
+    )
+    if(EXISTS "${trainz_mac_icon}")
+        target_sources(trainz_studio_cpp PRIVATE "${trainz_mac_icon}")
+        set_source_files_properties("${trainz_mac_icon}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    endif()
 endif()
 
 function(trainz_ui_check name)

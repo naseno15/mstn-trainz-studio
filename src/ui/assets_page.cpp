@@ -2436,6 +2436,13 @@ void AssetsBridge::read_kuid_list() {
 }
 
 void AssetsBridge::start_export(bool one_file) {
+#ifndef Q_OS_WIN
+    Q_UNUSED(one_file);
+    center_tip_ = QStringLiteral("createCDP needs TrainzUtil — Windows only");
+    post_status(center_tip_);
+    emit changed();
+    return;
+#else
     if (export_proc_ != nullptr && export_proc_->state() != QProcess::NotRunning) {
         center_tip_ = QStringLiteral("Export is still running");
         emit changed();
@@ -2489,6 +2496,7 @@ void AssetsBridge::start_export(bool one_file) {
     center_tip_ = QStringLiteral("createCDP ") + QFileInfo(dest).fileName();
     emit changed();
     export_proc_->start(export_exe_, QStringList{QStringLiteral("createCDP"), dest} + export_kuids_.first());
+#endif
 }
 
 void AssetsBridge::finish_export() {

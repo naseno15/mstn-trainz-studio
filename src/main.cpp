@@ -6,9 +6,9 @@
 
 #include <cstdio>
 #include <iostream>
-#include <streambuf>
 
 #include <QApplication>
+#include <QGuiApplication>
 #include <QCloseEvent>
 #include <QDialog>
 #include <QElapsedTimer>
@@ -28,12 +28,15 @@
 #include <cstdlib>
 #include <thread>
 
+#ifdef Q_OS_WIN
 #include <windows.h>
+#endif
 
 struct BootAbort {};
 
 namespace {
 
+#ifdef Q_OS_WIN
 // Windows acrylic (blur-behind) via the undocumented user32 call; falls back to a plain tint if missing.
 void enable_acrylic(HWND hwnd) {
     struct Accent { int state; int flags; unsigned color; int anim; };
@@ -45,6 +48,7 @@ void enable_acrylic(HWND hwnd) {
     Attrib attrib{19 /* WCA_ACCENT_POLICY */, &accent, sizeof(accent)};
     fn(hwnd, &attrib);
 }
+#endif
 
 class BootDialog : public QDialog {
 public:
@@ -56,7 +60,6 @@ public:
 
         auto* card = new QFrame(this);
         card->setObjectName(QStringLiteral("loadingCard"));
-        // Glass: the acrylic behind the window does the blur; the card only adds a tint, a hairline and a sheen.
         card->setStyleSheet(QStringLiteral(
             "QFrame#loadingCard { background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(255,255,255,70), stop:0.5 rgba(40,44,58,110), stop:1 rgba(14,16,24,150));"
             " border:1px solid rgba(255,255,255,60); border-top:2px solid rgba(255,255,255,170); border-bottom:2px solid rgba(0,0,0,120); border-radius:18px; }"
@@ -84,7 +87,7 @@ public:
         pct_->setObjectName(QStringLiteral("overlayPct"));
         pct_->setAlignment(Qt::AlignCenter);
         bar_ = new QProgressBar(card);
-        bar_->setRange(0, 1000);  // tenths of a percent so the bar glides
+        bar_->setRange(0, 1000);
         bar_->setTextVisible(false);
         bar_->setFixedHeight(12);
 
@@ -117,7 +120,9 @@ public:
 
     void showEvent(QShowEvent* event) override {
         QDialog::showEvent(event);
+#ifdef Q_OS_WIN
         enable_acrylic(reinterpret_cast<HWND>(winId()));
+#endif
         publish_hit();
         start_watch();
     }
@@ -154,7 +159,6 @@ public:
         glide_to(pct);
     }
 
-    // Hold the full bar for a beat, then dissolve the glass onto the freshly shown window.
     void finish() {
         if (!stage_->text().isEmpty()) done_ << stage_->text();
         while (done_.size() > 3) done_.removeFirst();
@@ -186,7 +190,6 @@ private:
         } while (clock.elapsed() < ms);
     }
 
-    // Eased glide of bar + percent toward the target; the pause is deliberate so each step is readable.
     void glide_to(int pct) {
         const int from = bar_->value(), to = pct * 10;
         const int ms = std::clamp(16 + std::abs(to - from) / 12, 16, 70);
@@ -206,8 +209,8 @@ private:
     }
 
     void publish_hit() {
+#ifdef Q_OS_WIN
         if (!close_) return;
-        // GetCursorPos is in physical pixels; Qt geometry is logical (Windows scale × QT_SCALE_FACTOR).
         const qreal dpr = close_->devicePixelRatioF();
         const QPoint local = close_->mapTo(this, QPoint(0, 0));
         POINT g{LONG(std::lround(local.x() * dpr)), LONG(std::lround(local.y() * dpr))};
@@ -217,10 +220,13 @@ private:
         hit_t_ = g.y - pad;
         hit_r_ = g.x + int(std::lround(close_->width() * dpr)) + pad;
         hit_b_ = g.y + int(std::lround(close_->height() * dpr)) + pad;
+#else
+        Q_UNUSED(this);
+#endif
     }
 
-    // QML compile blocks the UI thread, so Esc, Alt+F4, and the × still have to be seen from outside the event loop.
     void start_watch() {
+#ifdef Q_OS_WIN
         if (watch_.joinable()) return;
         watch_run_ = true;
         watch_ = std::thread([this] {
@@ -244,10 +250,11 @@ private:
                 Sleep(16);
             }
         });
+#endif
     }
 
     void render_history() {
-        static const char* inks[] = {"#6b7280", "#8b93a1", "#aab2bf"};  // oldest dimmest
+        static const char* inks[] = {"#6b7280", "#8b93a1", "#aab2bf"};
         QStringList lines;
         const int offset = 3 - int(done_.size());
         for (int i = 0; i < done_.size(); ++i) lines << QStringLiteral("<tr style='color:%1'><td>%2</td><td align='right'>✓</td></tr>").arg(QLatin1String(inks[i + offset]), done_[i].toHtmlEscaped());
@@ -273,9 +280,9 @@ private:
 
 }  // namespace
 
+#ifdef Q_OS_WIN
 namespace {
 
-// GUI-subsystem printf ignores an inherited pipe. WriteFile hits the handle the parent passed.
 class HandleBuf : public std::streambuf {
 public:
     explicit HandleBuf(HANDLE handle) : handle_(handle) {}
@@ -305,10 +312,6 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-// ponytail: one GUI-subsystem exe, so a double-click has no console. A redirected stdout is written
-// with WriteFile. Otherwise the parent console is attached. cmd.exe keeps the exit code. PowerShell
-// may leave $LASTEXITCODE empty; Start-Process -PassThru still has ExitCode.
-// Upgrade path: none while the shipped file stays a single static exe.
 bool redirected_stdio() {
     const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!out || out == INVALID_HANDLE_VALUE) return false;
@@ -326,9 +329,11 @@ void bind_parent_console() {
 }
 
 }  // namespace
+#endif
 
 int main(int argc, char** argv) {
     if (studio_cli_command(argc, argv)) {
+#ifdef Q_OS_WIN
         if (redirected_stdio()) {
             HandleBuf out_buf(GetStdHandle(STD_OUTPUT_HANDLE));
             HandleBuf err_buf(GetStdHandle(STD_ERROR_HANDLE));
@@ -337,6 +342,7 @@ int main(int argc, char** argv) {
             return studio_cli(argc, argv, out, err);
         }
         bind_parent_console();
+#endif
         return studio_cli(argc, argv, std::cout, std::cerr);
     }
     prepare_qt_runtime();
@@ -351,7 +357,7 @@ int main(int argc, char** argv) {
         ShellWindow window(nullptr, [&boot](const QString& text, int pct) { boot.set_stage(text, pct); });
         boot.stop_watch();
         boot.finish();
-        window.showMaximized();  // fills the work area, not full screen
+        window.showMaximized();
         boot.dissolve();
         if (const QString tail = previous_crash_tail(); !tail.isEmpty())
             show_crash_dialog(QStringLiteral("Trainz Studio closed unexpectedly"), QStringLiteral("The last session did not exit cleanly. The end of its log is below."), tail, QStringLiteral("warning"));

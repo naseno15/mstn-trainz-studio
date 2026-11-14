@@ -241,6 +241,10 @@ public:
     }
 
     Q_INVOKABLE void install() {
+#ifndef Q_OS_WIN
+        fail(QStringLiteral("In-app update is Windows-only — build from source on macOS"));
+        return;
+#else
         if (busy_ || offer_.assetUrl.isEmpty()) return;
         const QString dest = folder();
         QFile probe(dest + QStringLiteral("/.trainz-update-write-probe"));
@@ -296,6 +300,7 @@ public:
             toast_on_ = false;
             QTimer::singleShot(0, qApp, [] { QCoreApplication::quit(); });
         });
+#endif
     }
 
 signals:

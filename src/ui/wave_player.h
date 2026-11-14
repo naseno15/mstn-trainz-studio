@@ -4,7 +4,8 @@
 #include <string>
 #include <vector>
 
-// Minimal waveOut player: `head` plays once, then `tail` plays (looped forever if loop_tail). Windows only; elsewhere a no-op.
+// PCM player: `head` plays once, then `tail` plays (looped forever if loop_tail).
+// Windows = waveOut · macOS = AudioQueue · else = no-op.
 class WavePlayer {
 public:
     ~WavePlayer() { stop(); }

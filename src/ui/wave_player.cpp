@@ -75,18 +75,122 @@ size_t WavePlayer::position() const {
     if (waveOutGetPosition(static_cast<HWAVEOUT>(dev_), &t, sizeof(t)) != MMSYSERR_NOERROR || t.wType != TIME_SAMPLES) return 0;
     return t.u.sample;
 }
-#else
-std::vector<std::string> WavePlayer::devices() { return {}; }
-std::vector<std::string> WavePlayer::devices() {
-    std::vector<std::string> names;
-    for (UINT i = 0; i < waveOutGetNumDevs(); ++i) {
-        WAVEOUTCAPSA caps{};
-        waveOutGetDevCapsA(i, &caps, sizeof(caps));
-        names.emplace_back(caps.szPname);
+
+#elif defined(__APPLE__)
+#include <AudioToolbox/AudioToolbox.h>
+
+#include <atomic>
+#include <cstring>
+
+namespace {
+
+struct MacPlay {
+    AudioQueueRef queue = nullptr;
+    AudioQueueBufferRef head_buf = nullptr;
+    AudioQueueBufferRef tail_buf = nullptr;
+    WavePlayer* owner = nullptr;
+    std::atomic<bool> alive{true};
+    std::atomic<bool> looping{false};
+    std::atomic<bool> done{false};
+    std::atomic<uint64_t> samples_played{0};
+};
+
+void mac_callback(void* user, AudioQueueRef queue, AudioQueueBufferRef buf) {
+    auto* state = static_cast<MacPlay*>(user);
+    if (!state || !state->alive.load()) return;
+    const UInt32 bytes = buf->mAudioDataByteSize;
+    state->samples_played.fetch_add(bytes / 2, std::memory_order_relaxed);
+    if (state->looping.load() && buf == state->tail_buf && state->alive.load()) {
+        AudioQueueEnqueueBuffer(queue, buf, 0, nullptr);
+        return;
     }
-    return names;
+    if ((!state->looping.load() || buf != state->tail_buf) && buf == (state->tail_buf ? state->tail_buf : state->head_buf))
+        state->done.store(true);
 }
 
+}  // namespace
+
+std::vector<std::string> WavePlayer::devices() { return {"Default"}; }
+
+void WavePlayer::start(std::vector<int16_t> head, std::vector<int16_t> tail, bool loop_tail, int rate) {
+    stop();
+    if (head.empty() && tail.empty()) return;
+    head_ = std::move(head);
+    tail_ = std::move(tail);
+    loop_ = loop_tail && !tail_.empty();
+
+    auto* state = new MacPlay();
+    state->owner = this;
+    state->looping.store(loop_);
+    hdr_ = state;
+
+    AudioStreamBasicDescription fmt{};
+    fmt.mSampleRate = rate;
+    fmt.mFormatID = kAudioFormatLinearPCM;
+    fmt.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked;
+    fmt.mFramesPerPacket = 1;
+    fmt.mChannelsPerFrame = 1;
+    fmt.mBitsPerChannel = 16;
+    fmt.mBytesPerPacket = 2;
+    fmt.mBytesPerFrame = 2;
+
+    if (AudioQueueNewOutput(&fmt, mac_callback, state, nullptr, nullptr, 0, &state->queue) != noErr) {
+        delete state;
+        hdr_ = nullptr;
+        return;
+    }
+    dev_ = state->queue;
+
+    auto enqueue = [&](AudioQueueBufferRef* slot, const std::vector<int16_t>& data) -> bool {
+        if (data.empty()) return true;
+        AudioQueueBufferRef buf = nullptr;
+        const UInt32 bytes = static_cast<UInt32>(data.size() * 2);
+        if (AudioQueueAllocateBuffer(state->queue, bytes, &buf) != noErr) return false;
+        std::memcpy(buf->mAudioData, data.data(), bytes);
+        buf->mAudioDataByteSize = bytes;
+        *slot = buf;
+        return AudioQueueEnqueueBuffer(state->queue, buf, 0, nullptr) == noErr;
+    };
+
+    if (!enqueue(&state->head_buf, head_) || !enqueue(&state->tail_buf, tail_)) {
+        stop();
+        return;
+    }
+    if (AudioQueueStart(state->queue, nullptr) != noErr) stop();
+}
+
+void WavePlayer::stop() {
+    auto* state = static_cast<MacPlay*>(hdr_);
+    if (!state) return;
+    state->alive.store(false);
+    state->looping.store(false);
+    if (state->queue) {
+        AudioQueueStop(state->queue, true);
+        AudioQueueDispose(state->queue, true);
+    }
+    delete state;
+    hdr_ = nullptr;
+    dev_ = nullptr;
+}
+
+bool WavePlayer::playing() const {
+    auto* state = static_cast<MacPlay*>(hdr_);
+    if (!state || !state->queue) return false;
+    if (loop_) return true;
+    return !state->done.load();
+}
+
+size_t WavePlayer::position() const {
+    auto* state = static_cast<MacPlay*>(hdr_);
+    if (!state || !state->queue) return 0;
+    AudioTimeStamp ts{};
+    if (AudioQueueGetCurrentTime(state->queue, nullptr, &ts, nullptr) == noErr && (ts.mFlags & kAudioTimeStampSampleTimeValid))
+        return static_cast<size_t>(ts.mSampleTime > 0 ? ts.mSampleTime : 0);
+    return static_cast<size_t>(state->samples_played.load());
+}
+
+#else
+std::vector<std::string> WavePlayer::devices() { return {}; }
 void WavePlayer::start(std::vector<int16_t>, std::vector<int16_t>, bool, int) {}
 void WavePlayer::stop() {}
 bool WavePlayer::playing() const { return false; }

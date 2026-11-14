@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <QImage>
 #include <QFont>
+#include <QFontDatabase>
 #include <QGraphicsBlurEffect>
 #include <QGraphicsOpacityEffect>
 #include <QGraphicsPixmapItem>
@@ -120,7 +121,9 @@ ShellBridge::ShellBridge(QObject* parent) : QObject(parent) {
         {"engine", "Engine Tuner", "Curves · throttle · sim", "tune"},
         {"assets", "Assets Tools", "CDP · config · KUID", "inventory_2"},
         {"texmesh", "Texture & Mesh Lods", "LODs · maps · bake", "texture"},
+#ifdef Q_OS_WIN
         {"trainzutil", "TrainzUtil", "Install · CDP · zip", "upload_file"},
+#endif
     };
     for (const StudioCard& studio : studios) {
         QVariantMap card;
@@ -153,6 +156,10 @@ void ShellBridge::set_title(const QString& title) {
 }
 
 void ShellBridge::set_page(const QString& page) {
+#ifndef Q_OS_WIN
+    // Content Manager / TrainzUtil is Windows-only (Launcher + TrainzUtil.exe).
+    if (page == QLatin1String("trainzutil")) return;
+#endif
     page_ = page;
     emit pageChanged(page);
     emit changed();
@@ -282,8 +289,11 @@ double ui_scale_for(double desktop_w, double desktop_h) {
 
 void prepare_qt_runtime() {
 #ifdef QT_PREFIX
-    qputenv("QT_PLUGIN_PATH", QT_PREFIX "/plugins");
-    qputenv("QML_IMPORT_PATH", QT_PREFIX "/qml");
+    // Developer builds pin the kit. A packaged .app (macdeployqt) already has PlugIns — leave it alone.
+    if (!qEnvironmentVariableIsSet("TRAINZ_BUNDLE")) {
+        qputenv("QT_PLUGIN_PATH", QT_PREFIX "/plugins");
+        qputenv("QML_IMPORT_PATH", QT_PREFIX "/qml");
+    }
 #endif
 #ifdef Q_OS_WIN
     // The layout is drawn for a 1920×1080 desktop (logical pixels); a smaller desktop shrinks the whole UI.
@@ -300,7 +310,8 @@ void prepare_qt_runtime() {
 #endif
     // Desktop GL for the mesh view. Quick stays on the software scene graph:
     // a D3D QQuickWidget in the same HWND paints its transparent center black
-    // and hides the QOpenGLWidget underneath.
+    // and hides the QOpenGLWidget underneath. On macOS the same software Quick
+    // path keeps QOpenGLWidget visible through the chrome.
     QSurfaceFormat fmt;
     fmt.setDepthBufferSize(24);
     fmt.setVersion(3, 3);
@@ -313,6 +324,7 @@ void prepare_qt_runtime() {
 }
 
 void apply_ui_font() {
+#ifdef Q_OS_WIN
     // Segoe UI has no Thai or Japanese. Leelawadee UI and Yu Gothic UI are outline faces,
     // so those scripts are not drawn with the bitmap fallback. ponytail: the scene graph stays
     // software so the mesh GL view can show through; this is the antialiasing that backend allows.
@@ -325,6 +337,29 @@ void apply_ui_font() {
         QStringLiteral("Meiryo UI"),
         QStringLiteral("Segoe UI Emoji"),
     });
+#else
+    // Noto from source tree (dev) or Contents/Resources/fonts (packaged .app).
+    QStringList font_dirs;
+#ifdef QML_DIR
+    font_dirs << QFileInfo(QStringLiteral(QML_DIR "/../../assets/fonts")).absoluteFilePath();
+#endif
+    font_dirs << QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/fonts");
+    font_dirs << QCoreApplication::applicationDirPath() + QStringLiteral("/fonts");
+    for (const QString& fonts : font_dirs) {
+        for (const char* name : {"NotoSans-Regular.ttf", "NotoSans-Medium.ttf", "NotoSansThaiLooped.ttf", "NotoSansJP-Regular.ttf"}) {
+            const QString path = fonts + QLatin1Char('/') + QLatin1String(name);
+            if (QFileInfo::exists(path)) QFontDatabase::addApplicationFont(path);
+        }
+    }
+    QFont font(QStringLiteral("Noto Sans"));
+    font.setFamilies({
+        QStringLiteral("Noto Sans"),
+        QStringLiteral("Noto Sans Thai Looped"),
+        QStringLiteral("Noto Sans JP"),
+        QStringLiteral(".AppleSystemUIFont"),
+        QStringLiteral("Helvetica Neue"),
+    });
+#endif
     font.setStyleStrategy(QFont::PreferAntialias);
     font.setHintingPreference(QFont::PreferNoHinting);
     QApplication::setFont(font);
@@ -599,6 +634,7 @@ AssetsPage* ShellWindow::studio_assets() {
         studio_engine()->loadCdpText(text);
         bridge_->set_page(QStringLiteral("engine"));
     });
+#ifdef Q_OS_WIN
     // The Config KUID picker reads the TrainzUtil library. Building that page starts the Launcher probe
     // and library sync, so only the Config tab warms it (after the tab is up, not on the first click).
     connect(assets_, &AssetsPage::pageOpened, this, [this](const QString& page) {
@@ -608,6 +644,11 @@ AssetsPage* ShellWindow::studio_assets() {
         const QString kuid = studio_trainz()->choose_kuid(filter);
         if (!kuid.isEmpty()) studio_assets()->applyPickedKuid(index, kuid);
     });
+#else
+    connect(assets_, &AssetsPage::kuidPickRequested, this, [](int, const QString&) {
+        post_status(QStringLiteral("KUID library picker needs TrainzUtil (Windows only)"));
+    });
+#endif
     take_slot(slot_assets_, assets_);
     return assets_;
 }
@@ -678,7 +719,9 @@ QVariantList ShellWindow::menuRows(const QString& key) {
             {QStringLiteral("engine"), QStringLiteral("Engine Tuner")},
             {QStringLiteral("assets"), QStringLiteral("Assets Tools")},
             {QStringLiteral("texmesh"), QStringLiteral("Texture & Mesh Lods")},
+#ifdef Q_OS_WIN
             {QStringLiteral("trainzutil"), QStringLiteral("TrainzUtil")},
+#endif
         };
         for (const auto& studio : studios) rows << item(studio.first, studio.second, true, {}, studio.first == page);
         if (page == QLatin1String("mesh")) {
