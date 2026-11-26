@@ -203,15 +203,50 @@ ImView parse_fbx_view(const uint8_t* data, size_t size) {
     return view;
 }
 
+std::string trainz_mat_name(const MeshPart& part) {
+    std::string name = fbx_name(part.name);
+    if (name.find(".m.") != std::string::npos) return name;
+    std::string stem = name;
+    if (!part.albedo.empty()) {
+        stem = fbx_name(part.albedo);
+        const auto dot = stem.find('.');
+        if (dot != std::string::npos) stem.resize(dot);
+    }
+    if (stem.empty()) stem = "mesh";
+    return stem + ".m.onetex";
+}
+
+std::string albedo_file(const MeshPart& part) {
+    if (!part.albedo.empty()) {
+        std::string file = part.albedo;
+        for (char& c : file)
+            if (c == '\\') c = '/';
+        const auto slash = file.find_last_of('/');
+        if (slash != std::string::npos) file.erase(0, slash + 1);
+        return fbx_name(file);
+    }
+    // Trainz looks up <stem>.texture beside the FBX when the material is <stem>.m.*.
+    const std::string mat = trainz_mat_name(part);
+    const auto m = mat.rfind(".m.");
+    if (m != std::string::npos && m > 0) return mat.substr(0, m) + ".texture";
+    return mat + ".texture";
+}
+
 std::string write_fbx(const ImView& view) {
     if (view.parts.empty() && view.atts.empty()) throw std::runtime_error("nothing to write to .fbx");
 
     struct MeshOut {
         int64_t geo_id = 0;
         int64_t model_id = 0;
+        int64_t mat_id = 0;
+        int64_t tex_id = 0;
+        int64_t video_id = 0;
         std::string name;
+        std::string mat_name;
+        std::string albedo;
         std::vector<float> verts;
         std::vector<int32_t> polys;
+        std::vector<int32_t> mat_ids;
         std::vector<float> normals;
         std::vector<float> uvs;
     };
@@ -248,6 +283,7 @@ std::string write_fbx(const ImView& view) {
             mesh.polys.push_back(static_cast<int32_t>(a));
             mesh.polys.push_back(static_cast<int32_t>(b));
             mesh.polys.push_back(-static_cast<int32_t>(c) - 1);
+            mesh.mat_ids.push_back(0);
             used.push_back(a);
             used.push_back(b);
             used.push_back(c);
@@ -269,16 +305,25 @@ std::string write_fbx(const ImView& view) {
                 mesh.normals.push_back(z);
             }
         }
-        if (part.uvs.size() >= vert_n * 2) {
-            mesh.uvs.reserve(used.size() * 2);
-            for (uint32_t idx : used) {
+        // Trainz T5956 needs UV channel0 to build tangents — emit real UVs, or zeros if the source had none.
+        mesh.uvs.reserve(used.size() * 2);
+        for (uint32_t idx : used) {
+            if (part.uvs.size() >= vert_n * 2) {
                 mesh.uvs.push_back(part.uvs[idx * 2]);
                 mesh.uvs.push_back(part.uvs[idx * 2 + 1]);
+            } else {
+                mesh.uvs.push_back(0.f);
+                mesh.uvs.push_back(0.f);
             }
         }
         mesh.geo_id = next_id++;
         mesh.model_id = next_id++;
-        mesh.name = fbx_name(part.name);
+        mesh.mat_id = next_id++;
+        mesh.tex_id = next_id++;
+        mesh.video_id = next_id++;
+        mesh.mat_name = trainz_mat_name(part);
+        mesh.name = fbx_name(part.name.empty() ? mesh.mat_name : part.name);
+        mesh.albedo = albedo_file(part);
         meshes.push_back(std::move(mesh));
     }
 
@@ -306,7 +351,13 @@ std::string write_fbx(const ImView& view) {
 
     const size_t mesh_n = meshes.size();
     const size_t model_n = mesh_n + atts.size();
-    const size_t def_count = (mesh_n > 0 ? 1u : 0u) + (model_n > 0 ? 1u : 0u);
+    const size_t mat_n = mesh_n;
+    const size_t tex_n = mesh_n;
+    const size_t video_n = mesh_n;
+    size_t def_count = (mesh_n > 0 ? 1u : 0u) + (model_n > 0 ? 1u : 0u);
+    if (mat_n) def_count += 1;
+    if (tex_n) def_count += 1;
+    if (video_n) def_count += 1;
 
     std::ostringstream out;
     out << "; FBX 7.4.0 project file\n"
@@ -334,6 +385,9 @@ std::string write_fbx(const ImView& view) {
         << def_count << '\n';
     if (mesh_n) out << "\tObjectType: \"Geometry\" {\n\t\tCount: " << mesh_n << "\n\t}\n";
     if (model_n) out << "\tObjectType: \"Model\" {\n\t\tCount: " << model_n << "\n\t}\n";
+    if (mat_n) out << "\tObjectType: \"Material\" {\n\t\tCount: " << mat_n << "\n\t}\n";
+    if (tex_n) out << "\tObjectType: \"Texture\" {\n\t\tCount: " << tex_n << "\n\t}\n";
+    if (video_n) out << "\tObjectType: \"Video\" {\n\t\tCount: " << video_n << "\n\t}\n";
     out << "}\nObjects:  {\n";
 
     for (const MeshOut& mesh : meshes) {
@@ -355,27 +409,31 @@ std::string write_fbx(const ImView& view) {
             append_floats(out, mesh.normals);
             out << "\n\t\t\t}\n\t\t}\n";
         }
-        if (!mesh.uvs.empty()) {
-            out << "\t\tLayerElementUV: 0 {\n"
-                   "\t\t\tVersion: 101\n"
-                   "\t\t\tName: \"UVMap\"\n"
-                   "\t\t\tMappingInformationType: \"ByPolygonVertex\"\n"
-                   "\t\t\tReferenceInformationType: \"Direct\"\n"
-                   "\t\t\tUV: *"
-                << mesh.uvs.size() << " {\n\t\t\t\ta: ";
-            append_floats(out, mesh.uvs);
-            out << "\n\t\t\t}\n\t\t}\n";
+        out << "\t\tLayerElementUV: 0 {\n"
+               "\t\t\tVersion: 101\n"
+               "\t\t\tName: \"UVChannel_1\"\n"
+               "\t\t\tMappingInformationType: \"ByPolygonVertex\"\n"
+               "\t\t\tReferenceInformationType: \"Direct\"\n"
+               "\t\t\tUV: *"
+            << mesh.uvs.size() << " {\n\t\t\t\ta: ";
+        append_floats(out, mesh.uvs);
+        out << "\n\t\t\t}\n\t\t}\n";
+        out << "\t\tLayerElementMaterial: 0 {\n"
+               "\t\t\tVersion: 101\n"
+               "\t\t\tName: \"\"\n"
+               "\t\t\tMappingInformationType: \"ByPolygon\"\n"
+               "\t\t\tReferenceInformationType: \"IndexToDirect\"\n"
+               "\t\t\tMaterials: *"
+            << mesh.mat_ids.size() << " {\n\t\t\t\ta: ";
+        append_ints(out, mesh.mat_ids);
+        out << "\n\t\t\t}\n\t\t}\n";
+        out << "\t\tLayer: 0 {\n\t\t\tVersion: 100\n";
+        if (!mesh.normals.empty()) {
+            out << "\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementNormal\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n";
         }
-        if (!mesh.normals.empty() || !mesh.uvs.empty()) {
-            out << "\t\tLayer: 0 {\n\t\t\tVersion: 100\n";
-            if (!mesh.normals.empty()) {
-                out << "\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementNormal\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n";
-            }
-            if (!mesh.uvs.empty()) {
-                out << "\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementUV\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n";
-            }
-            out << "\t\t}\n";
-        }
+        out << "\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementUV\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n"
+               "\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementMaterial\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n"
+               "\t\t}\n";
         out << "\t}\n";
         out << "\tModel: " << mesh.model_id << ", \"Model::" << mesh.name << "\", \"Mesh\" {\n"
                "\t\tVersion: 232\n"
@@ -384,6 +442,42 @@ std::string write_fbx(const ImView& view) {
                "\t\t}\n"
                "\t\tShading: Y\n"
                "\t\tCulling: \"CullingOff\"\n"
+               "\t}\n";
+        out << "\tMaterial: " << mesh.mat_id << ", \"Material::" << mesh.mat_name << "\", \"\" {\n"
+               "\t\tVersion: 102\n"
+               "\t\tShadingModel: \"phong\"\n"
+               "\t\tMultiLayer: 0\n"
+               "\t\tProperties70:  {\n"
+               "\t\t\tP: \"DiffuseColor\", \"Color\", \"\", \"A\",1,1,1\n"
+               "\t\t\tP: \"Diffuse\", \"Number\", \"\", \"A\",1\n"
+               "\t\t}\n"
+               "\t}\n";
+        out << "\tVideo: " << mesh.video_id << ", \"Video::" << mesh.albedo << "\", \"Clip\" {\n"
+               "\t\tType: \"Clip\"\n"
+               "\t\tProperties70:  {\n"
+               "\t\t\tP: \"Path\", \"KString\", \"XRefUrl\", \"\", \""
+            << mesh.albedo << "\"\n"
+               "\t\t}\n"
+               "\t\tUseMipMap: 0\n"
+               "\t\tFilename: \""
+            << mesh.albedo << "\"\n"
+               "\t\tRelativeFilename: \""
+            << mesh.albedo << "\"\n"
+               "\t}\n";
+        out << "\tTexture: " << mesh.tex_id << ", \"Texture::" << mesh.albedo << "\", \"\" {\n"
+               "\t\tType: \"TextureVideoClip\"\n"
+               "\t\tVersion: 202\n"
+               "\t\tTextureName: \"Texture::"
+            << mesh.albedo << "\"\n"
+               "\t\tProperties70:  {\n"
+               "\t\t\tP: \"UVSet\", \"KString\", \"\", \"\", \"UVChannel_1\"\n"
+               "\t\t}\n"
+               "\t\tMedia: \"Video::"
+            << mesh.albedo << "\"\n"
+               "\t\tFilename: \""
+            << mesh.albedo << "\"\n"
+               "\t\tRelativeFilename: \""
+            << mesh.albedo << "\"\n"
                "\t}\n";
     }
     for (const AttOut& att : atts) {
@@ -402,6 +496,9 @@ std::string write_fbx(const ImView& view) {
     for (const MeshOut& mesh : meshes) {
         out << "\tC: \"OO\"," << mesh.geo_id << ',' << mesh.model_id << '\n';
         out << "\tC: \"OO\"," << mesh.model_id << ",0\n";
+        out << "\tC: \"OO\"," << mesh.mat_id << ',' << mesh.model_id << '\n';
+        out << "\tC: \"OP\"," << mesh.tex_id << ',' << mesh.mat_id << ", \"DiffuseColor\"\n";
+        out << "\tC: \"OO\"," << mesh.video_id << ',' << mesh.tex_id << '\n';
     }
     for (const AttOut& att : atts) {
         out << "\tC: \"OO\"," << att.model_id << ",0\n";

@@ -3,6 +3,7 @@
 #include "bin.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 
@@ -81,6 +82,30 @@ std::string mat_name(const uint8_t* data, size_t body, uint32_t size) {
     }
 }
 
+// First texture/image path in a MATL block (Trainz often stores an absolute …/name.texture).
+std::string mat_albedo(const uint8_t* data, size_t body, uint32_t size) {
+    const size_t end = body + size;
+    for (size_t p = body; p + 4 <= end; ++p) {
+        const uint32_t n = rd_u32(data + p);
+        if (n < 5 || n > 1024 || p + 4 + n > end) continue;
+        size_t cut = 0;
+        while (cut < n && data[p + 4 + cut] != 0) ++cut;
+        if (cut < 5) continue;
+        std::string path(reinterpret_cast<const char*>(data + p + 4), cut);
+        for (char& c : path)
+            if (c == '\\') c = '/';
+        const auto slash = path.find_last_of('/');
+        std::string file = slash == std::string::npos ? path : path.substr(slash + 1);
+        std::string low = file;
+        for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const bool tex = low.size() >= 8 && low.compare(low.size() - 8, 8, ".texture") == 0;
+        const bool img = low.size() >= 4 && (low.compare(low.size() - 4, 4, ".tga") == 0 || low.compare(low.size() - 4, 4, ".png") == 0 || low.compare(low.size() - 4, 4, ".bmp") == 0 || low.compare(low.size() - 4, 4, ".jpg") == 0 || low.compare(low.size() - 4, 4, ".dds") == 0);
+        if (!tex && !img) continue;
+        return file;
+    }
+    return {};
+}
+
 bool fit_vertex_block(int remaining, int nverts, int nidx, int nface, bool want_tangents, int& stride, int& idx_w) {
     if (nverts <= 0) throw std::runtime_error("GEOM has no vertices");
     int tangent_opts[2] = {want_tangents ? 1 : 0, 0};
@@ -155,11 +180,17 @@ MeshPart parse_geom(const uint8_t* data, size_t body, uint32_t size, const std::
     MeshPart part;
     part.name = name.empty() ? "mesh" : name;
     part.positions.resize(nverts * 3);
+    // stride 12 = xyz; 20/28/36 = xyz + uv0 (+ extras). Normals live in a separate block after indices.
+    if (stride >= 20) part.uvs.resize(nverts * 2);
     for (uint32_t v = 0; v < nverts; ++v) {
         const uint8_t* src = data + p + static_cast<size_t>(v) * stride;
         part.positions[v * 3] = rd_f32(src);
         part.positions[v * 3 + 1] = rd_f32(src + 4);
         part.positions[v * 3 + 2] = rd_f32(src + 8);
+        if (stride >= 20) {
+            part.uvs[v * 2] = rd_f32(src + 12);
+            part.uvs[v * 2 + 1] = rd_f32(src + 16);
+        }
     }
     p += static_cast<size_t>(nverts) * stride;
     for (uint32_t i = 0; i < nidx; ++i) {
@@ -186,13 +217,18 @@ std::vector<MeshPart> parse_im_parts(const uint8_t* data, size_t size) {
         if (std::memcmp(chunk.tag, "CHNK", 4) != 0) continue;
         size_t nested_at = chunk.size >= 8 ? chunk.body + 8 : chunk.body;
         std::string mat;
+        std::string albedo;
         for (const Chunk& nested : iter_chunks(data, nested_at, chunk.body + chunk.size)) {
             if (std::memcmp(nested.tag, "MATL", 4) == 0) {
                 std::string next = mat_name(data, nested.body, nested.size);
                 if (!next.empty()) mat = next;
+                std::string tex = mat_albedo(data, nested.body, nested.size);
+                if (!tex.empty()) albedo = std::move(tex);
             } else if (std::memcmp(nested.tag, "GEOM", 4) == 0) {
                 try {
-                    parts.push_back(parse_geom(data, nested.body, nested.size, mat.empty() ? "chunk_" + std::to_string(parts.size()) : mat));
+                    MeshPart part = parse_geom(data, nested.body, nested.size, mat.empty() ? "chunk_" + std::to_string(parts.size()) : mat);
+                    if (!albedo.empty()) part.albedo = albedo;
+                    parts.push_back(std::move(part));
                 } catch (const std::runtime_error& exc) {
                     if (error.empty()) error = exc.what();
                 }

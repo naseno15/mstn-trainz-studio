@@ -420,16 +420,41 @@ static void check_fbx() {
 
     // Save As path: Trainz-space ImView → ASCII FBX → parse back.
     const std::string round = write_fbx(att_view);
+    assert(round.find("Material::") != std::string::npos);
+    assert(round.find("UVChannel_1") != std::string::npos);
+    assert(round.find("LayerElementMaterial") != std::string::npos);
+    assert(round.find("DiffuseColor") != std::string::npos);
     const ImView again = parse_fbx_view(reinterpret_cast<const uint8_t*>(round.data()), round.size());
     assert(again.parts.size() == 1 && again.parts[0].name == "tri");
     assert(again.atts.size() == 1 && again.atts[0].name == "a.bog0");
     assert(std::fabs(again.atts[0].pos[0] - 1.f) < 1e-3f && std::fabs(again.atts[0].pos[2] - 2.f) < 1e-3f && std::fabs(again.atts[0].pos[1]) < 1e-3f);
     assert(again.parts[0].indices.size() == 3);
+    assert(again.parts[0].uvs.size() >= 6);
     bool again_up = false;
     for (size_t v = 0; v < again.parts[0].positions.size() / 3; ++v) {
         if (again.parts[0].positions[v * 3 + 2] > 0.5f) again_up = true;
     }
     assert(again_up);
+
+    // .im-like part: Trainz material name + albedo texture + real UVs must survive export.
+    ImView gauge;
+    MeshPart needle;
+    needle.name = "air_gauge.m.onetex";
+    needle.albedo = "cabin_air_gauge_albedo.texture";
+    needle.positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    needle.normals = {0, 0, 1, 0, 0, 1, 0, 0, 1};
+    needle.uvs = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
+    needle.indices = {0, 1, 2};
+    gauge.parts.push_back(needle);
+    const std::string gauge_fbx = write_fbx(gauge);
+    assert(gauge_fbx.find("Material::air_gauge.m.onetex") != std::string::npos);
+    assert(gauge_fbx.find("cabin_air_gauge_albedo.texture") != std::string::npos);
+    assert(gauge_fbx.find("0.1") != std::string::npos && gauge_fbx.find("0.2") != std::string::npos);
+    const ImView gauge_back = parse_fbx_view(reinterpret_cast<const uint8_t*>(gauge_fbx.data()), gauge_fbx.size());
+    assert(gauge_back.parts.size() == 1);
+    assert(gauge_back.parts[0].albedo.find("cabin_air_gauge_albedo") != std::string::npos);
+    assert(gauge_back.parts[0].uvs.size() >= 6);
+    assert(std::fabs(gauge_back.parts[0].uvs[0] - 0.1f) < 1e-3f);
 
     ImView only_att;
     ImAttachment bog;
