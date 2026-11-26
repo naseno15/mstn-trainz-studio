@@ -1,4 +1,4 @@
-﻿# Dedicated Windows release helper:
+# Dedicated Windows release helper:
 # 1) Download the latest GitHub source zip (or a tag)
 # 2) Extract under D:\trainz-project\mstn-trainz-studio-build
 # 3) Compile static win64 and write TrainzStudio-*-win64.zip
@@ -6,7 +6,7 @@
 #
 # Usage (from anywhere):
 #   powershell -File D:\trainz-project\mstn-trainz-studio\tools\fetch_latest_and_pack_windows.ps1
-#   powershell -File ...\fetch_latest_and_pack_windows.ps1 -Tag v4.4.7 -Upload
+#   powershell -File ...\fetch_latest_and_pack_windows.ps1 -Tag v4.4.8 -Upload
 param(
     [string]$Tag = "",
     [string]$WorkRoot = "D:\trainz-project\mstn-trainz-studio-build",

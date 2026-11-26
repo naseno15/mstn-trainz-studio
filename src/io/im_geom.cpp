@@ -188,8 +188,10 @@ MeshPart parse_geom(const uint8_t* data, size_t body, uint32_t size, const std::
         part.positions[v * 3 + 1] = rd_f32(src + 4);
         part.positions[v * 3 + 2] = rd_f32(src + 8);
         if (stride >= 20) {
+            // Same OpenGL V as trainzmesh (1−v): IM/TGA are DirectX-origin; Mesh Studio
+            // mirrors albedo vertically on upload, so raw V reads upside-down in the viewport.
             part.uvs[v * 2] = rd_f32(src + 12);
-            part.uvs[v * 2 + 1] = rd_f32(src + 16);
+            part.uvs[v * 2 + 1] = 1.f - rd_f32(src + 16);
         }
     }
     p += static_cast<size_t>(nverts) * stride;
