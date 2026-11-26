@@ -62,6 +62,10 @@ throttle-power
     page.editPoint(1, 0, 1, QStringLiteral("25"));
     assert(page.specText().contains(QStringLiteral("25")));
     assert(page.centerJson().contains(QStringLiteral("\"kn\":\"25\"")));
+    const QJsonObject fitted = QJsonDocument::fromJson(page.centerJson().toUtf8()).object();
+    // load_text auto-fits axes from throttle extents (sample point 36 km/h × 20→25 kN).
+    assert(fitted.value(QStringLiteral("maxKmh")).toString().toDouble() >= 36.0);
+    assert(fitted.value(QStringLiteral("maxKn")).toString().toDouble() >= 20.0);
     page.setPage(QStringLiteral("simulation"));
     app.processEvents();
     assert(page.pageName() == QLatin1String("simulation"));

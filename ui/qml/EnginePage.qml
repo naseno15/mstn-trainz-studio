@@ -1,6 +1,6 @@
 import QtQuick
 
-// Engine Tuner stage. Center pages are QML. Matplotlib graphs sit in the graph well.
+// Engine Tuner stage. Center pages are QML. TE graph is a Canvas in the graph well.
 Item {
     id: root
 

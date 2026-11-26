@@ -1,6 +1,6 @@
 import QtQuick
 
-// Tuner · Simulation · Parameters. Graph canvases are placed into graphWell.
+// Tuner · Simulation · Parameters. TE graph is a QML Canvas in graphWell.
 Item {
     id: center
 
@@ -25,6 +25,11 @@ Item {
         while (item.parent)
             item = item.parent
         return item
+    }
+
+    function numOr(text, fallback) {
+        var n = parseFloat(String(text).replace(",", ""))
+        return isFinite(n) ? n : fallback
     }
 
     Component.onCompleted: readBag()
@@ -318,6 +323,311 @@ Item {
                 anchors.fill: parent
                 radius: 12
                 color: bridge.dark ? "#161a1e" : "#e8ebf0"
+            }
+
+            TeGraph {
+                anchors.fill: parent
+                anchors.margins: 4
+            }
+        }
+    }
+
+    component TeGraph: Item {
+        id: plot
+
+        property real padL: 44
+        property real padR: 14
+        property real padT: 14
+        property real padB: 28
+        property real maxKmh: Math.max(1, center.numOr(center.bag.maxKmh, 120))
+        property real maxKn: Math.max(1, center.numOr(center.bag.maxKn, 80))
+        property var picks: ([])
+        property int dragN: -1
+        property int dragI: -1
+        property real dragKmh: 0
+        property real dragKn: 0
+        property bool dragging: false
+
+        function plotW() { return Math.max(1, width - padL - padR) }
+        function plotH() { return Math.max(1, height - padT - padB) }
+        function xOf(kmh) { return padL + (Math.max(0, kmh) / maxKmh) * plotW() }
+        function yOf(kn) { return padT + plotH() - (Math.max(0, kn) / maxKn) * plotH() }
+        function kmhOf(px) { return Math.max(0, Math.min(maxKmh, ((px - padL) / plotW()) * maxKmh)) }
+        function knOf(py) { return Math.max(0, Math.min(maxKn, ((padT + plotH() - py) / plotH()) * maxKn)) }
+
+        function snap(v, step) {
+            return Math.round(v / step) * step
+        }
+
+        function hit(mx, my) {
+            var best = null
+            var bestD = 12 * 12
+            var notches = center.bag.notches || []
+            for (var n = 0; n < notches.length; ++n) {
+                var col = notches[n]
+                var pts = col.pts || []
+                for (var i = 0; i < pts.length; ++i) {
+                    var kmh = center.numOr(pts[i].kmh, 0)
+                    var kn = center.numOr(pts[i].kn, 0)
+                    if (dragging && dragN === col.n && dragI === i) {
+                        kmh = dragKmh
+                        kn = dragKn
+                    }
+                    var dx = xOf(kmh) - mx
+                    var dy = yOf(kn) - my
+                    var d = dx * dx + dy * dy
+                    if (d <= bestD) {
+                        bestD = d
+                        best = { n: col.n, i: i, kmh: kmh, kn: kn }
+                    }
+                }
+            }
+            return best
+        }
+
+        function keyOf(n, i) { return n + ":" + i }
+        function selected(n, i) {
+            var k = keyOf(n, i)
+            for (var p = 0; p < picks.length; ++p)
+                if (picks[p] === k) return true
+            return false
+        }
+        function setPick(n, i, add) {
+            var k = keyOf(n, i)
+            if (add) {
+                if (!selected(n, i))
+                    picks = picks.concat([k])
+            } else {
+                picks = [k]
+            }
+        }
+
+        function paintSoon() { canvas.requestPaint() }
+
+        Connections {
+            target: bridge
+            function onChanged() { plot.paintSoon() }
+            function onLayoutChanged() { plot.paintSoon() }
+        }
+        onWidthChanged: paintSoon()
+        onHeightChanged: paintSoon()
+        onMaxKmhChanged: paintSoon()
+        onMaxKnChanged: paintSoon()
+        onDraggingChanged: paintSoon()
+        onDragKmhChanged: if (dragging) paintSoon()
+        onDragKnChanged: if (dragging) paintSoon()
+
+        Canvas {
+            id: canvas
+            anchors.fill: parent
+            antialiasing: true
+            renderTarget: Canvas.FramebufferObject
+            renderStrategy: Canvas.Cooperative
+
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                var w = width
+                var h = height
+                if (w < 8 || h < 8)
+                    return
+
+                ctx.fillStyle = bridge.dark ? "#161a1e" : "#e8ebf0"
+                ctx.beginPath()
+                ctx.roundedRect(0, 0, w, h, 10, 10)
+                ctx.fill()
+
+                var pw = plot.plotW()
+                var ph = plot.plotH()
+                ctx.save()
+                ctx.beginPath()
+                ctx.rect(plot.padL, plot.padT, pw, ph)
+                ctx.clip()
+
+                ctx.strokeStyle = bridge.dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)"
+                ctx.lineWidth = 1
+                var gx = 8
+                var gy = 6
+                for (var i = 0; i <= gx; ++i) {
+                    var x = plot.padL + (pw * i / gx)
+                    ctx.beginPath()
+                    ctx.moveTo(x, plot.padT)
+                    ctx.lineTo(x, plot.padT + ph)
+                    ctx.stroke()
+                }
+                for (var j = 0; j <= gy; ++j) {
+                    var y = plot.padT + (ph * j / gy)
+                    ctx.beginPath()
+                    ctx.moveTo(plot.padL, y)
+                    ctx.lineTo(plot.padL + pw, y)
+                    ctx.stroke()
+                }
+
+                if (center.bag.resist) {
+                    ctx.strokeStyle = bridge.dark ? "rgba(226,232,240,0.55)" : "rgba(71,85,105,0.7)"
+                    ctx.lineWidth = 1.5
+                    ctx.setLineDash([5, 4])
+                    ctx.beginPath()
+                    var mass = 40
+                    var bags = center.bag.bags || {}
+                    var massRows = bags.mass || []
+                    for (var mi = 0; mi < massRows.length; ++mi) {
+                        if (String(massRows[mi].k).toLowerCase().indexOf("mass") >= 0) {
+                            mass = center.numOr(massRows[mi].v, mass)
+                            break
+                        }
+                    }
+                    var A = 0.6 + 0.012 * mass
+                    var B = 0.045
+                    var C = 0.00035
+                    for (var s = 0; s <= 64; ++s) {
+                        var kv = plot.maxKmh * s / 64
+                        var rk = A + B * (kv / 10) + C * (kv * kv / 100)
+                        var px = plot.xOf(kv)
+                        var py = plot.yOf(rk)
+                        if (s === 0) ctx.moveTo(px, py)
+                        else ctx.lineTo(px, py)
+                    }
+                    ctx.stroke()
+                    ctx.setLineDash([])
+                }
+
+                var notches = center.bag.notches || []
+                for (var n = 0; n < notches.length; ++n) {
+                    var col = notches[n]
+                    var pts = col.pts || []
+                    if (!pts.length)
+                        continue
+                    var focus = bridge.notchFocus === col.n
+                    ctx.strokeStyle = col.color || "#94a3b8"
+                    ctx.lineWidth = focus ? 2.6 : 1.5
+                    ctx.globalAlpha = (bridge.notchFocus < 0 || focus) ? 1.0 : 0.35
+                    ctx.beginPath()
+                    for (var p = 0; p < pts.length; ++p) {
+                        var kmh = center.numOr(pts[p].kmh, 0)
+                        var kn = center.numOr(pts[p].kn, 0)
+                        if (plot.dragging && plot.dragN === col.n && plot.dragI === p) {
+                            kmh = plot.dragKmh
+                            kn = plot.dragKn
+                        }
+                        var qx = plot.xOf(kmh)
+                        var qy = plot.yOf(kn)
+                        if (p === 0) ctx.moveTo(qx, qy)
+                        else ctx.lineTo(qx, qy)
+                    }
+                    ctx.stroke()
+                }
+                ctx.globalAlpha = 1
+
+                for (var n2 = 0; n2 < notches.length; ++n2) {
+                    var col2 = notches[n2]
+                    var pts2 = col2.pts || []
+                    for (var p2 = 0; p2 < pts2.length; ++p2) {
+                        var u = center.numOr(pts2[p2].kmh, 0)
+                        var v = center.numOr(pts2[p2].kn, 0)
+                        if (plot.dragging && plot.dragN === col2.n && plot.dragI === p2) {
+                            u = plot.dragKmh
+                            v = plot.dragKn
+                        }
+                        var sx = plot.xOf(u)
+                        var sy = plot.yOf(v)
+                        var on = plot.selected(col2.n, p2) || (bridge.notchFocus === col2.n)
+                        var r = on ? 5.5 : 4
+                        ctx.beginPath()
+                        ctx.fillStyle = col2.color || "#94a3b8"
+                        ctx.arc(sx, sy, r, 0, Math.PI * 2)
+                        ctx.fill()
+                        if (on) {
+                            ctx.strokeStyle = bridge.dark ? "#fff" : "#111"
+                            ctx.lineWidth = 1.2
+                            ctx.stroke()
+                        }
+                    }
+                }
+                ctx.restore()
+
+                ctx.fillStyle = center.mute
+                ctx.font = "11px sans-serif"
+                ctx.textAlign = "center"
+                ctx.textBaseline = "top"
+                for (var tx = 0; tx <= 4; ++tx) {
+                    var tkmh = plot.maxKmh * tx / 4
+                    ctx.fillText(tkmh.toFixed(0), plot.xOf(tkmh), plot.padT + ph + 8)
+                }
+                ctx.textAlign = "right"
+                ctx.textBaseline = "middle"
+                for (var ty = 0; ty <= 4; ++ty) {
+                    var tkn = plot.maxKn * ty / 4
+                    ctx.fillText(tkn.toFixed(0), plot.padL - 6, plot.yOf(tkn))
+                }
+                ctx.textAlign = "left"
+                ctx.textBaseline = "top"
+                ctx.fillText("km/h", plot.padL + pw - 34, plot.padT + ph + 8)
+                ctx.save()
+                ctx.translate(10, plot.padT + 8)
+                ctx.rotate(-Math.PI / 2)
+                ctx.textAlign = "right"
+                ctx.fillText("kN", 0, 0)
+                ctx.restore()
+            }
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+            cursorShape: plot.dragging ? Qt.ClosedHandCursor : Qt.ArrowCursor
+
+            onPressed: function(mouse) {
+                var hit = plot.hit(mouse.x, mouse.y)
+                if (!hit) {
+                    if (!(mouse.modifiers & Qt.ShiftModifier))
+                        plot.picks = []
+                    plot.paintSoon()
+                    return
+                }
+                bridge.focusNotch(hit.n)
+                plot.setPick(hit.n, hit.i, !!(mouse.modifiers & Qt.ShiftModifier))
+                plot.dragN = hit.n
+                plot.dragI = hit.i
+                plot.dragKmh = hit.kmh
+                plot.dragKn = hit.kn
+                plot.dragging = true
+                plot.paintSoon()
+            }
+            onPositionChanged: function(mouse) {
+                if (!plot.dragging)
+                    return
+                var kmh = plot.kmhOf(mouse.x)
+                var kn = plot.knOf(mouse.y)
+                if (mouse.modifiers & Qt.ControlModifier) {
+                    kmh = plot.snap(kmh, 10)
+                    kn = plot.snap(kn, 10)
+                }
+                plot.dragKmh = kmh
+                plot.dragKn = kn
+            }
+            onReleased: function(mouse) {
+                if (!plot.dragging)
+                    return
+                var kmh = plot.dragKmh
+                var kn = plot.dragKn
+                if (mouse.modifiers & Qt.ControlModifier) {
+                    kmh = plot.snap(kmh, 10)
+                    kn = plot.snap(kn, 10)
+                }
+                var n = plot.dragN
+                var i = plot.dragI
+                plot.dragging = false
+                plot.dragN = -1
+                plot.dragI = -1
+                bridge.setPointXY(n, i, kmh.toFixed(2), kn.toFixed(2))
+            }
+            onCanceled: {
+                plot.dragging = false
+                plot.dragN = -1
+                plot.dragI = -1
+                plot.paintSoon()
             }
         }
     }

@@ -314,6 +314,14 @@ bool edit_throttle_point(EngineSpec& spec, int notch, int index, int column, con
     return true;
 }
 
+bool set_throttle_point_xy(EngineSpec& spec, int notch, int index, double kmh, double kn) {
+    auto it = spec.throttle.find(notch);
+    if (it == spec.throttle.end() || index < 0 || index >= static_cast<int>(it->second.size())) return false;
+    it->second[static_cast<size_t>(index)] = round_point(std::max(0.0, kmh / 3.6), std::max(0.0, kn));
+    std::sort(it->second.begin(), it->second.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    return true;
+}
+
 void add_throttle_point(EngineSpec& spec, int notch) {
     auto& points = spec.throttle[notch];
     const double speed = points.empty() ? 0.0 : points.back().first + 2.0;

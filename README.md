@@ -39,8 +39,8 @@ That build is a **single static exe**. You do not need a Qt install to run it.
 
 | | |
 |---|---|
-| Current | **v4.4.8** |
-| Asset | `TrainzStudio-4.4.8-win64.zip` |
+| Current | **v4.4.9** |
+| Asset | `TrainzStudio-4.4.9-win64.zip` |
 | OS | Windows 10 / 11 x64 |
 
 **In-app update:** Help → Check for updates. When a newer tag with a `*win64.zip` exists, a toast offers **Install update** (downloads, replaces the folder, relaunches).
@@ -183,7 +183,7 @@ powershell -File fast.ps1
 | Shared Qt | `build\trainz_studio_cpp.exe` |
 | Static (release-style) | `powershell -File fast_static.ps1` → `build-static\trainz_studio_cpp.exe` |
 | Windows release zip | `powershell -File fast_pack_windows.ps1` → `dist\TrainzStudio-*-win64.zip` (add `-Upload` to attach to the GitHub release) |
-| Fetch tag zip + pack | `powershell -File tools\fetch_latest_and_pack_windows.ps1 -Tag v4.4.8` |
+| Fetch tag zip + pack | `powershell -File tools\fetch_latest_and_pack_windows.ps1 -Tag v4.4.9` |
 
 **macOS** · Qt 6 · CMake · Ninja:
 

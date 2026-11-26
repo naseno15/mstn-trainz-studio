@@ -42,7 +42,7 @@ void EngineBridge::load_text(const QString& text, const QString& path) {
     cdp_session_ = false;
     undo_.clear();
     redo_.clear();
-    refresh();
+    fitGraph();
 }
 QStringList EngineBridge::veContextPaths() const {
     const QString path = QString::fromStdString(spec_.path);
@@ -55,7 +55,7 @@ void EngineBridge::load_cdp_text(const QString& text) {
     cdp_session_ = true;
     undo_.clear();
     redo_.clear();
-    refresh();
+    fitGraph();
 }
 
 QString EngineBridge::spec_text() const { return QString::fromStdString(write_enginespec(spec_)); }
@@ -277,8 +277,35 @@ void EngineBridge::setGraphMax(const QString& kmh, const QString& kn) {
     max_kn_ = kn;
     refresh();
 }
-void EngineBridge::fitGraph() {}
+void EngineBridge::fitGraph() {
+    double max_kmh = 10.0;
+    double max_kn = 10.0;
+    for (const auto& [notch, points] : spec_.throttle) {
+        (void)notch;
+        for (const auto& point : points) {
+            max_kmh = std::max(max_kmh, point.first * 3.6);
+            max_kn = std::max(max_kn, point.second);
+        }
+    }
+    max_kmh_ = QString::number(max_kmh * 1.12, 'f', 2);
+    max_kn_ = QString::number(max_kn * 1.12, 'f', 2);
+    refresh();
+}
+
 void EngineBridge::placeGraph(double, double, double, double) {}
+
+void EngineBridge::setPointXY(int notch, int index, const QString& kmh, const QString& kn) {
+    double x = 0;
+    double y = 0;
+    if (!parse_num(kmh, x) || !parse_num(kn, y)) return;
+    push_undo();
+    if (!set_throttle_point_xy(spec_, notch, index, x, y)) {
+        undo_.pop_back();
+        return;
+    }
+    notch_focus_ = notch;
+    refresh();
+}
 
 void EngineBridge::setSim(const QString& key, const QString& text) {
     sim_[key] = text;

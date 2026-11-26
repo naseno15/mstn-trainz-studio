@@ -115,6 +115,7 @@ public:
     Q_INVOKABLE void setGraphMax(const QString& kmh, const QString& kn);
     Q_INVOKABLE void fitGraph();
     Q_INVOKABLE void placeGraph(double x, double y, double w, double h);
+    Q_INVOKABLE void setPointXY(int notch, int index, const QString& kmh, const QString& kn);
     Q_INVOKABLE void setSim(const QString& key, const QString& text);
     Q_INVOKABLE void runSim();
     Q_INVOKABLE void editParam(const QString& bag, const QString& key, int column, const QString& text);

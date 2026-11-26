@@ -19,6 +19,7 @@ EngineSpec parse_enginespec(const std::string& text);
 std::string write_enginespec(const EngineSpec& spec);
 bool looks_like_enginespec(const std::string& text);
 bool edit_throttle_point(EngineSpec& spec, int notch, int index, int column, const std::string& text);
+bool set_throttle_point_xy(EngineSpec& spec, int notch, int index, double kmh, double kn);
 void add_throttle_point(EngineSpec& spec, int notch);
 void delete_throttle_point(EngineSpec& spec, int notch, int index);
 std::string fmt_kmh(double meters_per_second);
