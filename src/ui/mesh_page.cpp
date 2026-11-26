@@ -1817,7 +1817,55 @@ void MeshBridge::clickId(const QString& id) {
     }
 }
 
-// Save writes every scene .trainzmesh (Save As: the selected one) and always reports the outcome.
+// Build Trainz-space parts + current attachments for one scene file (geometry from bytes; atts unspun).
+ImView mesh_export_view(const QString& src, const QByteArray& before, int file, const std::vector<ViewAtt>& att_rows, double yaw) {
+    ImView view;
+    if (before.isEmpty()) throw std::runtime_error("no mesh bytes to export");
+    const auto* raw = reinterpret_cast<const uint8_t*>(before.constData());
+    const size_t n = static_cast<size_t>(before.size());
+    if (src.endsWith(QLatin1String(".im"), Qt::CaseInsensitive)) {
+        view = parse_im_view(raw, n);
+        view.atts.clear();
+    } else if (src.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive)) {
+        view = parse_fbx_view(raw, n);
+        view.atts.clear();
+    } else {
+        const TrainzMesh mesh = parse_trainzmesh(raw, n);
+        for (const SubMesh& part : mesh.submeshes) {
+            MeshPart out;
+            out.name = part.name;
+            out.albedo = part.albedo;
+            out.normal_map = part.normal_map;
+            out.positions = part.positions;
+            out.normals = part.normals;
+            out.uvs = part.uvs;
+            out.indices = part.indices;
+            view.parts.push_back(std::move(out));
+        }
+    }
+    const float yc = static_cast<float>(std::cos(-yaw)), ys = static_cast<float>(std::sin(-yaw));
+    auto unspin = [&](float& x, float& y) {
+        const float nx = x * yc - y * ys;
+        y = x * ys + y * yc;
+        x = nx;
+    };
+    for (const ViewAtt& row : att_rows) {
+        if (row.file != file) continue;
+        ImAttachment att;
+        att.name = row.name.toStdString();
+        std::memcpy(att.pos, row.pos, sizeof(att.pos));
+        std::memcpy(att.orient, row.orient, sizeof(att.orient));
+        if (yaw != 0.0) {
+            unspin(att.pos[0], att.pos[1]);
+            for (int axis = 0; axis < 3; ++axis) unspin(att.orient[axis * 3], att.orient[axis * 3 + 1]);
+        }
+        view.atts.push_back(std::move(att));
+    }
+    if (view.parts.empty() && view.atts.empty()) throw std::runtime_error("no mesh or a.* to export");
+    return view;
+}
+
+// Save writes every dirty .trainzmesh; Save As can also export .fbx from .trainzmesh / .im / .fbx.
 void MeshBridge::save_files(bool ask) {
     auto tell = [](const QString& title, const QString& detail) {
         post_status(title + QStringLiteral(" — ") + detail);
@@ -1835,19 +1883,44 @@ void MeshBridge::save_files(bool ask) {
     QStringList saved, preview, failed;
     for (const int f : files) {
         const QString src = scene_paths_[f];
-        const bool tz = src.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive);
+        const bool src_tz = src.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive);
         QString dest = src;
         if (ask) {
-            dest = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Save %1 as").arg(QFileInfo(src).fileName()), src, tz ? QStringLiteral("Trainz mesh (*.trainzmesh)") : QStringLiteral("Mesh (*.im *.fbx)"));
+            const QString suggested = QFileInfo(src).dir().filePath(QFileInfo(src).completeBaseName() + QStringLiteral(".fbx"));
+            const QString filter = src_tz ? QStringLiteral("FBX (*.fbx);;Trainz mesh (*.trainzmesh)") : QStringLiteral("FBX (*.fbx)");
+            dest = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Save %1 as").arg(QFileInfo(src).fileName()), suggested, filter);
             if (dest.isEmpty()) {
                 post_status(QStringLiteral("Save As cancelled"));
                 return;
             }
+            if (!dest.contains(QLatin1Char('.'))) dest += QStringLiteral(".fbx");
         }
+        const bool dest_fbx = dest.endsWith(QLatin1String(".fbx"), Qt::CaseInsensitive);
+        const bool dest_tz = dest.endsWith(QLatin1String(".trainzmesh"), Qt::CaseInsensitive);
         const QString name = QFileInfo(dest).fileName();
         const QByteArray& before = file_bytes_[static_cast<size_t>(f)];
         bool wrote = false;
-        if (tz && !before.isEmpty()) {
+        if (dest_fbx) {
+            try {
+                const ImView view = mesh_export_view(src, before, f, att_rows_, scene_yaws_.value(f, 0.0));
+                const std::string ascii = write_fbx(view);
+                const QByteArray data = QByteArray::fromStdString(ascii);
+                const QString bak = dest + QStringLiteral(".bak");
+                if (QFileInfo::exists(dest) && !QFileInfo::exists(bak)) QFile::copy(dest, bak);
+                QSaveFile out(dest);
+                if (!out.open(QIODevice::WriteOnly) || out.write(data) != data.size() || !out.commit()) {
+                    failed << name;
+                    continue;
+                }
+                file_bytes_[static_cast<size_t>(f)] = data;
+                for (size_t i = 0; i < att_rows_.size() && i < att_base_.size(); ++i)
+                    if (att_rows_[i].file == f) att_base_[i] = att_rows_[i];
+                wrote = true;
+            } catch (const std::exception&) {
+                failed << name;
+                continue;
+            }
+        } else if (src_tz && dest_tz && !before.isEmpty()) {
             QByteArray data = before;
             // Offsets come from the bytes as they are now: an earlier save may have resized a string.
             const auto* raw = reinterpret_cast<const uint8_t*>(before.constData());
@@ -1988,7 +2061,7 @@ void MeshBridge::save_files(bool ask) {
             }
             wrote = true;
         }
-        if (!tz) preview << name;
+        if (!dest_tz && !dest_fbx) preview << name;
         if (!wrote) continue;
         saved << name;
         if (ask) {
@@ -2003,7 +2076,7 @@ void MeshBridge::save_files(bool ask) {
     }
     if (!failed.isEmpty()) post_status(QStringLiteral("Save failed — cannot write ") + failed.join(QStringLiteral(", ")));
     else if (saved.isEmpty() && !preview.isEmpty())
-        tell(QStringLiteral("Not saved"), preview.join(QStringLiteral(", ")) + QStringLiteral(" is preview only — Save writes .trainzmesh files (and two-sided flags)"));
+        tell(QStringLiteral("Not saved"), preview.join(QStringLiteral(", ")) + QStringLiteral(" is preview only — Save As → FBX exports mesh data, or Save a .trainzmesh"));
     else if (saved.isEmpty())
         tell(QStringLiteral("No changes to save"), QStringLiteral("every mesh already matches its file"));
     publish();

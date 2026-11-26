@@ -417,6 +417,35 @@ static void check_fbx() {
         if (z > 0.5f) up = true;
     }
     assert(origin && right && up);
+
+    // Save As path: Trainz-space ImView → ASCII FBX → parse back.
+    const std::string round = write_fbx(att_view);
+    const ImView again = parse_fbx_view(reinterpret_cast<const uint8_t*>(round.data()), round.size());
+    assert(again.parts.size() == 1 && again.parts[0].name == "tri");
+    assert(again.atts.size() == 1 && again.atts[0].name == "a.bog0");
+    assert(std::fabs(again.atts[0].pos[0] - 1.f) < 1e-3f && std::fabs(again.atts[0].pos[2] - 2.f) < 1e-3f && std::fabs(again.atts[0].pos[1]) < 1e-3f);
+    assert(again.parts[0].indices.size() == 3);
+    bool again_up = false;
+    for (size_t v = 0; v < again.parts[0].positions.size() / 3; ++v) {
+        if (again.parts[0].positions[v * 3 + 2] > 0.5f) again_up = true;
+    }
+    assert(again_up);
+
+    ImView only_att;
+    ImAttachment bog;
+    bog.name = "a.hook";
+    bog.pos[0] = 3.f;
+    bog.pos[1] = 4.f;
+    bog.pos[2] = 5.f;
+    bog.orient[0] = 1.f;
+    bog.orient[4] = 1.f;
+    bog.orient[8] = 1.f;
+    only_att.atts.push_back(bog);
+    const std::string att_ascii = write_fbx(only_att);
+    const ImView att_only = parse_fbx_view(reinterpret_cast<const uint8_t*>(att_ascii.data()), att_ascii.size());
+    assert(att_only.parts.empty() && att_only.atts.size() == 1);
+    assert(att_only.atts[0].name == "a.hook");
+    assert(std::fabs(att_only.atts[0].pos[0] - 3.f) < 1e-3f && std::fabs(att_only.atts[0].pos[1] - 4.f) < 1e-3f && std::fabs(att_only.atts[0].pos[2] - 5.f) < 1e-3f);
 }
 
 int main() {

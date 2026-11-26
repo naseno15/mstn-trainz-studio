@@ -9,6 +9,7 @@
 
 #include <QApplication>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QCloseEvent>
 #include <QDialog>
 #include <QElapsedTimer>
@@ -347,6 +348,7 @@ int main(int argc, char** argv) {
     }
     prepare_qt_runtime();
     QApplication app(argc, argv);
+    app.setWindowIcon(QIcon(QStringLiteral(":/studio/logo/trainz_studio_icon.png")));
     apply_ui_font();
     install_crash_log();
     app.installEventFilter(new DropHighlight(&app));

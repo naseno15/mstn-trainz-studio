@@ -81,12 +81,20 @@ target_precompile_headers(trainz_ui PRIVATE src/ui/qt_pch.h)
 qt_add_executable(trainz_studio_cpp src/main.cpp src/cli.cpp)
 target_link_libraries(trainz_studio_cpp PRIVATE trainz_ui)
 set_target_properties(trainz_studio_cpp PROPERTIES WIN32_EXECUTABLE TRUE)
+# Windows Explorer / taskbar icon (macOS uses TrainzStudio.icns below).
+if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/assets/trainz_studio.ico")
+    set(_trainz_ico "${CMAKE_SOURCE_DIR}/assets/trainz_studio.ico")
+    string(REPLACE "\\" "/" _trainz_ico "${_trainz_ico}")
+    file(WRITE "${CMAKE_BINARY_DIR}/trainz_app_icon.rc" "IDI_ICON1 ICON \"${_trainz_ico}\"\n")
+    target_sources(trainz_studio_cpp PRIVATE "${CMAKE_BINARY_DIR}/trainz_app_icon.rc")
+endif()
 
 # Embed QML, i18n catalogs and the icon font so the exe is self-contained (res_path.h prefers :/studio).
 file(GLOB studio_qml CONFIGURE_DEPENDS ui/qml/*.qml)
 file(GLOB studio_i18n CONFIGURE_DEPENDS assets/i18n/*.json)
 set(studio_font assets/fonts/MaterialIcons-Regular.ttf)
 set(studio_logo assets/mstn_logo_white.png)
+set(studio_app_icon assets/trainz_studio_icon_1024.png)
 foreach(f ${studio_qml})
     get_filename_component(n ${f} NAME)
     set_source_files_properties(${f} PROPERTIES QT_RESOURCE_ALIAS qml/${n})
@@ -97,7 +105,8 @@ foreach(f ${studio_i18n})
 endforeach()
 set_source_files_properties(${studio_font} PROPERTIES QT_RESOURCE_ALIAS fonts/MaterialIcons-Regular.ttf)
 set_source_files_properties(${studio_logo} PROPERTIES QT_RESOURCE_ALIAS logo/mstn_logo_white.png)
-qt_add_resources(trainz_studio_cpp studio PREFIX /studio FILES ${studio_qml} ${studio_i18n} ${studio_font} ${studio_logo})
+set_source_files_properties(${studio_app_icon} PROPERTIES QT_RESOURCE_ALIAS logo/trainz_studio_icon.png)
+qt_add_resources(trainz_studio_cpp studio PREFIX /studio FILES ${studio_qml} ${studio_i18n} ${studio_font} ${studio_logo} ${studio_app_icon})
 
 # Static Qt (tools/build_qt_static.ps1 on Windows): one exe, no DLLs.
 # On macOS the portable pack is a .app via macdeployqt (fast_pack_macos.sh) — not TRAINZ_STATIC.
