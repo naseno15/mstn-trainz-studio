@@ -43,6 +43,41 @@ throttle-power
     assert(fmt_kn(again.throttle[1][0].second) == "25");
     assert(again.header["kind"] == "enginespec");
 
+    // Multi-line description must stay one header — body lines like "Engine:" must not become root tags (VE45).
+    const char* multi = R"(
+kind enginespec
+description "line1
+Engine: not a tag
+Air: still description
+max-accel / note"
+motor
+{
+  throttle-notches 1
+}
+throttle-power
+{
+  1
+  {
+    0 1
+  }
+}
+)";
+    EngineSpec multi_spec = parse_enginespec(multi);
+    assert(multi_spec.header.count("Engine:") == 0);
+    assert(multi_spec.header.count("Air:") == 0);
+    assert(multi_spec.header["description"].find("Engine: not a tag") != std::string::npos);
+    const std::string multi_out = write_enginespec(multi_spec);
+    EngineSpec multi_back = parse_enginespec(multi_out);
+    assert(multi_back.header.count("Engine:") == 0);
+    assert(multi_back.header.count("Air:") == 0);
+    assert(multi_back.header["description"].find("Air: still description") != std::string::npos);
+    // Writer must not emit description body lines as extra root keys after the closing quote.
+    const auto desc_end = multi_out.find("max-accel / note\"");
+    assert(desc_end != std::string::npos);
+    const std::string after_desc = multi_out.substr(desc_end + 16);
+    assert(after_desc.find("\nEngine:") == std::string::npos);
+    assert(after_desc.find("\nAir:") == std::string::npos);
+
     prepare_qt_runtime();
     QApplication app(argc, argv);
     EngineTunerPage page;

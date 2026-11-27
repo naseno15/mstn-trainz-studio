@@ -41,6 +41,27 @@ std::pair<std::string, std::string> split_kv(const std::string& line) {
     return {body.substr(0, gap), trim(body.substr(gap + 1))};
 }
 
+// Trainz allows multi-line "..." values (common in description). Keep reading until the closing quote
+// so body lines like "Engine: …" never become fake root tags.
+std::pair<std::string, size_t> read_quoted(const std::vector<std::string>& lines, size_t idx, const std::string& first_rest) {
+    std::string value;
+    std::string rest = first_rest;
+    if (!rest.empty() && rest.front() == '"') rest.erase(rest.begin());
+    for (;;) {
+        const auto end = rest.find('"');
+        if (end != std::string::npos) {
+            value += rest.substr(0, end);
+            return {value, idx + 1};
+        }
+        value += rest;
+        ++idx;
+        if (idx >= lines.size()) return {value, idx};
+        value.push_back('\n');
+        rest = lines[idx];
+        if (!rest.empty() && rest.back() == '\r') rest.pop_back();
+    }
+}
+
 std::pair<Node, size_t> parse_block(const std::vector<std::string>& lines, size_t idx) {
     Node node;
     node.is_map = true;
@@ -71,12 +92,11 @@ std::pair<Node, size_t> parse_block(const std::vector<std::string>& lines, size_
             continue;
         }
         if (!rest.empty() && rest.front() == '"') {
-            std::string value = rest.substr(1);
-            if (!value.empty() && value.back() == '"') value.pop_back();
+            auto [value, next] = read_quoted(lines, idx, rest);
             Node child;
             child.text = value;
             node.kids[key] = child;
-            ++idx;
+            idx = next;
             continue;
         }
         const std::string word = split_kv(rest).first.empty() ? rest : split_kv(rest).first;
@@ -138,12 +158,11 @@ Node parse_root(const std::string& text) {
             continue;
         }
         if (!rest.empty() && rest.front() == '"') {
-            std::string value = rest.substr(1);
-            if (!value.empty() && value.back() == '"') value.pop_back();
+            auto [value, next] = read_quoted(lines, idx, rest);
             Node child;
             child.text = value;
             root.kids[key] = child;
-            ++idx;
+            idx = next;
             continue;
         }
         Node child;
@@ -240,24 +259,28 @@ EngineSpec parse_enginespec(const std::string& text) {
 
 std::string write_enginespec(const EngineSpec& spec) {
     std::string out = "\n";
+    // Whitelist only — never dump leftover header keys (a broken multi-line description parse
+    // used to turn "Engine:" / "Air:" body lines into root tags and append them here → VE45).
     const char* order[] = {
         "username", "category-region", "category-era", "kind", "author", "license", "trainz-build", "category-class",
         "description", "flowsize", "volume", "pressure", "mass", "motor", "throttle-power", "kuid",
     };
     std::map<std::string, bool> seen;
+    const auto write_quoted = [&](const std::string& key, const std::string& value) {
+        out += fmt_pad(key, "\"" + value + "\"", 40) + "\n\n";
+    };
     const auto write_key = [&](const std::string& key) {
         seen[key] = true;
         if (key == "throttle-power") {
-            std::map<std::string, std::string> notches;
+            if (spec.throttle.empty()) return;
+            out += "throttle-power\n{\n";
             for (const auto& [notch, points] : spec.throttle) {
                 std::map<std::string, std::string> rows;
                 for (const auto& point : points) rows[fmt1(point.first)] = fmt1(point.second);
                 std::string body;
                 write_block(body, std::to_string(notch), rows, 1);
-                notches[std::to_string(notch)] = body;
+                out += body;
             }
-            out += "throttle-power\n{\n";
-            for (const auto& [notch, body] : notches) out += body;
             out += "}\n\n";
             return;
         }
@@ -271,15 +294,16 @@ std::string write_enginespec(const EngineSpec& spec) {
         const auto header = spec.header.find(key);
         if (header == spec.header.end()) return;
         const std::string& value = header->second;
-        if (value.find(' ') != std::string::npos) out += fmt_pad(key, "\"" + value + "\"", 40) + "\n\n";
-        else out += fmt_pad(key, value, 40) + "\n\n";
+        if (key == "description" || value.find(' ') != std::string::npos || value.find('\n') != std::string::npos ||
+            value.find('<') != std::string::npos) {
+            write_quoted(key, value);
+        } else {
+            out += fmt_pad(key, value, 40) + "\n\n";
+        }
     };
     for (const char* key : order) write_key(key);
-    for (const auto& [key, _] : spec.header) {
-        if (!seen[key]) write_key(key);
-    }
     for (const auto& [key, _] : spec.blocks) {
-        if (!seen[key]) write_key(key);
+        if (!seen[key] && known_block(key)) write_key(key);
     }
     if (out.empty() || out.back() != '\n') out += '\n';
     return out;
@@ -287,6 +311,7 @@ std::string write_enginespec(const EngineSpec& spec) {
 
 bool looks_like_enginespec(const std::string& text) {
     const EngineSpec spec = parse_enginespec(text);
+    if (!spec.throttle.empty()) return true;
     const auto kind = spec.header.find("kind");
     if (kind != spec.header.end()) {
         std::string low = kind->second;
@@ -294,8 +319,10 @@ bool looks_like_enginespec(const std::string& text) {
             if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
         }
         if (low == "enginespec") return true;
+        // Loco/engine config that still carries motor (and hopefully throttle-power).
+        if (low == "engine" && spec.find_block("motor") != nullptr) return true;
     }
-    return !spec.throttle.empty();
+    return spec.find_block("motor") != nullptr;
 }
 
 bool edit_throttle_point(EngineSpec& spec, int notch, int index, int column, const std::string& text) {

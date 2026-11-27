@@ -98,6 +98,7 @@ public:
     Q_INVOKABLE void setCloneFrom(int notch);
     Q_INVOKABLE void toggleTarget(int notch);
     Q_INVOKABLE void openFile();
+    Q_INVOKABLE void dropUrls(const QVariantList& urls);
     Q_INVOKABLE QStringList veContextPaths() const;
     Q_INVOKABLE void saveFile();
     Q_INVOKABLE void saveFileAs();
@@ -180,6 +181,7 @@ public:
     bool qmlReady() const;
     QStringList qmlErrors() const;
     void loadText(const QString& text);
+    void loadFile(const QString& path);
     void loadCdpText(const QString& text);
     QString centerJson() const;
     QString specText() const;
@@ -191,6 +193,9 @@ public:
 signals:
     void homeRequested();
     void cdpSaveRequested(const QString& text);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     EngineBridge* bridge_ = nullptr;

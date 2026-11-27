@@ -5,15 +5,20 @@
 
 #include <algorithm>
 
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMimeData>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQuickWidget>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace {
@@ -173,7 +178,57 @@ void EngineBridge::openFile() {
     if (path.isEmpty()) return;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return;
-    load_text(QString::fromUtf8(file.readAll()), path);
+    const QString text = QString::fromUtf8(file.readAll());
+    if (!looks_like_enginespec(text.toStdString())) {
+        post_status(QStringLiteral("Not an enginespec: ") + QFileInfo(path).fileName());
+        return;
+    }
+    load_text(text, path);
+    post_status(QStringLiteral("Loaded ") + QFileInfo(path).fileName());
+}
+
+void EngineBridge::dropUrls(const QVariantList& urls) {
+    QString last_bad;
+    for (const QVariant& value : urls) {
+        const QUrl url(value.toString());
+        QString path = url.isLocalFile() ? url.toLocalFile() : value.toString();
+        if (path.isEmpty()) continue;
+        QFileInfo info(path);
+        if (info.isDir()) {
+            const QString cfg = info.absoluteFilePath() + QStringLiteral("/config.txt");
+            if (!QFileInfo::exists(cfg)) continue;
+            path = cfg;
+            info = QFileInfo(path);
+        }
+        const QString ext = info.suffix().toLower();
+        if (!ext.isEmpty() && ext != QLatin1String("txt")) {
+            // Still try — some enginespecs are saved without extension; skip obvious non-text.
+            if (ext == QLatin1String("trainzmesh") || ext == QLatin1String("im") || ext == QLatin1String("fbx") || ext == QLatin1String("wav") ||
+                ext == QLatin1String("cdp") || ext == QLatin1String("zip") || ext == QLatin1String("tzarc") || ext == QLatin1String("png") ||
+                ext == QLatin1String("jpg") || ext == QLatin1String("tga") || ext == QLatin1String("gs") || ext == QLatin1String("gse")) {
+                continue;
+            }
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            last_bad = QStringLiteral("Could not open ") + info.fileName();
+            continue;
+        }
+        const QByteArray bytes = file.readAll();
+        if (bytes.size() > 8 * 1024 * 1024) {
+            last_bad = info.fileName() + QStringLiteral(" is too large");
+            continue;
+        }
+        const QString text = QString::fromUtf8(bytes);
+        if (!looks_like_enginespec(text.toStdString())) {
+            last_bad = QStringLiteral("Not an enginespec (need kind enginespec): ") + info.fileName();
+            continue;
+        }
+        load_text(text, path);
+        post_status(QStringLiteral("Loaded ") + info.fileName());
+        return;
+    }
+    post_status(last_bad.isEmpty() ? QStringLiteral("Drop an enginespec .txt (kind enginespec)") : last_bad);
 }
 void EngineBridge::saveFile() {
     if (cdp_session_) {
@@ -391,15 +446,35 @@ EngineTunerPage::EngineTunerPage(QWidget* parent) : QWidget(parent) {
     bridge_ = new EngineBridge(this);
     connect(bridge_, &EngineBridge::homeRequested, this, &EngineTunerPage::homeRequested);
     connect(bridge_, &EngineBridge::cdpSaveRequested, this, &EngineTunerPage::cdpSaveRequested);
+    setAcceptDrops(true);
     view_ = new QQuickWidget(this);
+    view_->setAcceptDrops(true);
     view_->setResizeMode(QQuickWidget::SizeRootObjectToView);
     view_->engine()->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge_);
     view_->engine()->addImageProvider(QStringLiteral("mstnlogo"), new LogoProvider());
     view_->setClearColor(QColor(QStringLiteral("#12161c")));
     view_->setSource(res_url(qml_dir() + QStringLiteral("/EnginePage.qml")));
+    view_->installEventFilter(this);
+    installEventFilter(this);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(view_);
+}
+
+bool EngineTunerPage::eventFilter(QObject* watched, QEvent* event) {
+    if (!bridge_) return QWidget::eventFilter(watched, event);
+    if (watched != this && watched != view_) return QWidget::eventFilter(watched, event);
+    const QEvent::Type type = event->type();
+    if (type != QEvent::DragEnter && type != QEvent::DragMove && type != QEvent::Drop) return QWidget::eventFilter(watched, event);
+    auto* drop = static_cast<QDropEvent*>(event);
+    if (!drop->mimeData() || !drop->mimeData()->hasUrls()) return false;
+    if (type == QEvent::Drop) {
+        QVariantList urls;
+        for (const QUrl& url : drop->mimeData()->urls()) urls << url.toString();
+        bridge_->dropUrls(urls);
+    }
+    drop->acceptProposedAction();
+    return true;
 }
 
 bool EngineTunerPage::qmlReady() const { return view_ && view_->status() == QQuickWidget::Ready; }
@@ -412,6 +487,20 @@ QStringList EngineTunerPage::qmlErrors() const {
 }
 
 void EngineTunerPage::loadText(const QString& text) { bridge_->load_text(text); }
+void EngineTunerPage::loadFile(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        post_status(QStringLiteral("Could not open ") + QFileInfo(path).fileName());
+        return;
+    }
+    const QString text = QString::fromUtf8(file.readAll());
+    if (!looks_like_enginespec(text.toStdString())) {
+        post_status(QStringLiteral("Not an enginespec: ") + QFileInfo(path).fileName());
+        return;
+    }
+    bridge_->load_text(text, path);
+    post_status(QStringLiteral("Loaded ") + QFileInfo(path).fileName());
+}
 void EngineTunerPage::loadCdpText(const QString& text) { bridge_->load_cdp_text(text); }
 QString EngineTunerPage::centerJson() const { return bridge_->centerJson(); }
 QString EngineTunerPage::specText() const { return bridge_->spec_text(); }

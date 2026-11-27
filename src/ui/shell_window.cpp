@@ -952,18 +952,18 @@ void ShellWindow::open_paths(const QStringList& paths) {
     }
     const QString path = !wav.isEmpty() ? wav : text;
     if (path.isEmpty()) return;
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        post_status(QStringLiteral("Could not open ") + QFileInfo(path).fileName());
-        return;
-    }
     if (!wav.isEmpty()) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            post_status(QStringLiteral("Could not open ") + QFileInfo(path).fileName());
+            return;
+        }
         bridge_->set_page(QStringLiteral("sounds"));
         studio_sounds()->loadBytes(file.readAll(), wav);
         return;
     }
     bridge_->set_page(QStringLiteral("engine"));
-    studio_engine()->loadText(QString::fromUtf8(file.readAll()));
+    studio_engine()->loadFile(path);
 }
 
 void ShellWindow::fade_out(const QPixmap& snap) {

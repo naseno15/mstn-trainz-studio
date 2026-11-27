@@ -6,7 +6,7 @@
 #
 # Usage (from anywhere):
 #   powershell -File D:\trainz-project\mstn-trainz-studio\tools\fetch_latest_and_pack_windows.ps1
-#   powershell -File ...\fetch_latest_and_pack_windows.ps1 -Tag v4.4.9 -Upload
+#   powershell -File ...\fetch_latest_and_pack_windows.ps1 -Tag v4.4.10 -Upload
 param(
     [string]$Tag = "",
     [string]$WorkRoot = "D:\trainz-project\mstn-trainz-studio-build",
